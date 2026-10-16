@@ -1103,6 +1103,12 @@ Schema version 43 adds the publication ledger (ADR 0022):
 relationship of one approval, with its recovery state and the tracker identity
 it produced. The migration only adds the table.
 
+Schema version 45 adds the session command inbox (ADR 0024):
+`ideation_commands` holds one row per browser request with its request ID,
+expected revision, payload, state, and outcome. The local UI appends rows; the
+coordinator applies them. The migration only adds the table. Version 44 is
+reserved for session roles.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
@@ -1134,8 +1140,9 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 ## Local web UI
 
-`factory ui` serves a read-only view of the runs in the operational store. Open
-the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
+`factory ui` serves a read-only view of the runs in the operational store and
+the session command API of ideation sessions (ADR 0021, ADR 0024). Open the
+printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
 ```sh
@@ -1166,9 +1173,10 @@ Access:
 Store use:
 
 - Each page request opens the operational store read-only, reads, and closes
-  it. The UI never creates, migrates, or changes the store, and it does not
-  probe the coordinator lock. Thus the UI works while `factory start` runs and
-  also while the coordinator is stopped.
+  it. The UI never creates or migrates the store, and it does not probe the
+  coordinator lock. Its only write is to append a session command to the
+  command inbox (see below). Thus the UI works while `factory start` runs, and
+  its pages also work while the coordinator is stopped.
 - The read-only open requires the current store schema. After an upgrade, normal
   coordinator startup performs any supported migration; the UI and read-only
   inspection commands never migrate it. Until then,
@@ -1202,25 +1210,55 @@ the banner again after each `--refresh` interval; with `--refresh 0` the page
 changes only when you reload it. When the UI server does not answer, the page
 shows that the server is unreachable.
 
-Ideation sessions (ADR 0021) extend this contract:
+Session commands (ADR 0021, ADR 0024):
 
-- Session pages and session commands become part of the UI. The conversation,
-  brief, plan drafts, and approval actions of a session are durable local
-  operator surfaces. Headless harnesses remain the only control plane.
-- The UI never changes session state, runs, or any other store record. Its
-  only write is to append one command row, with a unique request ID and the
-  revision the page showed, to a durable command inbox in the operational
-  store. The coordinator started by `factory start` is the only process that
-  applies commands. A retried request ID returns the original outcome; a stale
-  revision returns a conflict.
-- When the supervisor heartbeat is not live, a command gets an explicit
-  unavailable result. The UI never starts a second writer, and read-only pages
-  stay usable.
+- The conversation, brief, plan drafts, and approval actions of an ideation
+  session are durable local operator surfaces. Headless harnesses remain the
+  only control plane, and the coordinator started by `factory start` is the
+  only process that applies a command or changes session state.
+- The browser sends a command as JSON to `POST /api/commands`:
+  `{"request_id", "session_id", "kind", "expected_revision", "payload"}`. The
+  request ID is chosen by the page and makes the command idempotent; the
+  expected revision is the session revision the page shows (`0` for
+  `create_session`). Kinds: `create_session`, `submit_turn`, `edit_brief`,
+  `hand_off`, `edit_draft`, `regenerate_draft`, `preview_plan`, `approve`,
+  `publish`, `reconcile`, `defer`, `resume`, `no_build`, and `cancel`.
+- The UI appends a valid command to the command inbox in the operational
+  store and answers HTTP 202 with the state `accepted`. Acceptance is not
+  completion: the coordinator reads the inbox at startup and then every
+  second, applies the command, and records one outcome (`applied`,
+  `conflict`, `refused`, `unsupported`, or `failed`). Read it with
+  `GET /api/commands/{request_id}`. A command accepted before a coordinator
+  stop completes after the next `factory start`.
+- A repeated request ID returns the stored command and its outcome (HTTP 200),
+  also while the coordinator is stopped. The same ID with other content gets
+  HTTP 409 `request_reused`. A stale revision gets HTTP 409 `conflict` with
+  the expected and the current revision; reload the session and decide again.
+- When the supervisor heartbeat is missing or expired, a new command gets HTTP
+  503 with the outcome `unavailable` and nothing is stored. The UI never
+  starts a second writer. Run `factory start` and submit again. Read-only
+  pages and session reads keep working.
+- `approve` names the digests of a preview that `preview_plan` rendered,
+  because only the coordinator talks to the tracker. Publication needs a
+  tracker adapter with plan publication; otherwise the command is
+  `unsupported`. Publication never adds `agent-ready` and never starts a run.
+- `GET /api/sessions` lists the sessions of the registered repository, and
+  `GET /api/sessions/{id}` returns the durable activity of one session: the
+  session and its revision, turns, the current brief, plan, and approval,
+  publication receipts and ledger operations, and the newest commands. It
+  shows only structured store state; harness output is never read as approval
+  or workflow state.
+- A mutation must come from a page of this UI: the `Origin` header must be the
+  UI origin, `Sec-Fetch-Site` must be `same-origin` when the browser sends it,
+  the body must be `application/json`, and the `X-Factory-CSRF` header must
+  carry the per-process token from the page's `factory-csrf-token` meta
+  element. Other requests get HTTP 403 or 415 and store nothing. The body is
+  limited to about 2 MiB and unknown fields are refused. Pages submit with
+  `/assets/commands.js`; the Content-Security-Policy still blocks form posts.
+- Automatic refresh pauses while a form has focus or unsent input, so a
+  refresh never wipes typed text.
 - Session pages show conversation and plan content. Like run content, it stays
   on the host and is served only on the loopback interface.
-
-The command inbox and session routes ship with issue #267. Until then the UI
-behaves as described above and has no write path.
 
 ## Run-artifact cleanup
 
