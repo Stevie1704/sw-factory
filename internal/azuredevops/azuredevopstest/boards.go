@@ -100,7 +100,7 @@ type Item struct {
 	Relations []Relation
 }
 
-// tags returns the tags of the item.
+// Tags returns the tags of the item.
 func (i Item) Tags() []string {
 	value, _ := i.Fields["System.Tags"].(string)
 	tags := []string{}
@@ -132,16 +132,17 @@ type Boards struct {
 	denied map[string]bool
 	items  []Item
 	faults map[string]fault
+	held   map[string]bool
 	calls  []Call
 }
 
 // NewBoards returns an empty project with the given process and
 // every permission granted.
 func NewBoards(t testing.TB, process []WorkItemType) *Boards {
-	return &Boards{t: t, process: process, denied: map[string]bool{}, faults: map[string]fault{}}
+	return &Boards{t: t, process: process, denied: map[string]bool{}, faults: map[string]fault{}, held: map[string]bool{}}
 }
 
-// failOnce fails the next call with key once: "create:<title>",
+// FailOnce fails the next call with key once: "create:<title>",
 // "link:<work item id>", "wiql", or "GET <path>" for a read.
 func (b *Boards) FailOnce(key, message string, afterWrite bool) {
 	b.mu.Lock()
@@ -149,14 +150,24 @@ func (b *Boards) FailOnce(key, message string, afterWrite bool) {
 	b.faults[key] = fault{message: message, afterWrite: afterWrite}
 }
 
-// deny removes one permission bit of the identity.
+// HoldAfterWrite applies the next create of the work item titled title and
+// then holds its response until the caller's context ends, as a process that
+// stops while the request is in flight. The item stays created; the caller
+// gets the context error.
+func (b *Boards) HoldAfterWrite(title string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.held["create:"+title] = true
+}
+
+// Deny removes one permission bit of the identity.
 func (b *Boards) Deny(namespace string, bit int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.denied[namespace+"/"+strconv.Itoa(bit)] = true
 }
 
-// seed adds a work item without a call, for example one that another writer
+// Seed adds a work item without a call, for example one that another writer
 // created.
 func (b *Boards) Seed(workItemType, title string, tags ...string) int {
 	b.mu.Lock()
@@ -164,14 +175,14 @@ func (b *Boards) Seed(workItemType, title string, tags ...string) int {
 	return b.add(workItemType, map[string]any{"System.Title": title, "System.Tags": strings.Join(tags, "; ")}, nil)
 }
 
-// snapshot returns a copy of every work item.
+// Snapshot returns a copy of every work item.
 func (b *Boards) Snapshot() []Item {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return slices.Clone(b.items)
 }
 
-// writes returns every recorded call that is not a read.
+// Writes returns every recorded call that is not a read.
 func (b *Boards) Writes() []Call {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -184,7 +195,7 @@ func (b *Boards) Writes() []Call {
 	return writes
 }
 
-// creates returns the number of work item create requests.
+// Creates returns the number of work item create requests.
 func (b *Boards) Creates() int {
 	count := 0
 	for _, call := range b.Writes() {
@@ -210,7 +221,7 @@ func (b *Boards) Calls() []Call {
 }
 
 // Run answers one az rest invocation.
-func (b *Boards) Run(_ context.Context, args []string) ([]byte, error) {
+func (b *Boards) Run(ctx context.Context, args []string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	call, err := ParseCall(args)
@@ -223,7 +234,7 @@ func (b *Boards) Run(_ context.Context, args []string) ([]byte, error) {
 		delete(b.faults, "GET "+call.URL.Path)
 		return nil, errors.New(fault.message)
 	}
-	response, err := b.answer(call)
+	response, err := b.answer(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +270,7 @@ const (
 var permissionRoute = regexp.MustCompile(`^/contoso/_apis/permissions/([0-9a-f-]+)/(\d+)$`)
 
 // answer returns the scripted response of one call.
-func (b *Boards) answer(call Call) (any, error) {
+func (b *Boards) answer(ctx context.Context, call Call) (any, error) {
 	path := call.URL.Path
 	switch {
 	case call.Method == "GET" && path == RepositoryPath:
@@ -287,7 +298,7 @@ func (b *Boards) answer(call Call) (any, error) {
 	case call.Method == "GET" && strings.HasPrefix(path, ProjectPath+"/wit/workitemtypes/"):
 		return b.typeResource(strings.TrimPrefix(path, ProjectPath+"/wit/workitemtypes/"))
 	case call.Method == "POST" && strings.HasPrefix(path, WorkItemsPath+"/$"):
-		return b.create(call, strings.TrimPrefix(path, WorkItemsPath+"/$"))
+		return b.create(ctx, call, strings.TrimPrefix(path, WorkItemsPath+"/$"))
 	case call.Method == "POST" && path == ProjectPath+"/wit/wiql":
 		return b.query(call)
 	case call.Method == "GET" && path == WorkItemsPath:
@@ -364,7 +375,7 @@ func (b *Boards) decodePatch(call Call) []patchOperation {
 }
 
 // create answers a work item create.
-func (b *Boards) create(call Call, workItemType string) (any, error) {
+func (b *Boards) create(ctx context.Context, call Call, workItemType string) (any, error) {
 	fields := map[string]any{}
 	formats := map[string]string{}
 	for _, operation := range b.decodePatch(call) {
@@ -390,6 +401,13 @@ func (b *Boards) create(call Call, workItemType string) (any, error) {
 	id := b.add(workItemType, fields, formats)
 	if faulted {
 		return nil, errors.New(fault.message)
+	}
+	if b.held["create:"+title] {
+		delete(b.held, "create:"+title)
+		b.mu.Unlock()
+		<-ctx.Done()
+		b.mu.Lock()
+		return nil, errors.Join(errors.New("az rest: the request was interrupted"), ctx.Err())
 	}
 	return map[string]any{"id": id, "fields": fields}, nil
 }
@@ -530,4 +548,35 @@ func ParseCall(args []string) (Call, error) {
 		return Call{}, fmt.Errorf("az rest call %v has no api-version", args)
 	}
 	return call, nil
+}
+
+// Title returns the title of the work item.
+func (i Item) Title() string {
+	title, _ := i.Fields["System.Title"].(string)
+	return title
+}
+
+// Description returns the description of the work item.
+func (i Item) Description() string {
+	description, _ := i.Fields["System.Description"].(string)
+	return description
+}
+
+// ItemSet is a snapshot of work items that resolves relation targets.
+type ItemSet []Item
+
+// Items wraps a snapshot so relation targets resolve to titles.
+func Items(snapshot []Item) ItemSet {
+	return ItemSet(snapshot)
+}
+
+// Title returns the title of the work item that a relation URL names, or ""
+// when the snapshot holds no such item.
+func (s ItemSet) Title(relationURL string) string {
+	for _, item := range s {
+		if strings.HasSuffix(relationURL, "/workItems/"+strconv.Itoa(item.ID)) {
+			return item.Title()
+		}
+	}
+	return ""
 }
