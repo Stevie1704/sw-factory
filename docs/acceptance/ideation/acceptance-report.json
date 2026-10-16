@@ -1,0 +1,229 @@
+{
+  "schema_version": 1,
+  "manifest_schema_version": 1,
+  "generated_at": "2026-10-16T14:14:00.330635Z",
+  "release": {
+    "schema_version": 1,
+    "version": "development",
+    "build": "development",
+    "revision": "783a70888554c5ff89722ecdf2e604dd25cc96c0",
+    "modified": false,
+    "worker_base_image": "",
+    "platform": "darwin/arm64"
+  },
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "scenarios": [
+    {
+      "id": "onboard-from-release",
+      "title": "Onboard a small repository from an installed release",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "onboard-instructions-only",
+      "title": "Onboard without native skill support",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "resume-interrupted-onboarding",
+      "title": "Continue an interrupted onboarding with a fresh agent",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "diagnose-failures",
+      "title": "Diagnose common failures",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "recover-operations",
+      "title": "Recover through supported commands",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass",
+        "reason": "covers recovery semantics only; durable-effect failure injection stays with #181"
+      },
+      "gaps": [
+        {
+          "issue": 181,
+          "summary": "Failure injection around every durable effect is still open; these tests do not replace it."
+        }
+      ]
+    },
+    {
+      "id": "inspect-history",
+      "title": "Inspect a historical run while another run is active",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "upgrade-maintenance",
+      "title": "Upgrade the installation and report unsupported restore",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "blocked",
+        "reason": "only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships"
+      },
+      "gaps": [
+        {
+          "issue": 257,
+          "summary": "No upgrade preflight or resumable maintenance procedure ships yet."
+        },
+        {
+          "issue": 258,
+          "summary": "No supported backup and restore contract exists."
+        },
+        {
+          "issue": 204,
+          "summary": "Service supervision under launchd or systemd is not part of the upgrade yet."
+        }
+      ]
+    },
+    {
+      "id": "defect-report",
+      "title": "Report a defect to an authorized test destination and clean up",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "scoped-authority",
+      "title": "Act within scoped authority and escalate new decisions",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "contributor-maintenance",
+      "title": "Fix a small Factory defect from repository guidance",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #275 acceptance; live runs were not authorized for this run"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-publish-github",
+      "title": "Turn an idea into reviewed, linked GitHub issues",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not authorized for #275: needs a disposable GitHub repository, a host harness, a spending limit, and a worker image of this release pinned in factory.yaml"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-publish-azure-devops",
+      "title": "Turn an idea into reviewed, linked Azure Boards work items",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not authorized for #275: needs a disposable Azure DevOps project, a host harness, a spending limit, and a worker image of this release pinned in factory.yaml"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-without-backlog",
+      "title": "End an ideation session without backlog work",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not authorized for #275: needs a host harness and a spending limit for the paid ideation turn"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-recovery",
+      "title": "Recover an ideation session from interruption and stale input",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not authorized for #275: needs disposable GitHub and Azure DevOps targets, a host harness, and a spending limit"
+      },
+      "deterministic": {
+        "outcome": "pass",
+        "reason": "session-role volume and snapshot cleanup by reset stays open (ADR 0023)"
+      },
+      "gaps": [
+        {
+          "issue": 265,
+          "summary": "factory reset and factory cleanup do not remove session-role Docker volumes or the snapshot worktree of a role active at coordinator stop (ADR 0023)."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "live": {
+      "blocked": 0,
+      "fail": 0,
+      "not-run": 14,
+      "pass": 0
+    },
+    "deterministic": {
+      "blocked": 1,
+      "fail": 0,
+      "not-run": 0,
+      "pass": 13
+    }
+  },
+  "interventions_by_cause": {},
+  "duration_seconds": 0
+}
