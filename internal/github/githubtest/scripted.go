@@ -67,18 +67,18 @@ type fault struct {
 // as a lost response does. An unexpected call fails the test and returns an
 // error, so it is safe to call from a background goroutine.
 type Scripted struct {
-	t         testing.TB
-	mu        sync.Mutex
-	native    bool
+	t      testing.TB
+	mu     sync.Mutex
+	native bool
 	// repository is the repository response; empty means WritableRepository.
 	repository string
-	issues    []Issue
-	subIssues map[int][]int
-	blockedBy map[int][]int
-	comments  map[int][]string
-	faults    map[string]fault
-	writes    []string
-	held      map[string]bool
+	issues     []Issue
+	subIssues  map[int][]int
+	blockedBy  map[int][]int
+	comments   map[int][]string
+	faults     map[string]fault
+	writes     []string
+	held       map[string]bool
 }
 
 // New returns an empty repository; native selects whether the host offers
