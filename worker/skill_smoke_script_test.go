@@ -89,8 +89,8 @@ func TestSkillSmokeRecordsTheSkillsThatLoadedAndShowsTheFailedReply(t *testing.T
 	if !strings.Contains(smoke.stderr, "I could not find a skill with that name.") {
 		t.Errorf("smoke hides the reply of the skill that did not load:\n%s", smoke.stderr)
 	}
-	if got := recordedSkills(t, smoke.evidence); got != "implement specification-review standards-review" {
-		t.Errorf("recorded skills = %q, want the three that loaded", got)
+	if got := recordedSkills(t, smoke.evidence); got != "grilling implement specification-review standards-review" {
+		t.Errorf("recorded skills = %q, want the four that loaded", got)
 	}
 }
 
@@ -104,8 +104,8 @@ func TestSkillSmokeAddsARetriedSkillToTheRecord(t *testing.T) {
 	if smoke.err != nil {
 		t.Fatalf("retry of one skill failed: %v\n%s", smoke.err, smoke.stderr)
 	}
-	if got := recordedSkills(t, smoke.evidence); got != "implement pr specification-review standards-review" {
-		t.Errorf("recorded skills = %q, want all four", got)
+	if got := recordedSkills(t, smoke.evidence); got != "grilling implement pr specification-review standards-review" {
+		t.Errorf("recorded skills = %q, want all five", got)
 	}
 }
 

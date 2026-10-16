@@ -59,6 +59,7 @@ func TestRoleSkillsLeaveCoordinatorProtocolToThePrompt(t *testing.T) {
 		"skills/specification-review/SKILL.md",
 		"skills/standards-review/SKILL.md",
 		"skills/pr/SKILL.md",
+		"skills/grilling/SKILL.md",
 	} {
 		t.Run(path, func(t *testing.T) {
 			body := readSkill(t, path)
@@ -89,6 +90,29 @@ func TestPullRequestWriterPromptMandatesTheShippedPRSkill(t *testing.T) {
 	skill := readSkill(t, "skills/pr/SKILL.md")
 	if !strings.Contains(skill, "Never invent a before or after") || strings.Contains(skill, "Screenshots are S-tier") {
 		t.Fatalf("pr skill keeps evidence the worker cannot observe:\n%s", skill)
+	}
+}
+
+// TestIdeationPromptUsesTheFactoryOwnedGrillingSkill verifies that the
+// ideation role prompt names the shipped `grilling` skill and that the
+// factory adaptation leaves execution to the factory runtime: it dispatches
+// no sub-agent and keeps the decision-tree method.
+func TestIdeationPromptUsesTheFactoryOwnedGrillingSkill(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "internal", "prompt", "prompts", "ideation.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(ideation prompt) error = %v", err)
+	}
+	if !strings.Contains(string(body), "Use the `"+harness.GrillingSkill+"` skill") {
+		t.Fatalf("ideation prompt does not name the %q skill:\n%s", harness.GrillingSkill, body)
+	}
+	skill := readSkill(t, "skills/grilling/SKILL.md")
+	for _, marker := range []string{"design tree", "frontier", "recommended answer", "changes an earlier answer", "evidence"} {
+		if !strings.Contains(skill, marker) {
+			t.Fatalf("grilling skill lacks %q:\n%s", marker, skill)
+		}
+	}
+	if strings.Contains(skill, "sub-agent") {
+		t.Fatalf("grilling skill keeps upstream sub-agent orchestration:\n%s", skill)
 	}
 }
 
