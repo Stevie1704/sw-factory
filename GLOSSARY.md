@@ -26,8 +26,11 @@ _Avoid_: Spec (for an unpublished brief), summary
 
 **Plan revision**:
 One immutable, provider-neutral work-item graph derived from one exact brief
-revision and repository context revision. Nodes have stable local IDs, a kind,
-and parent, dependency, and brief references. A newer brief makes it stale.
+revision and repository context revision. Nodes have stable local IDs, a kind
+(`task`, `investigation`, or `parent`), and parent, dependency, and brief
+references. A newer brief makes it stale. Plan validation refuses a draft with
+a cycle, a contradictory hierarchy, missing content, or a size over its limits;
+it never shortens a draft.
 _Avoid_: Backlog, issue list
 
 **Session role**:
@@ -93,6 +96,27 @@ graph and creates, looks up, and links its items. Each adapter implements it
 with its own provider commands; the coordinator reaches it only through the
 port.
 _Avoid_: GitHub publisher (for the concept)
+
+**Textual relationship fallback**:
+The explicit text representation of a plan parent or dependency edge where
+the tracker offers no native relationship, for example a GitHub host without
+sub-issues. The preview shows it in the item bodies and in the relationship
+mapping, so the approval binds it; publication never switches between native
+and textual after approval.
+_Avoid_: Silent downgrade, best-effort link
+
+**Session command**:
+One browser request for an ideation session, such as a user turn, a brief
+edit, an approval, or a cancellation. It carries a request ID that makes it
+idempotent and the session revision the page showed. Acceptance makes it
+durable; only the coordinator applies it and records its outcome.
+_Avoid_: Action, API call (for the durable request)
+
+**Command inbox**:
+The operational-store table where the local UI appends session commands and
+the coordinator reads them in order. It is the only path from the browser to
+the coordinator; there is no control socket.
+_Avoid_: Queue (for run work), control socket
 
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state

@@ -618,6 +618,19 @@ and structured reports as run roles, with these differences:
   ignored. It then finishes the process, stops the worker, and removes the
   snapshot, so a session that waits for the user holds no active work. The
   next user turn resumes the recorded native session on the same harness.
+- **Plan validation.** Before the coordinator accepts a planning draft, it
+  checks the graph with factory-owned rules (`internal/plangraph`) on top of
+  the store's identity and reference checks. Each item is a `task`, an
+  `investigation`, or a `parent`, and has a body and at least one acceptance
+  criterion. A parent is a top-level item with at least two children; only a
+  parent has children. Dependencies and parent relationships together must not
+  form a cycle, because a parent is done only after its children. A plan has at
+  most 25 items, and an item has at most 12 acceptance criteria and 10
+  dependencies. A draft that breaks a rule ends the invocation as
+  `plan_rejected`; the session reason lists every problem and what to change,
+  and an earlier draft stays under review. The coordinator never truncates a
+  draft. Planning craft, such as when to decompose, stays in the versioned
+  planning prompt.
 - **Failures.** Expired authentication, capacity limits, unexpected exits, a
   resume that reveals another native session, credential projection failures,
   interrupted launches, and rejected reports end the invocation with a

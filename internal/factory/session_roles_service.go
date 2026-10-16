@@ -5,11 +5,13 @@ import (
 	"fmt"
 
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/plangraph"
 )
 
 // WithSessionRoles opens the operational store and calls use with a
 // session-role coordinator for the registered repository. The session
-// command dispatcher (#267) starts and cancels roles through it. A store
+// command dispatcher (#267) starts and cancels roles through it. Planning
+// drafts are checked with the plan graph rules of internal/plangraph. A store
 // without session support skips use.
 func (s *Service) WithSessionRoles(ctx context.Context, use func(*SessionRoles) error) error {
 	s.commandMu.Lock()
@@ -35,6 +37,7 @@ func (s *Service) WithSessionRoles(ctx context.Context, use func(*SessionRoles) 
 	return use(NewSessionRoles(SessionRoleDependencies{
 		Store: sessionStore, Harnesses: s.deps.HeadlessHarnesses, Workers: s.deps.Worker, Snapshots: snapshots,
 		Registration: registration, Policy: policy, Now: s.deps.Now, NewInvocationID: s.newInvocationID,
+		ValidatePlan: plangraph.Validate,
 	}))
 }
 

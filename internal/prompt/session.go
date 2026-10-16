@@ -21,7 +21,7 @@ const WorkerSessionPacketPath = "/invocation/session.json"
 // prompt of a persisted invocation.
 var sessionPromptVersions = map[string]map[string]string{
 	workflow.RoleIdeation: {workflow.PromptVersionIdeation: "prompts/ideation.md"},
-	workflow.RolePlanning: {workflow.PromptVersionPlanning: "prompts/planning.md"},
+	workflow.RolePlanning: {workflow.PromptVersionPlanning: "prompts/planning.md", "planning-v1": "prompts/legacy/planning-v1.md"},
 }
 
 // SessionRequest contains the pinned identity of one session-role prompt.

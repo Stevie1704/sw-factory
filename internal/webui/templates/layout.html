@@ -7,6 +7,10 @@
 <meta name="color-scheme" content="light dark">
 <title>{{template "title" .Page}} · factory</title>
 <link rel="stylesheet" href="/assets/style.css">
+{{- if .CSRFToken}}
+<meta name="factory-csrf-token" content="{{.CSRFToken}}">
+<script src="/assets/commands.js" defer></script>
+{{- end}}
 {{- if .RefreshSeconds}}
 <script src="/assets/refresh.js" defer></script>
 {{- end}}
