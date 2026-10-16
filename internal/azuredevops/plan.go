@@ -57,8 +57,8 @@ func (c *Client) planMapping() config.AzurePlanMapping {
 // required fields, states, and link types. The same graph against an
 // unchanged project renders the same preview.
 func (c *Client) PreflightPlan(ctx context.Context, repository tracker.Repository, graph tracker.PlanGraph) (tracker.PlanPreview, error) {
-	if err := validateRepository(repository); err != nil {
-		return tracker.PlanPreview{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanPreview{}, err
 	}
 	mapping := c.planMapping()
 	if err := mapping.Validate(); err != nil {

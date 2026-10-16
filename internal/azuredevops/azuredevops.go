@@ -193,6 +193,15 @@ func validateRepository(repository tracker.Repository) error {
 	return nil
 }
 
+// validatePlanRepository is validateRepository for the planning port: it
+// returns the typed invalid-mapping error that every plan method reports.
+func validatePlanRepository(repository tracker.Repository) error {
+	if err := validateRepository(repository); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	}
+	return nil
+}
+
 // identityRef is the identity projection of a work item or pull-request
 // author.
 type identityRef struct {
