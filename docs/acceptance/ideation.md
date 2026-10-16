@@ -23,8 +23,8 @@ until the live GitHub and Azure DevOps scenarios below have run.
 | --- | --- |
 | Platform | darwin/arm64, macOS 27.0.1, Go 1.27.2 (go.mod toolchain) |
 | Release | Development build, revision `783a70888554c5ff89722ecdf2e604dd25cc96c0` (branch `feat/275-acceptance-docs` on the integration branch at `85195e9`) |
-| Pinned worker image | `factory.yaml` pins `ghcr.io/stevie1704/sw-factory-worker@sha256:20bad8e4d840d27599c64f047eebba1084fa22ca04112a8dde908a7420bda7b6`. It predates the session roles, so it is not the image a session role needs. |
-| Local worker build | `make worker-build` on colima (linux/arm64) passed in 176 s: digest `sha256:cd4fcd3209e470252d1e01a8eaa31257db54697c69e50bedbf7dc5b6176a01b1`, headless lifecycle verification passed for the Codex and Claude Code adapters, `factory-report` has `--ideation-file` and `--plan-file`, and the `grilling` skill is installed for both harnesses. The image was not pushed and the pin was not changed. |
+| Pinned worker image | `factory.yaml` pins `ghcr.io/stevie1704/sw-factory-worker@sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54`, built on colima (linux/arm64) from revision `5a3ac66` (same tree as integration commit `22e4d57`), scanned clean with grype, and published with `make worker-publish` on 2026-10-16. Headless lifecycle verification passed for the Codex and Claude Code adapters, and `factory-report` has `--ideation-file` and `--plan-file`. |
+| Skill smoke | Codex 0.148.0 loaded `implement`, `specification-review`, `standards-review`, `pr`, and `grilling` in the pinned image (`worker/skill-smoke.json`). The Claude Code smoke did not run: the host's Claude credentials had an expired OAuth session. |
 | Worker harnesses | Claude Code 2.1.232 and Codex 0.148.0 (build defaults of the local image); no live invocation ran. |
 | Host harness | Not observed: no live scenario ran. The implementing agent was Claude Code (Claude Opus 5.5) under an orchestrator; it is not product evidence. |
 
@@ -80,7 +80,8 @@ is a specific unverified scenario:
 6. Azure DevOps, retry: a lost create response and the WIQL correlation
    lookup that the retry depends on.
 7. Live ideation and planning turns on Codex and on Claude Code with a worker
-   image of this release, including the paid `grilling` skill smoke.
+   image of this release, including the paid Claude Code `grilling` skill
+   smoke (the Codex skill smoke ran).
 8. A live coordinator restart during a role turn and during publication.
 
 ## Interventions, time, and usage
@@ -119,13 +120,13 @@ them.
 
 ## Open items
 
-- Re-pin the worker image: push the rebuilt worker with `make
-  worker-publish`, pin its digest in `factory.yaml`, and record a skill smoke
-  that includes `grilling`. This is a human release step (registry push and
-  paid smoke).
-- `factory reset` and `factory cleanup` do not remove session-role Docker
-  volumes or the snapshot worktree of a role active at coordinator stop
-  (ADR 0023); the guide names the manual removal.
+- Record the Claude Code skill smoke for the pinned worker digest:
+  `HARNESSES=claude MANDATORY_SKILLS="implement specification-review
+  standards-review pr grilling" ./scripts/smoke-skills.sh` with valid Claude
+  credentials.
+- `factory cleanup` keeps session-role Docker volumes; `factory reset`
+  removes them (ADR 0023). Which sessions cleanup may clean is an open
+  product decision.
 - After a tracker mapping change, an approval can no longer publish; the user
   must save the plan again to return it to review before a new approval. A
   publication that is already incomplete when the mapping changes can only
