@@ -752,3 +752,47 @@ func TestServiceDrivesSessionRolesFromTheSupervisor(t *testing.T) {
 		t.Fatalf("session after supervisor reconciliation = %#v, want the result applied", session)
 	}
 }
+
+// TestIdeationPacketMarksACorrectedAnswer verifies that the frozen session
+// packet names each turn and the earlier answer that a correction turn
+// changes, so the ideation role can revisit the decisions that depend on it.
+func TestIdeationPacketMarksACorrectedAnswer(t *testing.T) {
+	fixture := newSessionFixture(t, config.HarnessCodex)
+	roles := fixture.roles()
+	first, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.report(first, ideationResultForTest())
+	if err := roles.Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventTurnAccepted, "", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := fixture.store.AppendIdeationTurn(t.Context(), write, store.IdeationTurn{
+		ID: "turn-2", Author: store.IdeationTurnAuthorUser, Body: "Support engineers export it, not operators.", Corrects: "turn-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+	if err != nil {
+		t.Fatalf("StartIdeationTurn(turn-2) error = %v", err)
+	}
+	var packet struct {
+		Turns []struct {
+			ID       string `json:"id"`
+			Author   string `json:"author"`
+			Corrects string `json:"corrects"`
+		} `json:"turns"`
+	}
+	data, err := os.ReadFile(filepath.Join(second.InvocationDirectory, "session.json"))
+	if err != nil || json.Unmarshal(data, &packet) != nil {
+		t.Fatalf("read packet: %v", err)
+	}
+	if len(packet.Turns) != 3 || packet.Turns[0].ID != "turn-1" || packet.Turns[2].ID != "turn-2" ||
+		packet.Turns[2].Corrects != "turn-1" || packet.Turns[0].Corrects != "" {
+		t.Fatalf("packet turns = %s, want turn-2 marked as the correction of turn-1", data)
+	}
+}
