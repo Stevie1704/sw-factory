@@ -347,6 +347,55 @@ registration into the host file by hand, then run `factory doctor`.
 | `azure devops repository` | the organization, project, or repository cannot be read |
 | `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
 
+#### Plan publication mapping
+
+An approved ideation plan publishes to Azure Boards work items (ADR 0026).
+`azure_devops.planning.levels` maps the neutral plan kinds (`parent`, `task`,
+`investigation`) to the work-item types of the project's process. List the
+backlog levels from the top level down. Each level has a `type`, the plan
+`kinds` it receives, an optional `required` flag, and optional `fields`
+values by reference name. Without `planning`, the Agile mapping applies:
+`parent` is an Epic, the Feature level is optional, and `task` and
+`investigation` are User Stories. A Scrum project configures its backlog item
+type:
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      planning:
+        levels:
+          - type: Epic
+            kinds: [parent]
+          - type: Feature
+            required: true
+          - type: Product Backlog Item
+            kinds: [task, investigation]
+            fields:
+              Microsoft.VSTS.Common.Priority: "2"
+```
+
+- **Required levels.** When a parent link skips a `required` level, the
+  preview adds one intermediate item of that type per parent, so the approval
+  binds it. A child on the same or a higher level than its parent fails the
+  preview; the factory never rewrites the hierarchy after approval.
+- **Preview checks.** Before approval, the preview checks that every mapped
+  type exists, is enabled, and is on a backlog level in the configured order;
+  that every always-required field without a default has a value in `fields`;
+  that every configured value is allowed; and that a configured
+  `System.State` is a not-started (Proposed) state. `System.Title`,
+  `System.Description`, and `System.Tags` are rendered by the factory and
+  cannot be configured.
+- **Tags and authorization.** Each item gets exactly one tag,
+  `factory-plan:<session>/<plan revision>/<node>`, which correlates it for
+  retries. It is not a run-state tag. Publication never adds `agent-ready`;
+  execution still needs an authorized user to add it. Publication needs View
+  and Edit work items and Create tag definition.
+- **Evidence.** `docs/acceptance/azure-devops-plan-publication.md` describes
+  the scripted coverage and the disposable-project procedure; live evidence
+  has not been recorded yet.
+
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
 Host schema version 1 is deliberately not migrated in place. Before installing

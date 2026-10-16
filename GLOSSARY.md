@@ -78,8 +78,17 @@ The stable identity `<session>/<plan revision>/<node>` that the adapter
 renders into each published tracker item, so that a lookup finds the item
 again after an unknown create outcome. Publication looks it up before every
 create; more than one match, or no match after an unknown outcome, stops for
-explicit reconciliation.
+explicit reconciliation. GitHub carries it as a hidden body marker; Azure
+DevOps carries it as the tag `factory-plan:<key>`, which is not a run-state
+tag.
 _Avoid_: Idempotency key (providers do not honor one)
+
+**Intermediate plan item**:
+A tracker item that the Azure DevOps preview adds between a plan parent and
+its children because the configured plan mapping requires a backlog level
+that the plan skips, for example a Feature between an Epic and its User
+Stories. It is part of the approved preview and has its own correlation key.
+_Avoid_: Generated parent, implicit item
 
 **Plan publisher**:
 The optional tracker-port capability that preflights and renders a plan
