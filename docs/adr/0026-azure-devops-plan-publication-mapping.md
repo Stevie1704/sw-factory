@@ -71,9 +71,9 @@ Every published item creates one tag definition in the project. The project
 tag list grows by one entry per published item, and the identity needs the
 Create tag definition permission. A plan that a project's process cannot take
 fails before approval with an error that names the level, type, or field to
-configure. The composition root must pass the registration's
-`azure_devops.planning` to `azuredevops.Client.Planning` when it wires
-publication (#267); until then the Agile mapping applies. The scripted az
+configure. The composition root (`internal/cli/adapters.go`) passes the
+registration's `azure_devops.planning` to `azuredevops.Client.Planning`. The
+scripted az
 tests in `internal/azuredevops` cover the mapping, preflight failures, and
 end-to-end publication; the live procedure in
 `docs/acceptance/azure-devops-plan-publication.md` has not been run.

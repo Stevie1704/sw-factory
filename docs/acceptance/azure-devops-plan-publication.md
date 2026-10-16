@@ -80,8 +80,7 @@ perform. Record the live result here when an operator runs the procedure.
 - `az login` as the identity that supervises the registration, with View and
   Edit work items and Create tag definition in the project.
 - A Factory build that contains #266, #267, #271, #272, and #274, registered
-  against the disposable project, with the composition root passing
-  `azure_devops.planning` to the adapter.
+  against the disposable project.
 
 ### Steps and expected artifacts
 
