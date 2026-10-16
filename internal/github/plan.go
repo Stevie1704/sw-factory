@@ -34,13 +34,22 @@ func planMarker(correlation string) string {
 	return "<!-- factory-plan: " + correlation + " -->"
 }
 
+// validatePlanRepository is validateRepository for the planning port: it
+// returns the typed invalid-mapping error that every plan method reports.
+func validatePlanRepository(repository tracker.Repository) error {
+	if err := validateRepository(repository); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	}
+	return nil
+}
+
 // PreflightPlan resolves the repository access and the relationship
 // capabilities of the target and renders every plan item as the exact issue
 // that CreatePlanItem will create. It only reads from GitHub, and the same
 // graph against an unchanged repository renders the same preview.
 func (c *GhClient) PreflightPlan(ctx context.Context, repository tracker.Repository, graph tracker.PlanGraph) (tracker.PlanPreview, error) {
-	if err := validateDoctorRepository(repository); err != nil {
-		return tracker.PlanPreview{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanPreview{}, err
 	}
 	if err := c.checkIssueCreation(ctx, repository); err != nil {
 		return tracker.PlanPreview{}, err
@@ -313,8 +322,8 @@ func (r planIssueResponse) ref() tracker.PlanItemRef {
 // CreatePlanItem creates exactly the rendered issue. It never adds a label
 // of its own and refuses a factory state label before any call.
 func (c *GhClient) CreatePlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
-	if err := validateDoctorRepository(repository); err != nil {
-		return tracker.PlanItemRef{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanItemRef{}, err
 	}
 	if err := validatePlanIssue(item); err != nil {
 		return tracker.PlanItemRef{}, err
@@ -393,8 +402,8 @@ type planIssueListing struct {
 // an unknown outcome without an operator decision, so the bound cannot cause
 // a blind duplicate.
 func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
-	if err := validateDoctorRepository(repository); err != nil {
-		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return nil, err
 	}
 	if strings.TrimSpace(correlation) == "" {
 		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "a correlation key is required")
@@ -456,8 +465,8 @@ func nativeEndpoint(repository tracker.Repository, kind tracker.PlanRelationship
 // created issues in its approved mode. It adds no label and edits no issue
 // body.
 func (c *GhClient) CreatePlanRelationship(ctx context.Context, repository tracker.Repository, relationship tracker.PlanRelationship) error {
-	if err := validateDoctorRepository(repository); err != nil {
-		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return err
 	}
 	from, to, err := relationshipIssues(relationship)
 	if err != nil {
@@ -494,8 +503,8 @@ func (c *GhClient) CreatePlanRelationship(ctx context.Context, repository tracke
 // FindPlanRelationship reports whether the relationship already exists in
 // its approved mode, so that a retry does not create a second link.
 func (c *GhClient) FindPlanRelationship(ctx context.Context, repository tracker.Repository, relationship tracker.PlanRelationship) (bool, error) {
-	if err := validateDoctorRepository(repository); err != nil {
-		return false, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
+	if err := validatePlanRepository(repository); err != nil {
+		return false, err
 	}
 	from, to, err := relationshipIssues(relationship)
 	if err != nil {
