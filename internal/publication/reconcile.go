@@ -81,17 +81,18 @@ func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (stor
 		}
 	}
 	operation.UpdatedAt = p.now()
-	stored, err := p.Store.RecordPublicationOperation(ctx, operation)
-	if err != nil || !cancelled {
-		return stored, err
+	if cancelled {
+		return operation, p.recordCancelledReconciliation(ctx, history, request.ReceiptID, operation)
 	}
-	return stored, p.recordCancelledReconciliation(ctx, history, request.ReceiptID, stored)
+	return p.Store.RecordPublicationOperation(ctx, operation)
 }
 
-// recordCancelledReconciliation records an incomplete receipt of the
-// cancelled session's approval that lists every item and relationship known
-// to exist after the reconciled operation. The session stays cancelled with
-// its reason.
+// recordCancelledReconciliation records the reconciled operation and an
+// incomplete receipt of the cancelled session's approval in one store
+// transaction. The receipt lists every item and relationship known to exist
+// after the reconciliation, so a failed write leaves the operation
+// unresolved and a retry repeats both. The session stays cancelled with its
+// reason.
 func (p *Publisher) recordCancelledReconciliation(ctx context.Context, history store.IdeationHistory, receiptID string, reconciled store.PublicationOperation) error {
 	session := history.Session
 	ledger := approvalOperations(history.Operations, session.ApprovalID)
@@ -107,7 +108,7 @@ func (p *Publisher) recordCancelledReconciliation(ctx context.Context, history s
 	if err != nil {
 		return err
 	}
-	_, _, err = p.Store.RecordPublicationReceipt(ctx, write, receipt)
+	_, _, err = p.Store.RecordPublicationReceipt(ctx, write, receipt, reconciled)
 	return err
 }
 

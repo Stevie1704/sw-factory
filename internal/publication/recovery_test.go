@@ -85,7 +85,7 @@ func (f *faultyStoreForTest) TransitionIdeationSession(ctx context.Context, writ
 
 // RecordPublicationReceipt fails after a crash, and fails the first
 // failReceipts receipt writes without persisting them.
-func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write store.IdeationWrite, receipt store.PublicationReceipt) (store.IdeationSession, store.PublicationReceipt, error) {
+func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write store.IdeationWrite, receipt store.PublicationReceipt, settled ...store.PublicationOperation) (store.IdeationSession, store.PublicationReceipt, error) {
 	if err := f.down(); err != nil {
 		return store.IdeationSession{}, store.PublicationReceipt{}, err
 	}
@@ -98,7 +98,7 @@ func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write
 	if fail {
 		return store.IdeationSession{}, store.PublicationReceipt{}, errors.New("injected receipt write failure")
 	}
-	return f.Store.RecordPublicationReceipt(ctx, write, receipt)
+	return f.Store.RecordPublicationReceipt(ctx, write, receipt, settled...)
 }
 
 // StartPublicationLedger fails after a crash.
@@ -555,6 +555,26 @@ func TestCancelledSessionReconcilesAnAmbiguousCreate(t *testing.T) {
 		}
 		if h.fake.Writes() != writes {
 			t.Fatalf("tracker writes = %d, want %d: reconciliation never writes to the tracker", h.fake.Writes(), writes)
+		}
+	})
+
+	t.Run("failed receipt write leaves the operation for a retry", func(t *testing.T) {
+		t.Parallel()
+		h := cancelAfterAmbiguousCreate(t, trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
+		faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+		request := publication.Reconciliation{SessionID: h.sessionID, OperationID: "item/n-2", ReceiptID: "reconcile-1"}
+		if _, err := h.publisherWith(faulty, h.fake).Reconcile(t.Context(), request); err == nil {
+			t.Fatal("Reconcile() hid the receipt failure")
+		}
+		if got := h.operation("item/n-2"); got.State != store.PublicationOperationAmbiguous {
+			t.Fatalf("item/n-2 after the failed receipt = %#v, want it still ambiguous", got)
+		}
+		resolved, err := h.publisher().Reconcile(t.Context(), request)
+		if err != nil || resolved.State != store.PublicationOperationFailed {
+			t.Fatalf("retried Reconcile() = %#v, %v; want not applied", resolved, err)
+		}
+		if recorded := receipt(t, h, "reconcile-1"); !strings.Contains(recorded.Detail, "item/n-2") {
+			t.Fatalf("receipt = %#v, want the reconciled operation named", recorded)
 		}
 	})
 

@@ -167,3 +167,38 @@ func TestSchema43MigrationAddsThePublicationLedger(t *testing.T) {
 		t.Fatalf("StartPublicationLedger() after migration error = %v", err)
 	}
 }
+
+// TestPublicationReceiptSettlesLedgerOperationsInTheSameTransaction verifies
+// that a receipt write that names ledger operations records them only with
+// the receipt: a refused receipt leaves the ledger unchanged, so a retry can
+// repeat the whole write.
+func TestPublicationReceiptSettlesLedgerOperationsInTheSameTransaction(t *testing.T) {
+	t.Parallel()
+
+	opened, _ := openIdeationStoreForTest(t)
+	session := approvedSessionForTest(t, opened, "session-1")
+	planned, err := opened.StartPublicationLedger(t.Context(), "session-1", "approval-1", publicationOperationsForTest(), ideationNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted := planned[0]
+	adopted.State, adopted.ExternalID, adopted.Detail = store.PublicationOperationSucceeded, "301", "the operator adopted tracker item 301"
+	receipt := store.PublicationReceipt{
+		ID: "receipt-1", ApprovalID: "approval-1", Outcome: store.PublicationOutcomeIncomplete,
+		Items: []store.PublishedItem{{NodeID: "n-1", ExternalID: "301"}},
+	}
+	stale := ideationWrite(session, store.IdeationStateApproved)
+	stale.ExpectedRevision--
+	if _, _, err := opened.RecordPublicationReceipt(t.Context(), stale, receipt, adopted); !errors.Is(err, store.ErrIdeationRevisionConflict) {
+		t.Fatalf("RecordPublicationReceipt(stale) error = %v, want a revision conflict", err)
+	}
+	if ledger, err := opened.PublicationLedger(t.Context(), "session-1", "approval-1"); err != nil || ledger[0].State != store.PublicationOperationPending {
+		t.Fatalf("ledger after refused receipt = %#v, %v; want item.n-1 pending", ledger, err)
+	}
+	if _, _, err := opened.RecordPublicationReceipt(t.Context(), ideationWrite(session, store.IdeationStateApproved), receipt, adopted); err != nil {
+		t.Fatalf("RecordPublicationReceipt() error = %v", err)
+	}
+	if ledger, err := opened.PublicationLedger(t.Context(), "session-1", "approval-1"); err != nil || ledger[0].ExternalID != "301" || ledger[0].State != store.PublicationOperationSucceeded {
+		t.Fatalf("ledger after receipt = %#v, %v; want item.n-1 adopted", ledger, err)
+	}
+}

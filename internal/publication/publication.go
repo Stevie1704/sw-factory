@@ -54,7 +54,7 @@ type Store interface {
 	IdeationSession(context.Context, string) (store.IdeationSession, error)
 	IdeationHistory(context.Context, string) (store.IdeationHistory, error)
 	TransitionIdeationSession(context.Context, store.IdeationWrite) (store.IdeationSession, error)
-	RecordPublicationReceipt(context.Context, store.IdeationWrite, store.PublicationReceipt) (store.IdeationSession, store.PublicationReceipt, error)
+	RecordPublicationReceipt(context.Context, store.IdeationWrite, store.PublicationReceipt, ...store.PublicationOperation) (store.IdeationSession, store.PublicationReceipt, error)
 	StartPublicationLedger(context.Context, string, string, []store.PublicationOperation, time.Time) ([]store.PublicationOperation, error)
 	RecordPublicationOperation(context.Context, store.PublicationOperation) (store.PublicationOperation, error)
 }
