@@ -366,13 +366,23 @@ func skillContractCheck(request StartupRequest, name string) doctor.Check {
 		}
 		evidence, err := LoadSkillSmokeEvidence(request.SkillEvidencePath)
 		if err != nil {
-			return skillEvidenceResult(blocking, skillsEvidenceMissing, diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, skillsEvidenceMissing, diagnosis, "the recorded worker skill smoke evidence is unavailable", "record a smoke result for the pinned worker digest with "+smokeCall(name))
 		}
 		if !evidence.Covers(request.Image.Digest, name, contract.Version, required) {
-			return skillEvidenceResult(blocking, skillsEvidenceStale, diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with scripts/smoke-skills.sh")
+			return skillEvidenceResult(blocking, skillsEvidenceStale, diagnosis, "no recorded smoke result proves "+name+" can use the role-mandated skills in the pinned worker image", "record a smoke result for the pinned worker digest and harness version with "+smokeCall(name))
 		}
 		return doctor.Success("harness.skills.ready", diagnosis).WithFacts(harnessFact(name))
 	}
+}
+
+// smokeCall returns the smoke script call that records evidence for one
+// harness. Copilot names its dedicated token file, because the script never
+// falls back to a host GitHub credential.
+func smokeCall(name string) string {
+	if name == NameCopilot {
+		return "HARNESSES=copilot COPILOT_TOKEN_PATH=<dedicated Copilot token file> scripts/smoke-skills.sh"
+	}
+	return "HARNESSES=" + name + " scripts/smoke-skills.sh"
 }
 
 // skillEvidenceResult applies the repository policy's blocking scope to a

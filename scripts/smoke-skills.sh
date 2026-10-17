@@ -185,6 +185,9 @@ for harness_name in $HARNESSES; do
   # never become smoke evidence.
   if [ -z "$credential" ] || [ ! -s "$credential" ]; then
     echo "No $harness_name credential at ${credential:-<unset>}; skipping its smoke." >&2
+    if [ "$harness_name" = copilot ]; then
+      echo "Set COPILOT_TOKEN_PATH to the dedicated Copilot token file (docs/configuration.md)." >&2
+    fi
     unrecorded="$unrecorded $harness_name"
     continue
   fi

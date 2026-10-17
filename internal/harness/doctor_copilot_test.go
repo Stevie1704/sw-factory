@@ -181,3 +181,30 @@ func TestStartupChecksDiagnoseTheCopilotCredentialSource(t *testing.T) {
 		})
 	}
 }
+
+// TestStartupChecksBlockCopilotWithoutSmokeEvidence verifies a repository
+// that selects Copilot cannot start until a Copilot smoke result for the
+// pinned image is recorded, and that the action names the Copilot smoke call
+// with its dedicated token file.
+func TestStartupChecksBlockCopilotWithoutSmokeEvidence(t *testing.T) {
+	checker := &harnessDoctorChecker{}
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy:                copilotDoctorPolicy(),
+		Authentication:        config.AuthenticationConfig{CopilotAuthPath: writeCopilotToken(t, "github_pat_example")},
+		Image:                 probedImage,
+		Checker:               checker,
+		AuthenticationChecker: checker,
+		SkillChecker:          checker,
+		SkillEvidencePath: writeSkillEvidenceForHarnesses(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills(),
+			harness.NameClaude, harness.NameCodex),
+	})...)
+	result := resultNamed(t, report, "copilot worker skill contract")
+	if result.Status != doctor.StatusFailed || result.Code != "harness.skills.evidence_stale" {
+		t.Fatalf("copilot skill contract = %#v, want a harness.skills.evidence_stale failure", result)
+	}
+	for _, want := range []string{"HARNESSES=copilot", "COPILOT_TOKEN_PATH=", "scripts/smoke-skills.sh"} {
+		if !strings.Contains(result.Action, want) {
+			t.Errorf("action = %q, want it to contain %q", result.Action, want)
+		}
+	}
+}
