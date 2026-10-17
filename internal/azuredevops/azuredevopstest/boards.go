@@ -440,7 +440,9 @@ func (b *Boards) create(ctx context.Context, call Call, workItemType string) (an
 // wiqlTag matches the tag condition of a correlation query.
 var wiqlTag = regexp.MustCompile(`\[System\.Tags\] CONTAINS '([^']*)'`)
 
-// query answers a WIQL query by tag.
+// query answers a WIQL query by tag. Like Azure DevOps, CONTAINS matches
+// every tag that contains the queried text, so the answer is a superset that
+// the adapter must filter by the exact tag.
 func (b *Boards) query(call Call) (any, error) {
 	if fault, ok := b.faults["wiql"]; ok {
 		delete(b.faults, "wiql")
@@ -458,7 +460,7 @@ func (b *Boards) query(call Call) (any, error) {
 	}
 	found := []map[string]int{}
 	for _, item := range b.items {
-		if slices.ContainsFunc(item.Tags(), func(tag string) bool { return strings.EqualFold(tag, match[1]) }) {
+		if slices.ContainsFunc(item.Tags(), func(tag string) bool { return strings.Contains(strings.ToLower(tag), strings.ToLower(match[1])) }) {
 			found = append(found, map[string]int{"id": item.ID})
 		}
 	}

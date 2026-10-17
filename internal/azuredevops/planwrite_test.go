@@ -115,13 +115,17 @@ func TestCreatePlanItemClassifiesFailuresByProvenOutcome(t *testing.T) {
 
 // TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag verifies that
 // the WIQL lookup finds every work item that carries the correlation tag, in
-// ID order, and no item with another tag.
+// ID order, and no item with another tag. WIQL CONTAINS also returns items
+// whose tag only contains the correlation tag, for example the tag of node
+// n-20 or of the intermediate item n-2--feature; the exact tag comparison
+// drops them.
 func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	t.Parallel()
 
 	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	first := boards.Seed("User Story", "Cache images", "factory-plan:session-1/2/n-2", "team-a")
 	boards.Seed("User Story", "Other", "factory-plan:session-1/2/n-20")
+	boards.Seed("Feature", "Intermediate", "factory-plan:session-1/2/n-2--feature")
 	second := boards.Seed("User Story", "Cache images copy", "factory-plan:session-1/2/n-2")
 	refs, err := planClient(boards, nil).FindPlanItems(t.Context(), repository, "session-1/2/n-2")
 	if err != nil {
@@ -139,6 +143,9 @@ func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(boards.Calls()[0].Body), &query); err != nil || !strings.Contains(query.Query, "[System.TeamProject] = @project") {
 		t.Fatalf("WIQL = %q, %v; want a project-scoped query", query.Query, err)
+	}
+	if read := boards.Calls()[1]; !strings.Contains(read.URL.RawQuery, "ids=101%2C102%2C103%2C104") {
+		t.Fatalf("batch read = %s, want the four WIQL candidates read back", read.URL.RawQuery)
 	}
 }
 
