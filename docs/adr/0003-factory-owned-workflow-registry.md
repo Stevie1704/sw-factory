@@ -49,3 +49,6 @@ their own headless native sessions and handoffs.
 
 ADR 0010 supersedes this record's former terminal-surface strategy. The
 factory-owned registry remains authoritative for workflow semantics only.
+
+ADR 0021 adds a second factory-owned declaration, the ideation session
+lifecycle, beside the run-stage graph. It does not generalize the registry.

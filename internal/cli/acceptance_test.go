@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/acceptance"
 	"github.com/Stevie1704/sw-factory/internal/cli"
 )
 
@@ -149,7 +150,11 @@ func TestAcceptanceReportKeepsLiveAndDeterministicEvidenceApart(t *testing.T) {
 	if report.HostHarness.Name != "claude" || report.HostHarness.Version != "2.1.0" || !strings.HasPrefix(report.WorkerDigest, "sha256:") {
 		t.Fatalf("observed environment: %+v %q", report.HostHarness, report.WorkerDigest)
 	}
-	if len(report.Scenarios) != 10 {
+	manifest, err := acceptance.LoadManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Scenarios) != len(manifest.Scenarios) {
 		t.Fatalf("report has %d scenarios, want every manifest scenario", len(report.Scenarios))
 	}
 	byID := map[string]int{}
@@ -167,7 +172,7 @@ func TestAcceptanceReportKeepsLiveAndDeterministicEvidenceApart(t *testing.T) {
 	if upgrade := report.Scenarios[byID["upgrade-maintenance"]]; upgrade.Live.Outcome != "blocked" || len(upgrade.Gaps) == 0 {
 		t.Fatalf("upgrade-maintenance: %+v", upgrade)
 	}
-	if report.Summary.Live["pass"] != 1 || report.Summary.Live["blocked"] != 1 || report.Summary.Live["not-run"] != 8 || report.Summary.Deterministic["pass"] != 1 {
+	if report.Summary.Live["pass"] != 1 || report.Summary.Live["blocked"] != 1 || report.Summary.Live["not-run"] != len(manifest.Scenarios)-2 || report.Summary.Deterministic["pass"] != 1 {
 		t.Fatalf("summary: %+v", report.Summary)
 	}
 	if report.InterventionsByCause["authorization"] != 1 || report.DurationSeconds != 150 {

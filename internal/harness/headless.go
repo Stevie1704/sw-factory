@@ -27,8 +27,16 @@ const (
 type HeadlessStartRequest struct {
 	// InvocationID identifies the report-producing invocation.
 	InvocationID string
-	// RunID identifies the logical worker run.
+	// RunID identifies the worker owner. It is the run ID for a run
+	// invocation and the session's worker owner key for a session-role
+	// invocation; worker resources are named from it.
 	RunID string
+	// SessionID identifies the ideation session of a session-role invocation.
+	// It is empty for a run invocation.
+	SessionID string
+	// SessionRevision is the session revision a session-role invocation is
+	// pinned to.
+	SessionRevision int64
 	// WorkerID selects the invocation-isolated worker.
 	WorkerID string
 	// Role identifies the workflow role owning the process.
@@ -257,6 +265,7 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	}
 	environment := invocationEnvironment(h.protocol.name, HeadlessStartRequest{
 		InvocationID: request.InvocationID, RunID: request.RunID, Role: request.Role,
+		SessionID: request.SessionID, SessionRevision: request.SessionRevision,
 		Stage: request.Stage, CheckpointSHA: request.CheckpointSHA,
 		ReviewRoundID: request.ReviewRoundID, ReviewUnitID: request.ReviewUnitID,
 		Model: request.Model,
@@ -282,7 +291,7 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	}
 	if expectedSessionID != "" && nativeID != expectedSessionID {
 		h.cancelAfterLaunchFailure(ctx, request, nativeID)
-		return HeadlessSession{}, &HeadlessFailure{Cause: NewUnexpectedExitError(h.protocol.name), Diagnostics: h.protocol.name + " returned a different native session identity"}
+		return HeadlessSession{}, &HeadlessFailure{Cause: NewNativeSessionMismatchError(h.protocol.name), Diagnostics: h.protocol.name + " returned a different native session identity"}
 	}
 	return HeadlessSession{InvocationID: request.InvocationID, RunID: request.RunID, WorkerID: request.WorkerID, Role: request.Role, NativeSessionID: nativeID}, nil
 }

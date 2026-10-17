@@ -270,9 +270,11 @@ func runStart(ctx context.Context, args []string, defaultConfigPath string, outp
 	return 0
 }
 
-// runUI serves the read-only local web UI on a loopback address until its
-// context is cancelled by an operating-system signal. It never starts the
-// coordinator and works while the coordinator is stopped.
+// runUI serves the local web UI on a loopback address until its context is
+// cancelled by an operating-system signal. Run pages are read-only; session
+// commands are only appended to the durable inbox, which the coordinator
+// applies. It never starts the coordinator, and its read-only pages work
+// while the coordinator is stopped.
 func runUI(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("ui", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
@@ -293,7 +295,8 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 		writeError(errorsOutput, fmt.Errorf("--refresh must not be negative, got %s", *refresh))
 		return 2
 	}
-	handler := webui.NewHandler(newService(*configPath), webui.Options{RefreshInterval: *refresh})
+	service := newService(*configPath)
+	handler := webui.NewHandler(service, webui.Options{RefreshInterval: *refresh, Sessions: service})
 	writeFailed := false
 	ready := func(url string) {
 		writeFailed = !writeOutput(output, errorsOutput, "factory ui listening on %s\n", url)
@@ -1325,6 +1328,9 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 			return false
 		}
 	}
+	if !writeResetSessions(output, errorsOutput, plan.Sessions) {
+		return false
+	}
 	for _, credentialStore := range plan.CredentialStores {
 		if !writeOutput(output, errorsOutput, "reset credential volume: %s\n", credentialStore.CredentialStoreID) {
 			return false
@@ -1345,6 +1351,25 @@ func writeResetPlan(output, errorsOutput io.Writer, plan factory.ResetPlan) bool
 	}
 	for _, retained := range plan.Retained {
 		if !writeOutput(output, errorsOutput, "reset retains: %s\n", retained) {
+			return false
+		}
+	}
+	return true
+}
+
+// writeResetSessions renders the session-role targets of every planned
+// ideation session.
+func writeResetSessions(output, errorsOutput io.Writer, sessions []factory.ResetSession) bool {
+	if !writeOutput(output, errorsOutput, "reset sessions: %d\n", len(sessions)) {
+		return false
+	}
+	for _, session := range sessions {
+		if !writeOutput(output, errorsOutput, "reset session: %s\n", session.SessionID) ||
+			!writeResetTargets(output, errorsOutput, "reset session worker", session.WorkerIDs) ||
+			!writeResetTargets(output, errorsOutput, "reset session worker role", session.Roles) ||
+			!writeResetTargets(output, errorsOutput, "reset session snapshot", session.Snapshots) ||
+			!writeResetTargets(output, errorsOutput, "reset session git projection", session.GitProjections) ||
+			!writeResetTargets(output, errorsOutput, "reset session packet directory", session.PacketRoots) {
 			return false
 		}
 	}

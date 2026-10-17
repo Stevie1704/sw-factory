@@ -1,0 +1,236 @@
+{{define "title"}}Plan review {{.Session.ID}}{{end}}
+
+{{define "content" -}}
+<div class="page-head plan-head" data-state="{{.Session.State}}">
+<p class="crumbs"><a href="/">Runs</a> / <a href="/sessions/{{.Session.ID}}">Session {{.Session.ID}}</a> / <span class="run-id">Plan review</span></p>
+<h1>{{with .Session.Title}}{{.}}{{else}}Session {{$.Session.ID}}{{end}}</h1>
+<p class="hero-state"><span class="status" data-status="{{.Session.State}}">{{.Session.State}}</span> <span class="activity">session revision {{.Session.Revision}}{{with .Plan}} · plan revision {{.Revision}} from brief revision {{.SourceBriefRevision}}{{end}}</span>{{with .Session.StateReason}} <span class="reason">{{.}}</span>{{end}}</p>
+</div>
+
+<p class="notice plan-note" role="note">Publication creates the reviewed work items in the tracker and nothing more. It does not start implementation: it adds no <code>agent-ready</code> label or tag and starts no run. Mark items ready for the factory in the tracker when you decide to build them.</p>
+
+{{with .Pending -}}
+<section class="callout" aria-labelledby="pending-commands" data-pending-commands>
+<h2 id="pending-commands">Waiting for the coordinator</h2>
+<ul>
+{{range .}}<li><code>{{.Kind}}</code> request <code>{{.RequestID}}</code> is {{.State}}{{if gt .Attempts 0}} (attempt {{.Attempts}}){{end}}.</li>
+{{end -}}
+</ul>
+<p>An accepted request is not a completed one: the coordinator applies it, and publication can still stop part way. Actions that call the tracker come back when it completes.</p>
+</section>
+{{- end}}
+
+{{with .Recent -}}
+<section aria-labelledby="recent-commands">
+<h2 id="recent-commands">Recent outcomes</h2>
+<ul class="command-outcomes">
+{{range $index, $command := .}}{{if lt $index 5}}<li data-outcome="{{$command.Outcome}}"><code>{{$command.Kind}}</code> {{$command.Outcome}}{{with $command.Detail}}: {{.}}{{end}}</li>
+{{end}}{{end -}}
+</ul>
+</section>
+{{- end}}
+
+<section aria-labelledby="plan-items">
+<h2 id="plan-items">Plan items</h2>
+{{with .Plan -}}
+{{if .Stale}}<p class="notice notice-alarm" role="alert">This plan derives from brief revision {{.SourceBriefRevision}}, but the brief changed. Regenerate the draft from the current brief before you edit, preview, or approve it.</p>{{end}}
+<p class="plan-context">Repository context revision <code>{{.ContextRevision}}</code>.</p>
+{{- end}}
+{{if .Plan}}
+{{if .Valid}}<p class="plan-valid" data-plan-valid>The plan passes plan validation.</p>
+{{else}}<div class="notice notice-alarm" role="alert" data-plan-invalid>
+<p>The plan does not pass plan validation. Edit the draft or regenerate it; an invalid plan cannot be previewed or approved.</p>
+{{with .PlanProblems}}<ul>{{range .}}<li>{{.Rule}}: {{.Detail}}</li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+<ol class="plan-items">
+{{range .Items -}}
+<li class="plan-item" id="node-{{.Node.ID}}" data-node-id="{{.Node.ID}}"{{if .Problems}} data-invalid{{end}}>
+<h3><code>{{.Node.ID}}</code> <span class="kind">{{.Node.Kind}}</span> {{.Node.Title}}</h3>
+{{with .Problems}}<ul class="problems" role="alert">{{range .}}<li>{{.Rule}}: {{.Detail}}</li>{{end}}</ul>{{end}}
+<p class="plan-body">{{.Node.Body}}</p>
+<h4>Acceptance criteria</h4>
+<ul class="criteria">{{range .Node.AcceptanceCriteria}}<li>{{.}}</li>{{end}}</ul>
+<dl class="facts relations">
+{{with .Node.ParentID}}<dt>Part of</dt><dd><a href="#node-{{.}}">{{.}}</a></dd>{{end}}
+{{with .Node.DependsOn}}<dt>depends on</dt><dd>{{range $index, $id := .}}{{if $index}}, {{end}}<a href="#node-{{$id}}">{{$id}}</a>{{end}}</dd>{{end}}
+{{with .Children}}<dt>Children</dt><dd>{{range $index, $id := .}}{{if $index}}, {{end}}<a href="#node-{{$id}}">{{$id}}</a>{{end}}</dd>{{end}}
+{{with .Dependents}}<dt>Needed by</dt><dd>{{range $index, $id := .}}{{if $index}}, {{end}}<a href="#node-{{$id}}">{{$id}}</a>{{end}}</dd>{{end}}
+{{with .Node.BriefRefs}}<dt>Brief</dt><dd>{{join . ", "}}</dd>{{end}}
+</dl>
+</li>
+{{end -}}
+</ol>
+{{else}}
+<p class="empty">This session has no plan draft yet. Hand the brief to planning from the session page.</p>
+{{end}}
+</section>
+
+{{if .Actions.Edit -}}
+<section aria-labelledby="edit-plan" class="plan-editor-section">
+<h2 id="edit-plan">Edit the draft</h2>
+<p>Change titles, bodies, and acceptance criteria, or remove and split items. When a change breaks a parent or dependency reference, repair it before you save. The coordinator validates the complete plan again and saves it as the next plan revision; the saved revision needs a new preview.</p>
+<script type="application/json" id="plan-draft-data">{{.Draft}}</script>
+<div id="plan-editor" data-plan-editor></div>
+<noscript><p>The editor needs JavaScript from this UI server.</p></noscript>
+</section>
+{{- end}}
+
+{{if .Actions.Regenerate -}}
+<form class="command-form" data-session-command="regenerate_draft" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<input type="hidden" name="plan_revision" data-type="number" value="{{.Plan.Revision}}">
+<button type="submit">Regenerate the draft</button>
+<span>The planning role writes a new plan revision from the current brief. It replaces this draft and any preview.</span>
+<output data-command-status></output>
+</form>
+{{- end}}
+
+<section aria-labelledby="preview">
+<h2 id="preview">Publication preview</h2>
+{{with .PreviewRefusal -}}
+<div class="notice notice-alarm" role="alert" data-preview-refused>
+<p>The tracker preview of this plan revision was {{.Outcome}}: {{.Detail}}</p>
+<p>The coordinator checks provider capabilities and configuration before approval. Change the tracker mapping or the plan as the message says, then preview again. The factory never substitutes another type, field, or relationship.</p>
+</div>
+{{- end}}
+{{if .Approved -}}
+<p>The current approval binds the publication below.{{if .Actions.Edit}} Edit the draft to review a new revision.{{end}}</p>
+{{else if .Preview -}}
+{{template "publication" .Preview}}
+{{else -}}
+<p class="empty">No preview of plan revision {{with .Plan}}{{.Revision}}{{end}} yet. A preview asks the tracker adapter to resolve types, fields, and relationships without writing anything.</p>
+{{end -}}
+{{if .Actions.Preview -}}
+<form class="command-form" data-session-command="preview_plan" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<input type="hidden" name="plan_revision" data-type="number" value="{{.Plan.Revision}}">
+<button type="submit">{{if .Preview}}Preview again{{else}}Preview publication{{end}}</button>
+<output data-command-status></output>
+</form>
+{{- end}}
+{{if .Actions.Approve}}{{with .Preview -}}
+<form class="command-form approve-form" data-session-command="approve" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}" data-single-submit>
+<input type="hidden" name="plan_revision" data-type="number" value="{{.PlanRevision}}">
+<input type="hidden" name="payload_sha256" value="{{.PayloadSHA256}}">
+<input type="hidden" name="relationship_mapping_sha256" value="{{.RelationshipMappingSHA256}}">
+<p>Approval binds exactly this preview: plan revision {{.PlanRevision}} at session revision {{$.Session.Revision}}, items <code>{{.PayloadSHA256}}</code>, relationships <code>{{.RelationshipMappingSHA256}}</code>. The coordinator records the approval and then publishes. If anything changed since this preview, it refuses the approval.</p>
+<button type="submit">Approve and publish</button>
+<output data-command-status></output>
+</form>
+{{- end}}{{end}}
+</section>
+
+{{with .Approved -}}
+<section aria-labelledby="approved">
+<h2 id="approved">Approved publication</h2>
+<p>Approval <code>{{.RequestID}}</code> binds this content. It does not change during publication; a retry publishes the same content.</p>
+{{template "publication" .}}
+</section>
+{{- end}}
+
+{{if or .Progress .Actions.Publish .Actions.Cancel -}}
+<section aria-labelledby="publication">
+<h2 id="publication">Publication</h2>
+{{if .Actions.Publishing}}<p class="notice" role="status">The coordinator is publishing. Created links appear here as each item is recorded.</p>
+{{else if eq .Session.State "publishing"}}<p class="notice notice-alarm" role="alert">Publication stopped without a recorded result, for example because the coordinator stopped. Retry it to continue the same approved content, or cancel the session.</p>{{end}}
+{{if eq .Session.State "published"}}<p class="notice" role="status">Publication is complete. No implementation started.</p>{{end}}
+{{with .Progress -}}
+<p class="publication-counts" data-publication-counts>{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome{{if .NotRun}} · {{.NotRun}} not run{{end}}</p>
+<div class="scroll">
+<table class="ledger">
+<thead><tr><th scope="col">Operation</th><th scope="col">State</th><th scope="col">Tracker item</th><th scope="col">Detail</th></tr></thead>
+<tbody>
+{{range .Operations -}}
+<tr data-operation="{{.ID}}" data-state="{{.State}}">
+<td>{{if eq .Kind "create_item"}}Create <code>{{.NodeID}}</code> {{.Title}}{{if .Intermediate}} <span class="badge">intermediate</span>{{end}}{{else}}Link <code>{{.FromNodeID}}</code> {{.RelationshipKind}} <code>{{.ToNodeID}}</code>{{end}}</td>
+<td>{{.Label}}{{if gt .Attempts 0}} ({{.Attempts}} attempts){{end}}</td>
+<td>{{if .URL}}<a href="{{.URL}}" rel="noreferrer noopener">{{.ExternalID}}</a>{{else}}{{.ExternalID}}{{end}}</td>
+<td>{{.Detail}}</td>
+</tr>
+{{end -}}
+</tbody>
+</table>
+</div>
+{{with .Receipts -}}
+<h3>Attempts</h3>
+<ul class="receipts">
+{{range .}}<li data-receipt="{{.ID}}"><code>{{.ID}}</code> {{.Outcome}}{{with .Detail}}: {{.}}{{end}}</li>
+{{end -}}
+</ul>
+{{- end}}
+{{- end}}
+{{if .Actions.Reconcile}}{{with .Progress}}{{range .Operations}}{{if .Reconcilable -}}
+<div class="reconcile" data-reconcile="{{.ID}}">
+<p><code>{{.ID}}</code> has an unknown outcome. Look for an item with correlation <code>{{.Correlation}}</code> in the tracker, then adopt it or confirm that none exists. Reconciliation never creates or deletes an item.{{if eq $.Session.State "cancelled"}} The session stays cancelled: reconciliation only records the result, and no publication resumes.{{end}}</p>
+<form class="command-form" data-session-command="reconcile" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
+<input type="hidden" name="operation_id" value="{{.ID}}">
+<label>Tracker item ID <input name="external_id" required></label>
+<button type="submit">Adopt this item</button>
+<output data-command-status></output>
+</form>
+<form class="command-form" data-session-command="reconcile" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
+<input type="hidden" name="operation_id" value="{{.ID}}">
+<input type="hidden" name="external_id" value="">
+<button type="submit">Confirm that no item exists</button>
+<output data-command-status></output>
+</form>
+</div>
+{{- end}}{{end}}{{end}}{{end}}
+{{if .Actions.Publish -}}
+<form class="command-form" data-session-command="publish" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}" data-single-submit>
+<button type="submit">{{if .Actions.Retry}}Retry publication{{else}}Publish the approved plan{{end}}</button>
+<span>{{if .Actions.Retry}}A retry resumes the same approved content: it looks up each unfinished item by correlation before it creates it.{{else}}Publication creates exactly the approved content.{{end}}</span>
+<output data-command-status></output>
+</form>
+{{- end}}
+{{if .Actions.Cancel -}}
+<form class="command-form" data-session-command="cancel" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}" data-single-submit>
+<input type="hidden" name="reason" value="cancelled from the plan review page">
+<button type="submit">Cancel the session</button>
+<span>Cancellation stops future publication work. Items that were already created stay in the tracker and stay recorded here; nothing is deleted.</span>
+<output data-command-status></output>
+</form>
+{{- end}}
+</section>
+{{- end}}
+<script src="/assets/plan.js" defer></script>
+{{- end}}
+
+{{define "publication" -}}
+<dl class="facts publication-target">
+<dt>Target</dt><dd><code>{{.Target}}</code></dd>
+<dt>Plan revision</dt><dd>{{.PlanRevision}}</dd>
+<dt>Items digest</dt><dd><code>{{.PayloadSHA256}}</code></dd>
+<dt>Relationships digest</dt><dd><code>{{.RelationshipMappingSHA256}}</code></dd>
+</dl>
+<ol class="rendered-items">
+{{range .Items -}}
+<li class="rendered-item" data-rendered-node="{{.NodeID}}"{{if .Intermediate}} data-intermediate{{end}}>
+<h3><span class="kind">{{.Type}}</span> {{.Title}}</h3>
+{{if .Intermediate}}<p class="notice">Intermediate item: the tracker hierarchy requires this item between plan items. It is not a plan node; publication creates it like one.</p>{{end}}
+<dl class="facts">
+<dt>Plan node</dt><dd><code>{{.NodeID}}</code></dd>
+<dt>Work-item type</dt><dd>{{.Type}}</dd>
+<dt>Correlation</dt><dd><code>{{.Correlation}}</code></dd>
+{{with .Labels}}<dt>Labels</dt><dd>{{range $index, $label := .}}{{if $index}}, {{end}}<code>{{$label}}</code>{{end}}</dd>{{end}}
+{{range .FieldList}}<dt>Field <code>{{.Name}}</code></dt><dd>{{.Value}}</dd>{{end}}
+</dl>
+<pre class="rendered-body">{{.Body}}</pre>
+</li>
+{{end -}}
+</ol>
+<h3>Relationships</h3>
+{{if .Relationships -}}
+<div class="scroll">
+<table class="relationships">
+<thead><tr><th scope="col">From</th><th scope="col">Relationship</th><th scope="col">To</th><th scope="col">Representation</th></tr></thead>
+<tbody>
+{{range .Relationships}}<tr data-relationship="{{.Kind}}:{{.FromNodeID}}:{{.ToNodeID}}"><td><code>{{.FromNodeID}}</code></td><td>{{if eq .Kind "parent"}}is a child of{{else}}depends on{{end}}</td><td><code>{{.ToNodeID}}</code></td><td>{{.Mode}}</td></tr>
+{{end -}}
+</tbody>
+</table>
+</div>
+{{- else -}}
+<p>No relationships.</p>
+{{- end}}
+{{if .TextualRelationships}}<p class="notice" data-textual-fallback>The tracker has no native link for each relationship marked textual. Publication writes those relationships as text on the items, exactly as the rendered bodies above show, and does not choose another representation later.</p>{{end}}
+{{- end}}

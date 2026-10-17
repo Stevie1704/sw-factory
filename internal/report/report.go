@@ -22,7 +22,9 @@ import (
 const SchemaVersion = 1
 
 // MaxReportBytes is the maximum serialized report size accepted by the
-// coordinator and report writer.
+// coordinator and report writer. The limits of single fields do not add up
+// to a report inside it; the writer checks the encoded size and names what
+// to shorten.
 const MaxReportBytes = 256 << 10
 
 const (
@@ -320,8 +322,15 @@ type Report struct {
 	SchemaVersion int `json:"schema_version"`
 	// InvocationID binds the report to one immutable invocation.
 	InvocationID string `json:"invocation_id"`
-	// RunID binds the report to its factory run.
+	// RunID binds the report to its factory run. A session-role report
+	// leaves it empty and names its session instead.
 	RunID string `json:"run_id"`
+	// SessionID binds a session-role report to its ideation session. A run
+	// report leaves it empty.
+	SessionID string `json:"session_id,omitempty"`
+	// SessionRevision is the session revision the invocation was pinned to.
+	// The coordinator rejects a report for any other revision.
+	SessionRevision int64 `json:"session_revision,omitempty"`
 	// Harness identifies the configured harness, for example codex.
 	Harness string `json:"harness"`
 	// Role identifies the workflow role that owns the invocation.
@@ -345,6 +354,10 @@ type Report struct {
 	// reviewing an active implementation objection. A rejected response need
 	// not contain a revised test handoff.
 	TestObjectionResponse *TestObjectionResponse `json:"test_objection_response,omitempty"`
+	// Ideation is required for a completed ideation-role report.
+	Ideation *IdeationHandoff `json:"ideation,omitempty"`
+	// PlanDraft is required for a completed planning-role report.
+	PlanDraft *PlanDraft `json:"plan_draft,omitempty"`
 	// Questions are required only for a clarification outcome.
 	Questions []Question `json:"questions,omitempty"`
 	// Evidence is required only for a cannot-proceed outcome.
@@ -373,8 +386,14 @@ type Report struct {
 type ValidationContext struct {
 	// InvocationID is the expected immutable invocation identifier.
 	InvocationID string
-	// RunID is the expected factory run identifier.
+	// RunID is the expected factory run identifier. It is empty for a
+	// session-role invocation.
 	RunID string
+	// SessionID is the expected ideation session of a session-role
+	// invocation. It is empty for a run invocation.
+	SessionID string
+	// SessionRevision is the session revision the invocation was pinned to.
+	SessionRevision int64
 	// Harness is the expected configured harness.
 	Harness string
 	// Role is the expected workflow role.
@@ -479,7 +498,8 @@ func writeAtomicReport(resultDirectory string, value Report) (string, error) {
 	}
 	data = append(data, '\n')
 	if len(data) > MaxReportBytes {
-		return "", fmt.Errorf("agent report exceeds the %d-byte limit", MaxReportBytes)
+		return "", fmt.Errorf("agent report is %d bytes encoded and exceeds the %d-byte limit: the field limits do not add up to a report that fits, "+
+			"so shorten the longest text, such as plan item bodies, acceptance criteria, brief items, or the message, and report again", len(data), MaxReportBytes)
 	}
 	temporary, err := os.CreateTemp(resultDirectory, ".report-*.tmp")
 	if err != nil {
@@ -601,6 +621,9 @@ func validate(value Report, context ValidationContext, allowEmptyProductionFiles
 	context.allowEmptyProductionFiles = allowEmptyProductionFiles
 	if value.SchemaVersion != SchemaVersion {
 		return fmt.Errorf("unsupported report schema_version %d", value.SchemaVersion)
+	}
+	if context.SessionID != "" || isSessionReport(value) {
+		return validateSessionReport(value, context)
 	}
 	identityFields := []struct {
 		field    string
@@ -1409,6 +1432,8 @@ func identityFrom(value Report, invocationID string) ValidationContext {
 	return ValidationContext{
 		InvocationID:        invocationID,
 		RunID:               value.RunID,
+		SessionID:           value.SessionID,
+		SessionRevision:     value.SessionRevision,
 		Harness:             value.Harness,
 		Role:                value.Role,
 		Stage:               value.Stage,

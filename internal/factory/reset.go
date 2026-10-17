@@ -121,6 +121,9 @@ type ResetPlan struct {
 	CoordinatorLock string
 	// Runs contains every run's exact local targets.
 	Runs []ResetRun
+	// Sessions contains the session-role resources of every ideation session
+	// with a role invocation.
+	Sessions []ResetSession
 	// CredentialStores contains every distinct factory-managed credential
 	// volume identity to remove.
 	CredentialStores []ResetCredentialStore
@@ -470,6 +473,23 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 			plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{RunID: candidate.Run.ID, CredentialStoreID: storeID})
 		}
 	}
+	if sessions, ok := resetStore.(SessionResourceStore); ok && resetStore != nil {
+		planned, sessionBlockers, err := listResetSessions(ctx, sessions, registration)
+		if err != nil {
+			return ResetPlan{}, nil, err
+		}
+		blockers = append(blockers, sessionBlockers...)
+		plan.Sessions = planned
+		for _, session := range planned {
+			for _, storeID := range session.credentialStoreIDs {
+				if _, exists := seenCredentialStores[storeID]; exists {
+					continue
+				}
+				seenCredentialStores[storeID] = struct{}{}
+				plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{RunID: session.WorkerRunID, CredentialStoreID: storeID})
+			}
+		}
+	}
 	return plan, blockers, nil
 }
 
@@ -592,6 +612,12 @@ func (s *Service) checkResetAdapters(ctx context.Context, registration config.Re
 	if len(plan.CredentialStores) > 0 {
 		needsWorker = true
 	}
+	for _, session := range plan.Sessions {
+		needsWorker = needsWorker || len(session.WorkerIDs) > 0
+		if len(session.Snapshots) > 0 && s.contextSnapshots() == nil {
+			blockers = append(blockers, ResetBlocker{Reason: "the Git snapshot adapter is unavailable for session " + session.SessionID, Action: "restore the Git adapter, then repeat factory reset"})
+		}
+	}
 	if needsGit {
 		workspace := s.gitWorkspace()
 		if workspace == nil {
@@ -639,6 +665,7 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 		}
 		result.Removed = append(result.Removed, "worker resources for run "+run.RunID)
 	}
+	s.removeResetSessions(ctx, registration, plan, result)
 	remover, _ := s.deps.Worker.(worker.CredentialStoreRemover)
 	for _, credentialStore := range plan.CredentialStores {
 		target := "credential storage " + credentialStore.CredentialStoreID
@@ -667,6 +694,42 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 		result.Removed = append(result.Removed, target)
 	}
 
+}
+
+// removeResetSessions removes the worker resources, snapshot worktrees, Git
+// metadata projections, and packet directories of every planned session.
+// Each target is attempted on its own, so one failure hides no other.
+func (s *Service) removeResetSessions(ctx context.Context, registration config.RepositoryRegistration, plan ResetPlan, result *ResetResult) {
+	runtime, _ := s.deps.Worker.(worker.CleanupRuntime)
+	snapshots := s.contextSnapshots()
+	attempt := func(target string, remove func() error) {
+		if err := remove(); err != nil {
+			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
+			return
+		}
+		result.Removed = append(result.Removed, target)
+	}
+	for _, session := range plan.Sessions {
+		if len(session.WorkerIDs) > 0 {
+			attempt("worker resources for session "+session.SessionID, func() error {
+				if runtime == nil {
+					return errors.New("the worker runtime cannot remove worker resources")
+				}
+				return runtime.Cleanup(ctx, worker.CleanupRequest{RunID: session.WorkerRunID, WorkerIDs: session.WorkerIDs, Roles: session.Roles})
+			})
+		}
+		for _, snapshot := range session.Snapshots {
+			attempt("session snapshot "+snapshot, func() error {
+				if snapshots == nil {
+					return errors.New("the Git snapshot adapter is unavailable")
+				}
+				return snapshots.RemoveContextSnapshot(ctx, registration.Path, gitadapter.ContextSnapshot{Worktree: snapshot})
+			})
+		}
+		for _, directory := range append(append([]string(nil), session.GitProjections...), session.PacketRoots...) {
+			attempt("session files "+directory, func() error { return os.RemoveAll(directory) })
+		}
+	}
 }
 
 // removeResetStore removes the operational database, its SQLite sidecars, and

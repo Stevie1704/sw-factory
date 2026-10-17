@@ -294,3 +294,125 @@ scenarios:
       - Discard the fix branch.
     deterministic_tests:
       - ".:TestContributorGuidanceLinksResolve"
+
+  - id: ideation-publish-github
+    title: Turn an idea into reviewed, linked GitHub issues
+    fixture: A registered repository with GitHub as tracker, the ideation and planning roles declared in factory.yaml, a worker image of this release, and a disposable GitHub repository as publication target.
+    objective: Lead an idea through question rounds, an edited brief, a plan the user changed, a preview, and one approval to linked issues.
+    authority:
+      - The human user answers, edits, and approves in the browser; an operator agent does not approve or publish for the user.
+      - Paid role turns and the issues in the disposable repository need the operator's explicit scope.
+    interfaces:
+      - factory start
+      - factory ui and the /sessions, /sessions/{id}, and /sessions/{id}/plan pages
+      - GET /api/sessions/{id}
+      - factory guide ideation
+    injected_conditions: []
+    success:
+      - The published issues match the approved preview, including the user's edits, with sub-issue and blocking links or the previewed textual fallback.
+      - A one-item plan publishes as one unlinked issue, and an unresolved question deferred by name becomes an investigation issue.
+      - No published issue carries agent-ready or a factory state label, no conversation text reaches GitHub, and no run starts.
+    failure:
+      - An issue is created that the approved preview did not contain, or an issue is created twice.
+      - Publication adds agent-ready or starts a run.
+    cleanup:
+      - Close and delete the issues that the session created in the disposable repository; keep the session as evidence or reset the disposable installation.
+    deterministic_tests:
+      - "internal/factory:TestIdeationJourneyPublishesTheReviewedPlanToEachTracker"
+      - "internal/factory:TestIdeationJourneyPublishesASingleItem"
+      - "internal/factory:TestIdeationJourneyPublishesUnresolvedRequirementsAsInvestigationWork"
+      - "internal/github:TestPublishCreatesTheParentChildrenGraphWithNativeLinks"
+      - "internal/github:TestPublishCreatesTheApprovedTextualFallbackLinks"
+      - "internal/webui:TestPreviewShowsTheRenderedPublicationAndBindsApproval"
+
+  - id: ideation-publish-azure-devops
+    title: Turn an idea into reviewed, linked Azure Boards work items
+    fixture: As ideation-publish-github, with an Azure DevOps registration, an optional azure_devops.planning mapping, and a disposable Azure DevOps project.
+    objective: Reach the same reviewed plan and publish it as a work-item hierarchy with predecessor links.
+    authority:
+      - As ideation-publish-github, for the disposable Azure DevOps project.
+    interfaces:
+      - As ideation-publish-github.
+    injected_conditions: []
+    success:
+      - The work items have the mapped types, parent links, and predecessor links of the approved preview, including any intermediate item.
+      - Each work item carries only its factory-plan correlation tag and no agent-ready or factory state tag; no run starts.
+    failure:
+      - A work item is created with a type, field, or link that the approved preview did not contain, or a work item is created twice.
+    cleanup:
+      - Remove the work items and the factory-plan tags that the session created in the disposable project.
+    deterministic_tests:
+      - "internal/factory:TestIdeationJourneyPublishesTheReviewedPlanToEachTracker"
+      - "internal/factory:TestIdeationJourneyPublishesASingleItem"
+      - "internal/factory:TestIdeationJourneyPublishesUnresolvedRequirementsAsInvestigationWork"
+      - "internal/azuredevops:TestPublishCreatesTheHierarchyAndDependenciesInValidOrder"
+
+  - id: ideation-without-backlog
+    title: End an ideation session without backlog work
+    fixture: A session with one question round.
+    objective: Defer the session, resume it, record that investigation is needed, or decide not to build.
+    authority:
+      - The human user decides; the operator agent does not record no-build for the user.
+    interfaces:
+      - factory ui session pages
+      - factory guide ideation
+    injected_conditions: []
+    success:
+      - No path drafts a plan, writes to the tracker, or starts a run.
+      - A handoff that does not name every unresolved question is refused with the question IDs.
+    failure:
+      - A deferred or no-build session creates a tracker item.
+    cleanup:
+      - None; the session stays as local evidence until factory reset.
+    deterministic_tests:
+      - "internal/factory:TestIdeationJourneyEndsWithoutBacklogWork"
+      - "internal/factory:TestIdeationScenarioUnresolvedRequirementAndNoBuild"
+      - "internal/webui:TestSessionPageShowsTheNoBuildOutcome"
+
+  - id: ideation-recovery
+    title: Recover an ideation session from interruption and stale input
+    fixture: A session in each phase, with a coordinator restart, a browser reconnect, a double submission, a tracker mapping change, a malformed model plan, a cancellation, and a coordinator stop after a remote create injected one at a time.
+    objective: Continue each session through supported interfaces without lost work, repeated paid work, or duplicate tracker effects.
+    authority:
+      - The human user repeats a refused decision; reconciliation of an item with an unknown outcome is the human's disposition.
+    interfaces:
+      - factory start and factory stop
+      - factory ui session and plan pages
+      - GET /api/commands/{id} and GET /api/sessions/{id}
+      - factory guide ideation
+    injected_conditions:
+      - The coordinator restarts between a role launch and its report.
+      - The browser sends the same command twice.
+      - The tracker mapping or capability changes after approval.
+      - The planning role returns a dependency cycle.
+      - The user cancels while a role works.
+      - The coordinator stops after the tracker created an item and before the ledger recorded it.
+    success:
+      - Accepted turns and reviewed plan revisions survive restarts and reconnects.
+      - A repeated request returns the stored outcome without a second role launch or tracker write.
+      - A stale approval or changed mapping is refused before any tracker write, and the user's re-preview publishes under the new mapping.
+      - A malformed plan never becomes reviewable; the reason names the problem.
+      - Cancellation stops the role and leaves no tracker effect.
+      - A retry after a coordinator stop adopts the created item by its correlation key; no item exists twice.
+    failure:
+      - The agent edits the operational store or resubmits a decision under a new request ID to bypass a refusal.
+      - The agent reconciles an unknown outcome without checking the tracker.
+    cleanup:
+      - As ideation-publish-github or ideation-publish-azure-devops for any created item.
+    deterministic_tests:
+      - "internal/factory:TestIdeationJourneySurvivesRestartsAndDuplicateSubmissions"
+      - "internal/factory:TestIdeationJourneyRefusesStaleApprovalAndChangedMapping"
+      - "internal/factory:TestIdeationJourneyRefusesAMalformedPlanGraph"
+      - "internal/factory:TestIdeationJourneyCancellationLeavesNoTrackerEffect"
+      - "internal/factory:TestIdeationJourneyRecoversRemoteSuccessAfterACoordinatorStop"
+      - "internal/factory:TestSessionRolesRecoverAcrossCoordinatorRestart"
+      - "internal/factory:TestServiceRefusesAnInvalidPlanGraphWithActionableReason"
+      - "internal/publication:TestRecoveryAfterRemoteSuccessBeforeLocalReceipt"
+      - "internal/publication:TestCancellationStopsFutureWorkWithoutDeletingItems"
+      - "internal/github:TestPublishRetriesAfterAnUncertainCreateWithoutADuplicate"
+      - "internal/azuredevops:TestPublishResumesAnInterruptedPublicationWithoutDuplicates"
+      - "internal/webui:TestDoubleClickedApprovalPublishesOnce"
+      - "internal/webui:TestSessionPageAfterReloadShowsAcceptedAnswersWithoutResubmission"
+    gaps:
+      - issue: 265
+        summary: factory reset and factory cleanup do not remove session-role Docker volumes or the snapshot worktree of a role active at coordinator stop (ADR 0023).

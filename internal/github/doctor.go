@@ -149,7 +149,7 @@ func (c *GhClient) CheckAuthentication(ctx context.Context) error {
 // the write permissions required for labels, comments, commits, and pull
 // requests. The API response is discarded after this bounded validation.
 func (c *GhClient) CheckRepositoryAccess(ctx context.Context, repository tracker.Repository) error {
-	if err := validateDoctorRepository(repository); err != nil {
+	if err := validateRepository(repository); err != nil {
 		return err
 	}
 	var response doctorRepositoryResponse
@@ -236,7 +236,7 @@ func repositoryAccessDiagnosis(err error) (doctor.Condition, string, string) {
 // CheckFactoryLabels verifies all factory-owned labels exist without creating
 // or changing any label.
 func (c *GhClient) CheckFactoryLabels(ctx context.Context, repository tracker.Repository) error {
-	if err := validateDoctorRepository(repository); err != nil {
+	if err := validateRepository(repository); err != nil {
 		return err
 	}
 	output, err := c.callBytes(ctx, []string{"api", fmt.Sprintf("repos/%s/labels", repository.String()), "--paginate", "--slurp"}, nil)
@@ -275,9 +275,9 @@ func factoryLabelsDiagnosis(err error) (doctor.Condition, string, string) {
 	return unverified("github.labels.unverified"), "the registered factory labels could not be validated", "verify the registered repository and GitHub label access, then retry"
 }
 
-// validateDoctorRepository rejects values that could alter a read-only API
-// endpoint assembled by the GitHub adapter.
-func validateDoctorRepository(repository tracker.Repository) error {
+// validateRepository rejects values that could alter an API endpoint that the
+// GitHub adapter assembles for a read or a write.
+func validateRepository(repository tracker.Repository) error {
 	if strings.TrimSpace(repository.Owner) == "" || strings.TrimSpace(repository.Name) == "" {
 		return errors.New("GitHub repository owner and name are required")
 	}

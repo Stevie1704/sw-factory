@@ -27,3 +27,24 @@ func TestRequiredSkillsAddThePRSkillOnlyForAConfiguredWriter(t *testing.T) {
 		t.Fatalf("RequiredSkills(nil) = %v, want every role skill", got)
 	}
 }
+
+// TestRequiredSkillsAddTheGrillingSkillOnlyForAConfiguredIdeationRole
+// verifies that existing repositories without the optional ideation role
+// keep their required skill set, and that the harness that runs ideation
+// must prove the `grilling` skill.
+func TestRequiredSkillsAddTheGrillingSkillOnlyForAConfiguredIdeationRole(t *testing.T) {
+	existing := &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{"implementation": config.HarnessCodex}}
+	if got := harness.RequiredSkills(existing, harness.NameCodex); slices.Contains(got, harness.GrillingSkill) {
+		t.Fatalf("RequiredSkills(without ideation) = %v, want no %q", got, harness.GrillingSkill)
+	}
+	ideation := &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{"ideation": config.HarnessClaude}}
+	if got := harness.RequiredSkills(ideation, harness.NameClaude); !slices.Contains(got, harness.GrillingSkill) {
+		t.Fatalf("RequiredSkills(with ideation, claude) = %v, want %q", got, harness.GrillingSkill)
+	}
+	if got := harness.RequiredSkills(ideation, harness.NameCodex); slices.Contains(got, harness.GrillingSkill) {
+		t.Fatalf("RequiredSkills(with ideation on claude, codex) = %v, want no %q", got, harness.GrillingSkill)
+	}
+	if got := harness.RequiredSkills(nil, harness.NameCodex); !slices.Contains(got, harness.GrillingSkill) {
+		t.Fatalf("RequiredSkills(nil) = %v, want every role skill", got)
+	}
+}

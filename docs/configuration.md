@@ -347,6 +347,60 @@ registration into the host file by hand, then run `factory doctor`.
 | `azure devops repository` | the organization, project, or repository cannot be read |
 | `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
 
+#### Plan publication mapping
+
+An approved ideation plan publishes to Azure Boards work items (ADR 0025).
+`azure_devops.planning.levels` maps the neutral plan kinds (`parent`, `task`,
+`investigation`) to the work-item types of the project's process. List the
+backlog levels from the top level down. Each level has a `type`, the plan
+`kinds` it receives, an optional `required` flag, and optional `fields`
+values by reference name. Without `planning`, the Agile mapping applies:
+`parent` is an Epic, the Feature level is optional, and `task` and
+`investigation` are User Stories. A Scrum project configures its backlog item
+type:
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      planning:
+        levels:
+          - type: Epic
+            kinds: [parent]
+          - type: Feature
+            required: true
+          - type: Product Backlog Item
+            kinds: [task, investigation]
+            fields:
+              Microsoft.VSTS.Common.Priority: "2"
+```
+
+- **Required levels.** When a parent link skips a `required` level, the
+  preview adds one intermediate item of that type per parent, so the approval
+  binds it. Its identity is `<parent>--<type slug>`, where the slug keeps the
+  ASCII letters and digits of the type and joins the rest with `-` (for
+  example `n-1--feature`). Two types of one mapping with the same slug, or a
+  type without an ASCII letter or digit, fail validation. A child on the same
+  or a higher level than its parent fails the preview; the factory never
+  rewrites the hierarchy after approval.
+- **Preview checks.** Before approval, the preview checks that every mapped
+  type exists, is enabled, and is on a backlog level in the configured order;
+  that every always-required field without a default has a value in `fields`;
+  that every configured value is allowed, fits its field type, and does not
+  set a read-only field; and that a configured
+  `System.State` is a not-started (Proposed) state. `System.Title`,
+  `System.Description`, and `System.Tags` are rendered by the factory and
+  cannot be configured.
+- **Tags and authorization.** Each item gets exactly one tag,
+  `factory-plan:<session>/<plan revision>/<node>`, which correlates it for
+  retries. It is not a run-state tag. Publication never adds `agent-ready`;
+  execution still needs an authorized user to add it. Publication needs View
+  and Edit work items and Create tag definition.
+- **Evidence.** `docs/acceptance/azure-devops-plan-publication.md` describes
+  the scripted coverage and the disposable-project procedure; live evidence
+  has not been recorded yet.
+
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
 Host schema version 1 is deliberately not migrated in place. Before installing
@@ -605,6 +659,17 @@ in `internal/workflow`. Repository configuration may select harness and model
 policy for a declared role, but `factory.yaml` cannot add or redefine
 `roles`, `stages`, `prompts`, or `transitions`. Such fields are rejected as
 typed repository-policy errors.
+
+The factory also declares the session roles `ideation` and `planning`, which
+serve ideation sessions instead of runs. They are optional: a repository that
+wants sessions adds them to `role_harness_defaults` and `model_options` (and
+optionally `reasoning_effort_options`); without that policy a session role
+fails closed. `role_craft` does not apply to session roles. See
+[Session roles](agent-runtime.md#session-roles). The `ideation` prompt names
+the `grilling` worker skill; `factory doctor` requires smoke evidence for it
+only from the harness that can run a declared `ideation` role, and
+`scripts/smoke-skills.sh` smokes it by default only for that harness. To add it
+to an existing record, run the smoke with `MANDATORY_SKILLS=grilling`.
 
 The optional `role_craft` map selects one repository-relative Markdown file per
 declared role. Its content replaces only that role's embedded `craft` section;
@@ -1092,6 +1157,37 @@ attach a human classification, and the separately confirmed
 selected terminal summaries. Ordinary run-artifact cleanup does not touch this
 projection.
 
+Schema version 42 adds the ideation-session tables (ADR 0021): sessions,
+conversation turns, brief revisions, plan revisions, approvals, and
+publication receipts. A session belongs to the registered repository and needs
+no issue and no run. The migration only adds tables; stored runs stay readable.
+Session text stays in this store and never enters evaluation summaries.
+
+Schema version 43 adds the publication ledger (ADR 0022):
+`ideation_publication_operations` holds one row per item create and per
+relationship of one approval, with its recovery state and the tracker identity
+it produced. The migration only adds the table.
+
+Schema version 44 adds session-role invocations (ADR 0023):
+`ideation_invocations` holds one row per ideation or planning invocation with
+its pinned session revision, context revision, policy, prompt, and worker
+image. The migration only adds the table.
+
+Schema version 45 adds the session command inbox (ADR 0024):
+`ideation_commands` holds one row per browser request with its request ID,
+expected revision, payload, state, and outcome. The local UI appends rows; the
+coordinator applies them. The migration only adds the table.
+
+Schema version 46 adds the correction link of a conversation turn (ADR 0026):
+`ideation_turns.corrects` names the earlier user answer that a turn changes.
+Existing turns correct nothing.
+
+Schema version 47 adds the resource-release marker of a session-role
+invocation (ADR 0023): `ideation_invocations.resources_released_at` is set
+only after the coordinator removed the worker, snapshot, and Git projection
+of an ended invocation. Invocations that ended before the upgrade stay
+unreleased, so the next reconcile pass repeats their idempotent cleanup.
+
 ## Local run inspection
 
 Use the read-only CLI to inspect a named historical run while another run is
@@ -1123,8 +1219,10 @@ limits documented in [the debugging guide](../internal/guide/topics/debug.md#ins
 
 ## Local web UI
 
-`factory ui` serves a read-only view of the runs in the operational store. Open
-the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
+`factory ui` serves a read-only view of the runs in the operational store, the
+pages of ideation sessions, and their session command API (ADR 0021, ADR 0024,
+ADR 0026). [From an idea to a reviewed backlog](ideation.md) is the user
+guide of sessions. Open the printed URL in a browser on the same host. Stop the server with `Ctrl-C`
 (SIGINT) or SIGTERM.
 
 ```sh
@@ -1155,9 +1253,10 @@ Access:
 Store use:
 
 - Each page request opens the operational store read-only, reads, and closes
-  it. The UI never creates, migrates, or changes the store, and it does not
-  probe the coordinator lock. Thus the UI works while `factory start` runs and
-  also while the coordinator is stopped.
+  it. The UI never creates or migrates the store, and it does not probe the
+  coordinator lock. Its only write is to append a session command to the
+  command inbox (see below). Thus the UI works while `factory start` runs, and
+  its pages also work while the coordinator is stopped.
 - The read-only open requires the current store schema. After an upgrade, normal
   coordinator startup performs any supported migration; the UI and read-only
   inspection commands never migrate it. Until then,
@@ -1181,7 +1280,10 @@ Pages:
 |---|---|
 | `/` | All runs, newest update first: stage, status, workflow route, and activity. |
 | `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
+| `/sessions` | Ideation sessions, newest update first, with state and reason, and a form that starts a session from an idea. Only with the session command API. |
+| `/sessions/{id}` | One session: the conversation in rounds, pending questions with one answer field each, corrections and the decisions they affect, the brief, the readiness proposal with its brief revision, role progress and failures, and the user's decisions. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
+| `/sessions/{id}/plan` | Plan review of one ideation session (only with the session command API): the current plan items with validation problems, the draft editor, the tracker publication preview, approve-and-publish, and publication progress. See "Plan review" below. |
 
 Every page shows a supervisor banner. The banner tells if the coordinator
 heartbeat is live, expired, or not recorded, and it shows when the page read
@@ -1190,6 +1292,122 @@ shows a warning that names the run; run `factory start` to continue it. While th
 the banner again after each `--refresh` interval; with `--refresh 0` the page
 changes only when you reload it. When the UI server does not answer, the page
 shows that the server is unreachable.
+
+Session commands (ADR 0021, ADR 0024):
+
+- The conversation, brief, plan drafts, and approval actions of an ideation
+  session are durable local operator surfaces. Headless harnesses remain the
+  only control plane, and the coordinator started by `factory start` is the
+  only process that applies a command or changes session state.
+- The browser sends a command as JSON to `POST /api/commands`:
+  `{"request_id", "session_id", "kind", "expected_revision", "payload"}`. The
+  request ID is chosen by the page and makes the command idempotent; the
+  expected revision is the session revision the page shows (`0` for
+  `create_session`). Kinds: `create_session`, `submit_turn`, `edit_brief`,
+  `hand_off`, `edit_draft`, `regenerate_draft`, `preview_plan`, `approve`,
+  `publish`, `reconcile`, `defer`, `resume`, `investigation_needed`,
+  `no_build`, and `cancel`.
+- The UI appends a valid command to the command inbox in the operational
+  store and answers HTTP 202 with the state `accepted`. Acceptance is not
+  completion: the coordinator reads the inbox at startup and then every
+  second, applies the command, and records one outcome (`applied`,
+  `conflict`, `refused`, `unsupported`, or `failed`). Read it with
+  `GET /api/commands/{request_id}`. A command accepted before a coordinator
+  stop completes after the next `factory start`.
+- A repeated request ID returns the stored command and its outcome (HTTP 200),
+  also while the coordinator is stopped. The same ID with other content gets
+  HTTP 409 `request_reused`. A stale revision gets HTTP 409 `conflict` with
+  the expected and the current revision; reload the session and decide again.
+- When the supervisor heartbeat is missing or expired, a new command gets HTTP
+  503 with the outcome `unavailable` and nothing is stored. A clean
+  coordinator stop records a heartbeat that expires at once, so this answer
+  starts at the stop. The UI never starts a second writer. Run
+  `factory start` and submit again. Read-only pages and session reads keep
+  working.
+- `submit_turn` starts the ideation role for the accepted turn; its optional
+  `corrects` names the earlier user answer it changes. `hand_off` names the
+  brief revision the page showed and lists every unresolved question of it in
+  `deferred_questions`; otherwise it is refused (ADR 0026).
+  `investigation_needed` needs at least one unresolved question in the brief
+  and creates no backlog item. `hand_off` and `regenerate_draft` start
+  planning; a role that cannot start
+  is named in the outcome detail. A busy store at the role start keeps the
+  command pending for the next pass. A command whose role started before the
+  coordinator stopped returns its applied outcome when it resumes; it starts
+  no second role. `edit_draft` passes plan validation before
+  the coordinator saves it.
+- `approve` names the digests of a preview that `preview_plan` rendered,
+  because only the coordinator talks to the tracker. When the approval is
+  recorded but publication does not start, for example because the tracker
+  refused its preflight, the outcome is `applied` and names the cause; the
+  session stays approved, and the page offers publish instead of approve. Publication needs a
+  tracker adapter with plan publication; otherwise the command is
+  `unsupported`. Publication never adds `agent-ready` and never starts a run.
+- `GET /api/sessions` lists the sessions of the registered repository, and
+  `GET /api/sessions/{id}` returns the durable activity of one session: the
+  session and its revision, turns, the current brief, plan, and approval,
+  publication receipts and ledger operations, and the newest commands. It
+  shows only structured store state; harness output is never read as approval
+  or workflow state.
+- A mutation must come from a page of this UI: the `Origin` header must be the
+  UI origin, `Sec-Fetch-Site` must be `same-origin` when the browser sends it,
+  the body must be `application/json`, and the `X-Factory-CSRF` header must
+  carry the per-process token from the page's `factory-csrf-token` meta
+  element. Other requests get HTTP 403 or 415 and store nothing. The body is
+  limited to about 2 MiB and unknown fields are refused. Pages submit with
+  `/assets/commands.js`; the Content-Security-Policy still blocks form posts.
+- Automatic refresh pauses while a form has focus or unsent input, so a
+  refresh never wipes typed text. While a command of a session waits for the
+  coordinator, its page shows the command and offers no form, so a reload
+  cannot send the same decision twice. Ctrl+Enter sends the form of a text
+  field.
+- Session pages show conversation and plan content. Like run content, it stays
+  on the host and is served only on the loopback interface.
+
+Plan review (`/sessions/{id}/plan`):
+
+- The page shows every plan item with its kind, body, acceptance criteria,
+  parent, dependencies, and brief references, and the problems that plan
+  validation finds per item. An invalid plan offers no preview and no
+  approval. A stale plan offers only regeneration: the coordinator also
+  refuses an `edit_draft` of it, because an edit cannot make it current.
+- The editor changes titles, bodies, acceptance criteria, kinds, parents, and
+  dependencies, and removes or splits items. A removal or split marks every
+  parent or dependency reference to the item; save stays off until you repair
+  each one. Save sends the complete plan as one `edit_draft` command, and the
+  coordinator validates it again before it saves the next plan revision.
+  `regenerate_draft` asks the planning role for a new draft.
+- "Preview publication" sends `preview_plan`. The coordinator asks the tracker
+  adapter to resolve the target, the work-item types, the fields, the
+  relationships, and any intermediate hierarchy items, without a tracker
+  write. The page shows that preview in full: target, type per item, the
+  rendered body, labels and fields, the correlation key, every relationship
+  with its native or textual representation, and each intermediate item that
+  is not a plan node. A provider capability or configuration problem is shown
+  as the refused preview; nothing is substituted.
+- "Approve and publish" sends one `approve` command with the plan revision,
+  the session revision, and the two digests of the shown preview. Every
+  approval also publishes. The coordinator checks plan validation and renders the
+  preview again; if anything changed (an edit, a regeneration, another tab,
+  or a tracker mapping change), it refuses the approval before any tracker
+  write. An accepted approval is not a completed publication. While a
+  command is pending, the page offers no second approval or publication.
+- During publication the page shows the approved, immutable content and the
+  ledger: created items with their links, pending operations, failed
+  operations, and operations with an unknown outcome. An incomplete
+  publication offers "Retry publication" (`publish`), which resumes the same
+  approved content, and for each ambiguous item create, `reconcile` to adopt
+  the tracker item or confirm that none exists. A session cancelled after
+  such a create still offers `reconcile` for it; the result is recorded in
+  the ledger and in a receipt under the request ID, and the session stays
+  `cancelled` with no publish action. An `approve` or `publish`
+  command that ends without success never leaves the session `publishing`:
+  the coordinator records an incomplete receipt with the reason and moves
+  the session to `publication_incomplete`. A session that is `publishing`
+  with no pending command also offers the retry. Cancellation stops future
+  publication work; created items stay in the tracker and in the ledger.
+- Publication does not enqueue implementation: it adds no `agent-ready` label
+  or tag and starts no run.
 
 ## Run-artifact cleanup
 
@@ -1222,6 +1440,11 @@ GitWorkspace adapters. Factory-managed credential volumes and local evaluation
 summaries are retained; `factory evaluation-delete` remains the only summary
 deletion command.
 
+Cleanup never selects ideation sessions (ADR 0021). Open, deferred, cancelled,
+and no-build sessions keep their history for inspection and recovery.
+Approvals and publication receipts are publication evidence and stay while the
+session exists. Only `factory reset` removes sessions.
+
 ## Complete local reset
 
 `factory reset` is the separate, deliberately destructive operation that
@@ -1235,7 +1458,7 @@ removes the installation itself.
 | `factory evaluation-delete` | Selected terminal evaluation summaries | Yes |
 | `factory register` | Creates one registration, or updates its credential sources with `--update` | Yes |
 | `factory bootstrap-labels` | Creates the factory-owned GitHub labels | Yes |
-| `factory reset` | Every local resource of one registered installation | No |
+| `factory reset` | Every local resource of one registered installation, including ideation sessions and publication evidence | No |
 
 Reset requires an explicit `--config` path. A command that destroys a whole
 installation must never default to the operator's real configuration, so the
@@ -1286,7 +1509,10 @@ volumes; removes generated invocation and result directories; removes run
 worktrees, local run branches, and private Git projections; removes the
 operational database with its SQLite sidecars and only the migration backups
 proven to belong to that exact database; removes the coordinator lock; and
-removes the selected host configuration last. Reset holds that lock for the
+removes the selected host configuration last. The same pass removes the
+resources of every ideation session role: its worker containers and role
+volumes, the snapshot worktree and Git projection of a role that was active
+when the coordinator stopped, and the session packet directories. Reset holds that lock for the
 whole confirmed pass. Once the store is gone, a concurrent
 `factory start` cannot pass its read-only startup diagnosis, so unlinking the
 lock before the configuration preserves the configuration if unlinking fails.

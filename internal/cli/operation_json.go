@@ -575,6 +575,16 @@ type resetRunDocument struct {
 	Branch   string       `json:"branch"`
 }
 
+// resetSessionDocument is the session-role targets of one ideation session.
+type resetSessionDocument struct {
+	SessionID      string   `json:"session_id"`
+	WorkerIDs      []string `json:"worker_ids"`
+	Roles          []string `json:"roles"`
+	Snapshots      []string `json:"snapshots"`
+	GitProjections []string `json:"git_projections"`
+	PacketRoots    []string `json:"packet_directories"`
+}
+
 // resetRemainingDocument is one planned target that reset did not remove.
 type resetRemainingDocument struct {
 	Target string `json:"target"`
@@ -587,6 +597,7 @@ type resetResultDocument struct {
 	ConfigPath          string                   `json:"config_path,omitempty"`
 	OperationalDataPath string                   `json:"operational_data_path,omitempty"`
 	Runs                []resetRunDocument       `json:"runs"`
+	Sessions            []resetSessionDocument   `json:"sessions"`
 	Retained            []string                 `json:"retained"`
 	Removed             []string                 `json:"removed"`
 	Remaining           []resetRemainingDocument `json:"remaining"`
@@ -599,10 +610,16 @@ func newResetDocument(result factory.ResetResult, err error) operationDocument {
 	plan := result.Plan
 	reset := resetResultDocument{
 		RepositoryPath: plan.RepositoryPath, ConfigPath: plan.ConfigPath, OperationalDataPath: plan.OperationalDataPath,
-		Runs: []resetRunDocument{}, Retained: append([]string{}, plan.Retained...), Removed: append([]string{}, result.Removed...), Remaining: []resetRemainingDocument{},
+		Runs: []resetRunDocument{}, Sessions: []resetSessionDocument{}, Retained: append([]string{}, plan.Retained...), Removed: append([]string{}, result.Removed...), Remaining: []resetRemainingDocument{},
 	}
 	for _, run := range plan.Runs {
 		reset.Runs = append(reset.Runs, resetRunDocument{RunID: run.RunID, Status: run.Status, Worktree: run.Worktree, Branch: run.Branch})
+	}
+	for _, session := range plan.Sessions {
+		reset.Sessions = append(reset.Sessions, resetSessionDocument{
+			SessionID: session.SessionID, WorkerIDs: append([]string{}, session.WorkerIDs...), Roles: append([]string{}, session.Roles...),
+			Snapshots: append([]string{}, session.Snapshots...), GitProjections: append([]string{}, session.GitProjections...), PacketRoots: append([]string{}, session.PacketRoots...),
+		})
 	}
 	for _, remaining := range result.Remaining {
 		reset.Remaining = append(reset.Remaining, resetRemainingDocument{Target: remaining.Target, Reason: remaining.Reason})

@@ -109,6 +109,72 @@ func TestSkillSmokeAddsARetriedSkillToTheRecord(t *testing.T) {
 	}
 }
 
+// TestSkillSmokeRequiresGrillingOnlyWhereAnIdeationRoleIsDeclared verifies
+// that the default skill list follows harness.RequiredSkills: the pinned
+// worker of a repository without an ideation role is not smoked for
+// grilling, and the harness its factory.yaml selects for the ideation role
+// is.
+func TestSkillSmokeRequiresGrillingOnlyWhereAnIdeationRoleIsDeclared(t *testing.T) {
+	tests := []struct {
+		name    string
+		policy  string
+		harness string
+		want    string
+	}{
+		{name: "no ideation role", policy: "role_harness_defaults:\n  implementation: claude\nallowed_overrides: []\n", harness: "claude",
+			want: "implement pr specification-review standards-review"},
+		{name: "ideation on this harness", policy: "role_harness_defaults:\n  implementation: codex\n  ideation: claude\nallowed_overrides: []\n", harness: "claude",
+			want: "grilling implement pr specification-review standards-review"},
+		{name: "ideation on another harness", policy: "role_harness_defaults:\n  ideation: codex\nallowed_overrides: []\n", harness: "claude",
+			want: "implement pr specification-review standards-review"},
+		{name: "harness override allowed", policy: "role_harness_defaults:\n  ideation: codex\nallowed_overrides: [model, harness]\n", harness: "claude",
+			want: "grilling implement pr specification-review standards-review"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := repositoryCopyForSmoke(t, test.policy)
+			smoke := runSkillSmokeScript(t, filepath.Join(root, "scripts", "smoke-skills.sh"), t.TempDir(), answeringHarness)
+			if smoke.err != nil {
+				t.Fatalf("smoke failed: %v\n%s", smoke.err, smoke.stderr)
+			}
+			if got := recordedSkills(t, smoke.evidence); got != test.want {
+				t.Errorf("recorded skills = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// repositoryCopyForSmoke returns a repository root with the smoke script,
+// the worker skills, and a factory.yaml that holds policy.
+func repositoryCopyForSmoke(t *testing.T, policy string) string {
+	t.Helper()
+	root := t.TempDir()
+	script, err := os.ReadFile("../scripts/smoke-skills.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	skills, err := filepath.Abs("skills")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "worker"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "scripts", "smoke-skills.sh"), script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(skills, filepath.Join(root, "worker", "skills")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "factory.yaml"), []byte(policy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 // recordedSkills returns the sorted skills of the single recorded claude
 // smoke result, separated by spaces.
 func recordedSkills(t *testing.T, evidence string) string {
@@ -149,6 +215,12 @@ func runSkillSmoke(t *testing.T, dockerBody string, environment ...string) skill
 // consecutive runs share one record.
 func runSkillSmokeIn(t *testing.T, dir, dockerBody string, environment ...string) skillSmokeRun {
 	t.Helper()
+	return runSkillSmokeScript(t, "../scripts/smoke-skills.sh", dir, dockerBody, environment...)
+}
+
+// runSkillSmokeScript is runSkillSmokeIn for the smoke script at script.
+func runSkillSmokeScript(t *testing.T, script, dir, dockerBody string, environment ...string) skillSmokeRun {
+	t.Helper()
 	docker := filepath.Join(dir, "docker")
 	credential := filepath.Join(dir, "credentials.json")
 	evidence := filepath.Join(dir, "skill-smoke.json")
@@ -158,7 +230,7 @@ func runSkillSmokeIn(t *testing.T, dir, dockerBody string, environment ...string
 	if err := os.WriteFile(credential, []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("../scripts/smoke-skills.sh")
+	command := exec.Command(script)
 	command.Env = append(os.Environ(),
 		"DOCKER="+docker,
 		"HARNESSES=claude",

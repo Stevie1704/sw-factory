@@ -137,6 +137,11 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		return fmt.Errorf("reconcile persisted run at startup: %w", err)
 	}
 	s.observeCoordinatorStageFromStore(pollContext, registration, events)
+	sessionCommands, err := s.startSessionCommands(pollContext, registration)
+	if err != nil {
+		return err
+	}
+	defer sessionCommands.stop()
 
 	repository := registeredRepository(registration)
 	leaseRunID := ""
@@ -148,6 +153,8 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	consecutiveProgressionFailures := 0
 	consecutiveHarnessRetryFailures := 0
 	consecutiveProgressionTimeouts := 0
+	consecutiveSessionRoleFailures := 0
+	consecutiveSessionCommandFailures := 0
 	for {
 		if err := waitPolling(pollContext, delay); err != nil {
 			if pollingContextDone(err) {
@@ -272,6 +279,29 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		s.observeCoordinatorStageFromStore(pollContext, registration, events)
 		if commandErr == nil {
 			consecutiveCommandFailures = 0
+		}
+		if err := s.ReconcileSessionRoles(pollContext); err != nil {
+			if pollingContextDone(err) {
+				return nil
+			}
+			// A session-role failure never stops run supervision; the next
+			// pass observes the same durable invocations again.
+			consecutiveSessionRoleFailures++
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind: EventRetry, Operation: "session role reconciliation", Attempt: consecutiveSessionRoleFailures,
+				Reason: sessionSupervisionReason(err, "a session-role invocation could not be reconciled; the next pass observes it again"),
+			})
+		} else {
+			consecutiveSessionRoleFailures = 0
+		}
+		if err := sessionCommands.failure(); err != nil {
+			consecutiveSessionCommandFailures++
+			s.emitCoordinatorEvent(events, CoordinatorEvent{
+				Kind: EventRetry, Operation: "session command dispatch", Attempt: consecutiveSessionCommandFailures,
+				Reason: sessionSupervisionReason(err, "a session command pass failed; its commands stay pending for the next pass"),
+			})
+		} else {
+			consecutiveSessionCommandFailures = 0
 		}
 		result, err := s.pollOnce(pollContext, registration)
 		if err != nil {

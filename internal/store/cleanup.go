@@ -100,7 +100,7 @@ func (s *Store) BeginCleanup(ctx context.Context, runID string, before time.Time
 	transaction := &cleanupTransaction{tx: tx, runID: runID}
 	// This deliberately no-op update acquires SQLite's write reservation
 	// before external cleanup begins. No coordinator state is changed.
-	if _, err := tx.ExecContext(ctx, "UPDATE operational_runs SET id = id WHERE id = ?", runID); err != nil {
+	if err := reserveWriteLock(ctx, tx, "operational_runs", runID); err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("reserve cleanup for run %q: %w", runID, err)
 	}

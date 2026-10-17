@@ -68,6 +68,84 @@
       "verified_at": "2026-09-04T18:12:32Z"
     },
     {
+      "image_digest": "sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T06:16:41Z"
+    },
+    {
+      "image_digest": "sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-16T20:56:15Z"
+    },
+    {
+      "image_digest": "sha256:9eed486a9464c184005f13c9368a97daf159a03c59d217e1bd370d34a76e7f63",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T11:31:46Z"
+    },
+    {
+      "image_digest": "sha256:9eed486a9464c184005f13c9368a97daf159a03c59d217e1bd370d34a76e7f63",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T10:14:26Z"
+    },
+    {
+      "image_digest": "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T07:28:44Z"
+    },
+    {
+      "image_digest": "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T07:20:23Z"
+    },
+    {
       "image_digest": "sha256:ce8b5db6fc41bc09e0dea4df7f591991e21034997caf538f321444e5ad2949dd",
       "harness": "claude",
       "harness_version": "2.1.232 (Claude Code)",

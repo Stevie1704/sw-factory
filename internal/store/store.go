@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 41
+const CurrentSchemaVersion = 47
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -885,33 +885,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 // directories, changing permissions, initializing metadata, migrating schema,
 // or creating a backup. It is the only store entry point used by diagnosis.
 func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
-	if path == "" {
-		return nil, errors.New("operational store path is required")
-	}
-	absolutePath, err := filepath.Abs(path)
+	absolutePath, err := checkExistingStoreFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve operational store path: %w", err)
-	}
-	storeDirectory := filepath.Dir(absolutePath)
-	if info, err := os.Stat(storeDirectory); err != nil {
-		return nil, fmt.Errorf("inspect operational store directory: %w", err)
-	} else if !info.IsDir() {
-		return nil, errors.New("operational store parent is not a directory")
-	} else if info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("operational store directory is not private")
-	}
-	info, err := os.Lstat(absolutePath)
-	if err != nil {
-		return nil, fmt.Errorf("inspect operational store: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, errors.New("operational store is not a regular file")
-	}
-	if info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 {
-		return nil, errors.New("operational store file is not private and owner-readable")
-	}
-	if info.Size() == 0 {
-		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
+		return nil, err
 	}
 	database, err := openReadOnlyDatabase(ctx, absolutePath)
 	if err != nil {
@@ -1525,8 +1501,10 @@ func validateSupervisorHeartbeat(heartbeat SupervisorHeartbeat) error {
 	if heartbeat.StartedAt.IsZero() || heartbeat.RenewedAt.IsZero() || heartbeat.ExpiresAt.IsZero() {
 		return errors.New("supervisor heartbeat timestamps are required")
 	}
-	if !heartbeat.ExpiresAt.After(heartbeat.RenewedAt) {
-		return errors.New("supervisor heartbeat expiry must follow renewal")
+	// A clean stop records ExpiresAt equal to RenewedAt: the coordinator stays
+	// observable and is no longer live.
+	if heartbeat.ExpiresAt.Before(heartbeat.RenewedAt) {
+		return errors.New("supervisor heartbeat expiry must not precede renewal")
 	}
 	return nil
 }
@@ -2961,6 +2939,17 @@ func openReadOnlyDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	return database, nil
 }
 
+// reserveWriteLock takes SQLite's write lock inside tx before the transaction
+// reads. With journal_mode=DELETE a transaction that reads first holds a
+// shared lock and fails at once with SQLITE_BUSY when it later upgrades past
+// another connection's write, such as a UI command append; a reserved lock
+// instead makes the other connection wait for its busy timeout. The no-op
+// update names one row of table by id and changes nothing.
+func reserveWriteLock(ctx context.Context, tx *sql.Tx, table, id string) error {
+	_, err := tx.ExecContext(ctx, "UPDATE "+table+" SET id = id WHERE id = ?", id)
+	return err
+}
+
 // configure applies the SQLite settings required by the operational store.
 func configure(ctx context.Context, database *sql.DB) error {
 	for _, statement := range []string{
@@ -3538,6 +3527,32 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 41:
 			if err := addOperationalRunColumnIfMissing(ctx, tx, "pull_request_summary"); err != nil {
 				return fmt.Errorf("apply store migration 41: %w", err)
+			}
+		case 42:
+			if err := migrateIdeationSchema(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 42: %w", err)
+			}
+		case 43:
+			if _, err := tx.ExecContext(ctx, publicationLedgerSchema); err != nil {
+				return fmt.Errorf("apply store migration 43: %w", err)
+			}
+		case 44:
+			if err := migrateSessionInvocationSchema(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 44: %w", err)
+			}
+		case 45:
+			for _, statement := range ideationCommandSchema {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return fmt.Errorf("apply store migration 45: %w", err)
+				}
+			}
+		case 46:
+			if err := migrateTurnCorrectionSchema(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 46: %w", err)
+			}
+		case 47:
+			if err := migrateSessionResourceReleaseSchema(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 47: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

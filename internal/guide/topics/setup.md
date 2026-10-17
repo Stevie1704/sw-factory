@@ -152,13 +152,14 @@ named action and `factory doctor` until it prints `doctor: ready`.
 ```sh
 factory start            # poll GitHub until stopped; add --verbose for a progress log
 factory issue <number>   # claim one agent-ready issue now
-factory ui               # read-only web view on 127.0.0.1
+factory ui               # local web view and session commands on 127.0.0.1
 factory stop             # stop the polling coordinator
 ```
 
 An authorized user adds the `agent-ready` label to an issue. The coordinator
 claims it, runs the roles, gates, and reviews, and opens a draft pull request.
-Prove a new setup with one disposable issue before real work.
+Prove a new setup with one disposable issue before real work. To plan work
+from an idea before an issue exists, read `factory guide ideation`.
 
 ## Agent discovery in a target repository
 

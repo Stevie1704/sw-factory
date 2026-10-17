@@ -125,8 +125,15 @@ func (loop *supervisorHeartbeatLoop) run(ctx context.Context) {
 	}
 }
 
-// stop cancels renewal and waits for its final store operation without erasing
-// the last observable heartbeat.
+// supervisorStopWriteTimeout bounds the expired heartbeat write of a clean
+// stop, so a locked store cannot hold up the coordinator exit.
+const supervisorStopWriteTimeout = 5 * time.Second
+
+// stop cancels renewal, waits for its final store operation, and then writes
+// a heartbeat that expires at once. The heartbeat stays observable, so status
+// and the UI see the stopped coordinator, and the UI refuses commands at once
+// instead of accepting them until the last renewal runs out. A failed write
+// leaves the last renewal, which expires on its own.
 func (loop *supervisorHeartbeatLoop) stop() {
 	if loop == nil {
 		return
@@ -134,6 +141,16 @@ func (loop *supervisorHeartbeatLoop) stop() {
 	loop.once.Do(func() {
 		loop.cancel()
 		<-loop.done
+		stoppedAt := loop.now().UTC()
+		ctx, cancel := context.WithTimeout(context.Background(), supervisorStopWriteTimeout)
+		defer cancel()
+		_ = loop.write(ctx, store.SupervisorHeartbeat{
+			Coordinator: loop.coordinator,
+			PID:         os.Getpid(),
+			StartedAt:   loop.startedAt,
+			RenewedAt:   stoppedAt,
+			ExpiresAt:   stoppedAt,
+		})
 	})
 }
 

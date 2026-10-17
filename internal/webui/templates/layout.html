@@ -7,6 +7,11 @@
 <meta name="color-scheme" content="light dark">
 <title>{{template "title" .Page}} · factory</title>
 <link rel="stylesheet" href="/assets/style.css">
+{{- if .CSRFToken}}
+<meta name="factory-csrf-token" content="{{.CSRFToken}}">
+<script src="/assets/commands.js" defer></script>
+<script src="/assets/sessions.js" defer></script>
+{{- end}}
 {{- if .RefreshSeconds}}
 <script src="/assets/refresh.js" defer></script>
 {{- end}}
@@ -17,7 +22,7 @@
 <body>
 {{- end}}
 <header class="strip">
-<nav><a class="mark" href="/"><span class="mark-glyph" aria-hidden="true"></span>factory</a></nav>
+<nav><a class="mark" href="/"><span class="mark-glyph" aria-hidden="true"></span>factory</a>{{if .CSRFToken}} <a class="nav-link" href="/sessions">Sessions</a>{{end}}</nav>
 {{template "supervisor" .Page.Supervisor}}
 </header>
 {{if .RefreshSeconds -}}

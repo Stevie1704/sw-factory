@@ -327,6 +327,17 @@ func progressionReasonForEvent(result progressionResult) string {
 	return ""
 }
 
+// sessionSupervisionReason returns a safe event reason for a session-role or
+// session-command failure. Store and adapter errors can carry paths or user
+// text, so only the failure class is named: a busy or failing operational
+// store, or the given fallback.
+func sessionSupervisionReason(err error, fallback string) string {
+	if store.IsTransient(err) {
+		return "the operational store is busy or failing; the next pass retries"
+	}
+	return fallback
+}
+
 // commandFailureCode converts a swallowed command-polling error into stable
 // content-free event metadata without copying its potentially unsafe message.
 func commandFailureCode(err error) string {

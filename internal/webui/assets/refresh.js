@@ -67,10 +67,22 @@
     return true;
   }
 
+  // editing reports whether the user is typing into, or has unsent input
+  // in, a form. A swap would replace the form and wipe that input, so the
+  // refresh waits until the form is sent or left.
+  function editing() {
+    if (document.querySelector("form[data-dirty]")) {
+      return true;
+    }
+    var active = document.activeElement;
+    return Boolean(active && active.closest && active.closest("form"));
+  }
+
   // refresh reads the current page again and swaps its regions in place, so
-  // the scroll position stays. A hidden tab skips the read.
+  // the scroll position stays. A hidden tab, or a tab with a form in use,
+  // skips the read.
   function refresh() {
-    if (document.hidden) {
+    if (document.hidden || editing()) {
       return;
     }
     var number = ++started;

@@ -7,6 +7,7 @@
 package azuredevops
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/hostcmd"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -84,6 +86,9 @@ type Client struct {
 	// eligible. A tag is free text that any editor can add, so the adapter
 	// checks who added it (ADR 0019).
 	AuthorizedUsers []string
+	// Planning maps neutral plan kinds to the project's work-item types for
+	// plan publication. Nil selects config.AgileAzurePlanMapping.
+	Planning *config.AzurePlanMapping
 
 	// mu guards the caches below.
 	mu sync.Mutex
@@ -117,14 +122,41 @@ type request struct {
 	ContentType string
 }
 
+// maxRequestBodyBytes bounds the encoded request body. az rest takes the
+// body as one command-line argument, and Linux limits one argument to
+// 131,072 bytes including its terminating NUL.
+const maxRequestBodyBytes = 131071
+
+// errRequestBodyTooLarge reports a request body that cannot be passed as one
+// az argument. The request is never sent, so it proves that Azure DevOps
+// made no change.
+var errRequestBodyTooLarge = errors.New("the encoded Azure DevOps request body exceeds one command-line argument")
+
+// encodeRequestBody encodes body as compact JSON without HTML escaping, so
+// Markdown characters such as '<' and '&' do not grow sixfold, and refuses a
+// body that does not fit one az argument.
+func encodeRequestBody(body any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(body); err != nil {
+		return nil, fmt.Errorf("encode Azure DevOps request: %w", err)
+	}
+	encoded := bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))
+	if len(encoded) > maxRequestBodyBytes {
+		return nil, fmt.Errorf("%w: %d bytes, at most %d", errRequestBodyTooLarge, len(encoded), maxRequestBodyBytes)
+	}
+	return encoded, nil
+}
+
 // call sends one REST request through az rest and decodes the JSON response
 // into destination when it is not nil.
 func (c *Client) call(ctx context.Context, req request, destination any) error {
 	args := []string{"rest", "--method", strings.ToLower(req.Method), "--url", req.URL, "--resource", devOpsResource}
 	if req.Body != nil {
-		encoded, err := json.Marshal(req.Body)
+		encoded, err := encodeRequestBody(req.Body)
 		if err != nil {
-			return fmt.Errorf("encode Azure DevOps request: %w", err)
+			return err
 		}
 		contentType := req.ContentType
 		if contentType == "" {
@@ -185,6 +217,15 @@ func buildURL(escapedPath string, query url.Values, version string) string {
 func validateRepository(repository tracker.Repository) error {
 	if strings.TrimSpace(repository.Owner) == "" || strings.TrimSpace(repository.Project) == "" || strings.TrimSpace(repository.Name) == "" {
 		return errors.New("Azure DevOps organization, project, and repository are required")
+	}
+	return nil
+}
+
+// validatePlanRepository is validateRepository for the planning port: it
+// returns the typed invalid-mapping error that every plan method reports.
+func validatePlanRepository(repository tracker.Repository) error {
+	if err := validateRepository(repository); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "%v", err)
 	}
 	return nil
 }

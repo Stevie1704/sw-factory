@@ -100,6 +100,9 @@ type AzureDevOpsConfig struct {
 	Project string `yaml:"project"`
 	// Repository is the Git repository name inside the project.
 	Repository string `yaml:"repository"`
+	// Planning maps neutral plan kinds to the project's work-item types for
+	// plan publication. Nil selects AgileAzurePlanMapping.
+	Planning *AzurePlanMapping `yaml:"planning,omitempty"`
 }
 
 // IsZero reports whether no Azure DevOps field is set.
@@ -600,7 +603,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		if strings.TrimSpace(role) == "" {
 			return validation("role_harness_defaults", "role names must not be empty")
 		}
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("role_harness_defaults."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if harness != HarnessCodex && harness != HarnessClaude {
@@ -611,7 +614,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		return validation("model_options", "must declare at least one role")
 	}
 	for role, models := range config.ModelOptions {
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("model_options."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if len(models) == 0 {
@@ -634,7 +637,7 @@ func ValidateRepository(config RepositoryConfig) error {
 		}
 	}
 	for role, efforts := range config.ReasoningEffortOptions {
-		if _, exists := workflowRegistry.Role(role); !exists {
+		if !workflow.IsDeclaredRole(role) {
 			return policy("reasoning_effort_options."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if _, exists := config.RoleHarnessDefaults[role]; !exists {
@@ -867,6 +870,11 @@ func validateProvider(prefix string, repository RepositoryRegistration) error {
 		}
 		if strings.ContainsAny(field.value, "/\\?#%") || strings.IndexFunc(field.value, unicode.IsControl) >= 0 {
 			return validation(prefix+".azure_devops."+field.name, "must be a plain name without path, query, or control characters")
+		}
+	}
+	if planning := repository.AzureDevOps.Planning; planning != nil {
+		if err := planning.Validate(); err != nil {
+			return validation(prefix+".azure_devops.planning", err.Error())
 		}
 	}
 	return nil

@@ -24,8 +24,38 @@ WORKER_DIGEST="${WORKER_DIGEST:-$(sed -n 's/^  digest: \(.*\)$/\1/p' "$REPOSITOR
 CODEX_AUTH_PATH="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
 CLAUDE_AUTH_PATH="${CLAUDE_AUTH_PATH:-$HOME/.claude/.credentials.json}"
 HARNESSES="${HARNESSES:-codex claude}"
-MANDATORY_SKILLS="${MANDATORY_SKILLS:-implement specification-review standards-review pr}"
 WORKER_REFERENCE="$WORKER_IMAGE@$WORKER_DIGEST"
+
+# role_harness prints the harness that factory.yaml selects for one role, or
+# nothing when the repository declares no such role.
+role_harness() {
+  [ -f "$REPOSITORY_ROOT/factory.yaml" ] || return 0
+  sed -n '/^role_harness_defaults:/,/^[^ ]/s/^  '"$1"': *\([A-Za-z0-9_-]*\).*$/\1/p' "$REPOSITORY_ROOT/factory.yaml"
+}
+
+# harness_overridable reports whether factory.yaml lets a run override the
+# harness of a role.
+harness_overridable() {
+  [ -f "$REPOSITORY_ROOT/factory.yaml" ] || return 1
+  sed -n '/^allowed_overrides:/,/^[^ -]/p' "$REPOSITORY_ROOT/factory.yaml" | grep -qw harness
+}
+
+# mandatory_skills prints the skills to smoke for one harness. An explicit
+# MANDATORY_SKILLS wins. Otherwise grilling is added only where a declared
+# ideation role can run on that harness, as harness.RequiredSkills decides,
+# so a repository without session roles is not smoked for it.
+mandatory_skills() {
+  if [ -n "${MANDATORY_SKILLS:-}" ]; then
+    echo "$MANDATORY_SKILLS"
+    return
+  fi
+  skills="implement specification-review standards-review pr"
+  ideation_harness="$(role_harness ideation)"
+  if [ -n "$ideation_harness" ] && { [ "$ideation_harness" = "$1" ] || harness_overridable; }; then
+    skills="$skills grilling"
+  fi
+  echo "$skills"
+}
 
 # credential_path returns the host credential file one harness authenticates
 # with, and the in-worker file it is streamed to.
@@ -137,7 +167,7 @@ for harness_name in $HARNESSES; do
   echo "Smoking $harness_name $version in $WORKER_REFERENCE"
 
   verified='[]'
-  for skill in $MANDATORY_SKILLS; do
+  for skill in $(mandatory_skills "$harness_name"); do
     sentinel="$(skill_sentinel "$skill")"
     prompt="Use the \`$skill\` skill. Reply with the first instruction line of that skill, verbatim, and nothing else."
     if ! reply="$(ask_harness "$harness_name" "$prompt" 2>"$harness_diagnosis")"; then

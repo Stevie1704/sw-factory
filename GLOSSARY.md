@@ -8,6 +8,143 @@ The software factory turns an explicitly authorized GitHub issue into a supervis
 One supervised execution that owns a frozen issue, specification packet, branch, worktree, and pull request.
 _Avoid_: Job, task, workflow instance
 
+**Ideation session**:
+The repository-scoped record of work that exists before an issue or a Run:
+its conversation turns, brief revisions, plan revisions, approvals, and
+publication receipts. It has its own lifecycle (awaiting user, role active,
+draft review, approved, publishing, publication incomplete, published,
+deferred, investigation needed, no build, cancelled) and its own revision for stale-writer checks.
+It owns no branch, worktree, or issue.
+_Avoid_: Run, draft run, chat
+
+**Brief**:
+The structured statement a session builds: problem, audience, success
+criteria, scope and non-goals, decisions with rationale, assumptions, evidence,
+and unresolved questions. Each change is a new brief revision; plan nodes
+reference its items by ID.
+_Avoid_: Spec (for an unpublished brief), summary
+
+**Readiness proposal**:
+The ideation role's suggestion of the next session step (ready for planning,
+investigation needed, or no build) with its rationale, bound to the brief
+revision it was made for. It changes nothing; the user decides with a command
+on the brief revision the page shows.
+_Avoid_: Approval, handoff
+
+**Deferred question**:
+An unresolved question of the brief that the user explicitly hands to
+planning without an answer. Planning may plan an investigation for it but must
+not answer it. A handoff must defer every unresolved question of its brief
+revision.
+_Avoid_: Assumption, open point
+
+**Investigation needed**:
+The session outcome that material unknowns must be investigated before
+planning. The unresolved questions of the brief are the investigation items.
+It creates no backlog item, and the session can resume.
+_Avoid_: Spike issue, deferred
+
+**Correction**:
+A user turn that names the earlier user answer it changes. The ideation role
+must revise or withdraw each brief decision that depended on the old answer
+and name those decisions as affected decisions.
+_Avoid_: Edit, rewrite
+
+**Plan revision**:
+One immutable, provider-neutral work-item graph derived from one exact brief
+revision and repository context revision. Nodes have stable local IDs, a kind
+(`task`, `investigation`, or `parent`), and parent, dependency, and brief
+references. A newer brief makes it stale; a stale draft is regenerated, not
+edited. Plan validation refuses a draft with
+a cycle, a contradictory hierarchy, missing content, or a size over its limits;
+it never shortens a draft.
+_Avoid_: Backlog, issue list
+
+**Session role**:
+A factory-owned role that serves an ideation session, not a Run: the ideation
+role, which asks questions and proposes brief updates and readiness, and the
+planning role, which drafts a plan revision from a frozen brief. It reads a
+read-only context snapshot and has no tracker or worktree authority.
+_Avoid_: Chat agent, planner run
+
+**Session-role invocation**:
+One harness attempt of a session role, pinned to the session revision it
+serves, the user turn or request it answers, the brief and context revisions,
+the harness policy, the prompt identity, and the worker image. At most one is
+active per session and at most one result is accepted per trigger.
+_Avoid_: Invocation (for a run attempt), run
+
+**Context snapshot**:
+A detached, read-only checkout of the fetched target-branch commit that a
+session role inspects. Its commit is the repository context revision recorded
+on the invocation and on any plan revision it produces.
+_Avoid_: Working tree, worktree (for a run checkout)
+
+**Plan approval**:
+The human approval of one plan revision for one target, bound to the fully
+rendered publication payload and relationship mapping by their digests. Any
+later brief or plan change requires a fresh approval.
+_Avoid_: Sign-off, authorization (for execution)
+
+**Publication receipt**:
+Append-only evidence of one publication attempt for one approval: the tracker
+items and relationships known to exist and, for an incomplete attempt, what
+remains. Publication never adds `agent-ready` and never starts a Run.
+_Avoid_: Publish log
+
+**Publication ledger**:
+The per-session, per-approval list of the item creates and relationship
+creates that publish one approved plan, in execution order, with the recovery
+state of each (pending, attempted, failed, ambiguous, succeeded) and the
+tracker identity each create produced. It is the recovery authority of
+publication; a retry resumes it and never regenerates the plan.
+_Avoid_: Pending effect (that journal is per Run), job queue
+
+**Correlation key**:
+The stable identity `<session>/<plan revision>/<node>` that the adapter
+renders into each published tracker item, so that a lookup finds the item
+again after an unknown create outcome. Publication looks it up before every
+create; more than one match, or no match after an unknown outcome, stops for
+explicit reconciliation. GitHub carries it as a hidden body marker; Azure
+DevOps carries it as the tag `factory-plan:<key>`, which is not a run-state
+tag.
+_Avoid_: Idempotency key (providers do not honor one)
+
+**Intermediate plan item**:
+A tracker item that the Azure DevOps preview adds between a plan parent and
+its children because the configured plan mapping requires a backlog level
+that the plan skips, for example a Feature between an Epic and its User
+Stories. It is part of the approved preview and has its own correlation key.
+_Avoid_: Generated parent, implicit item
+
+**Plan publisher**:
+The optional tracker-port capability that preflights and renders a plan
+graph and creates, looks up, and links its items. Each adapter implements it
+with its own provider commands; the coordinator reaches it only through the
+port.
+_Avoid_: GitHub publisher (for the concept)
+
+**Textual relationship fallback**:
+The explicit text representation of a plan parent or dependency edge where
+the tracker offers no native relationship, for example a GitHub host without
+sub-issues. The preview shows it in the item bodies and in the relationship
+mapping, so the approval binds it; publication never switches between native
+and textual after approval.
+_Avoid_: Silent downgrade, best-effort link
+
+**Session command**:
+One browser request for an ideation session, such as a user turn, a brief
+edit, an approval, or a cancellation. It carries a request ID that makes it
+idempotent and the session revision the page showed. Acceptance makes it
+durable; only the coordinator applies it and records its outcome.
+_Avoid_: Action, API call (for the durable request)
+
+**Command inbox**:
+The operational-store table where the local UI appends session commands and
+the coordinator reads them in order. It is the only path from the browser to
+the coordinator; there is no control socket.
+_Avoid_: Queue (for run work), control socket
+
 **Work tracker**:
 The external system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
@@ -395,8 +532,8 @@ one side declares and the other does not map is a startup diagnosis failure.
 _Avoid_: Repository-declared cache path, default cache location
 
 **Operational store**:
-The versioned, host-local SQLite store for current run state. Its current-state
-tables are separate from repository configuration, disposable run artifacts,
+The versioned, host-local SQLite store for current run and ideation-session
+state. Its current-state tables are separate from repository configuration, disposable run artifacts,
 and the isolated local evaluation-summary projection.
 _Avoid_: Event journal, telemetry, transcript archive
 
