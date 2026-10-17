@@ -72,6 +72,11 @@ func (w *sessionWorkerForTest) SeedClaudeCredentials(context.Context, worker.Cre
 	return w.seedErr
 }
 
+// SeedCopilotCredentials projects a Copilot token, or fails with seedErr.
+func (w *sessionWorkerForTest) SeedCopilotCredentials(context.Context, worker.CredentialSeedRequest) error {
+	return w.seedErr
+}
+
 // Resume implements the base worker seam.
 func (*sessionWorkerForTest) Resume(context.Context, worker.ResumeRequest) error { return nil }
 
@@ -372,8 +377,8 @@ func ideationResultForTest() report.Report {
 	}}
 }
 
-// sessionHarnesses lists both supported harness adapters.
-var sessionHarnesses = []config.Harness{config.HarnessCodex, config.HarnessClaude}
+// sessionHarnesses lists every supported harness adapter.
+var sessionHarnesses = []config.Harness{config.HarnessCodex, config.HarnessClaude, config.HarnessCopilot}
 
 // TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses verifies that an
 // ideation turn launches through HeadlessRuntime on a read-only snapshot with
@@ -548,7 +553,9 @@ func TestSessionRolesAcceptAtMostOneResultPerUserTurn(t *testing.T) {
 // projected, a worker that cannot start, a process that exits without a
 // report, and a resume that reveals another native session become visible
 // typed failures that return the session to the user, and that a session
-// that moved on closes its role, with both harness adapters.
+// that moved on closes its role, with every harness adapter. The Copilot
+// capacity-limit shape is not observed yet (release blocker RB-5), so for
+// Copilot the same output must fail closed as an unexpected exit instead.
 func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 	for _, harnessName := range sessionHarnesses {
 		t.Run(string(harnessName)+"/rate limited", func(t *testing.T) {
@@ -557,6 +564,13 @@ func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: rateLimitEventsForTest()}, true
 			}
 			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if harnessName == config.HarnessCopilot {
+				if err == nil || harness.IsRateLimited(err) {
+					t.Fatalf("StartIdeationTurn() error = %v, want an unclassified failure for an unobserved Copilot shape", err)
+				}
+				assertReleased(t, fixture, invocation.ID, factory.SessionFailureUnexpectedExit)
+				return
+			}
 			if !harness.IsRateLimited(err) {
 				t.Fatalf("StartIdeationTurn() error = %v, want a capacity limit", err)
 			}
@@ -564,7 +578,7 @@ func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 		})
 		t.Run(string(harnessName)+"/credentials unavailable", func(t *testing.T) {
 			fixture := newSessionFixture(t, harnessName)
-			fixture.authentication = config.AuthenticationConfig{CodexAuthPath: "/host/codex/auth.json", ClaudeAuthPath: "/host/claude/credentials.json"}
+			fixture.authentication = config.AuthenticationConfig{CodexAuthPath: "/host/codex/auth.json", ClaudeAuthPath: "/host/claude/credentials.json", CopilotAuthPath: "/host/copilot/token"}
 			fixture.worker.seedErr = errors.New("credential file is unreadable")
 			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
 			if err == nil {
@@ -612,7 +626,12 @@ func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 		t.Run(string(harnessName)+"/expired authentication", func(t *testing.T) {
 			fixture := newSessionFixture(t, harnessName)
 			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
-				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: authenticationFailureEventsForTest()}, true
+				inspection := worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: authenticationFailureEventsForTest()}
+				if harnessName == config.HarnessCopilot {
+					// Copilot reports a missing or invalid credential on stderr only.
+					inspection = worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stderr: "Error: No authentication information found.\n"}
+				}
+				return inspection, true
 			}
 			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
 			if !harness.IsAuthenticationExpired(err) {
