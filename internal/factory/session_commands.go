@@ -398,3 +398,14 @@ func (starter sessionRoleStarter) StartPlanning(ctx context.Context, sessionID, 
 		return err
 	})
 }
+
+// CancelRole cancels the active role of a session the user moved on. A role
+// that already ended needs no cancellation.
+func (starter sessionRoleStarter) CancelRole(ctx context.Context, sessionID, reason string) error {
+	return starter.service.WithSessionRoles(ctx, func(roles *SessionRoles) error {
+		if err := roles.CancelRole(ctx, sessionID, reason); err != nil && !errors.Is(err, ErrSessionRoleNotActive) {
+			return err
+		}
+		return nil
+	})
+}

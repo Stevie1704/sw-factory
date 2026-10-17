@@ -558,6 +558,14 @@ func (r *rolesForTest) StartPlanning(_ context.Context, sessionID, requestID str
 	return nil
 }
 
+// CancelRole records the cancellation.
+func (r *rolesForTest) CancelRole(_ context.Context, sessionID, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "cancel:"+sessionID)
+	return nil
+}
+
 // TestAcceptedTurnAndHandOffStartSessionRoles verifies that an accepted turn
 // starts the ideation role and a handoff starts planning, and that a
 // coordinator stop between the turn and the role start still starts the

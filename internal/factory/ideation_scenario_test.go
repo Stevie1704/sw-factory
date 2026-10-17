@@ -41,6 +41,11 @@ func (s *ideationScenario) StartPlanning(_ context.Context, _ string, requestID 
 	return nil
 }
 
+// CancelRole cancels the active role through the real session roles.
+func (s *ideationScenario) CancelRole(ctx context.Context, sessionID, reason string) error {
+	return s.roles.CancelRole(ctx, sessionID, reason)
+}
+
 // newIdeationScenario returns a scenario over a fresh session fixture.
 func newIdeationScenario(t *testing.T) *ideationScenario {
 	t.Helper()
@@ -194,5 +199,30 @@ func TestIdeationScenarioUnresolvedRequirementAndNoBuild(t *testing.T) {
 	session := scenario.session()
 	if session.State != store.IdeationStateNoBuild || session.PlanRevision != 0 || len(scenario.planned) != 0 {
 		t.Fatalf("session = %#v, planned %v; want no_build without a plan", session, scenario.planned)
+	}
+}
+
+// TestUserCancelStopsTheActiveRoleAsCancelled verifies that a user cancel
+// while the ideation role is active stops the role at once: the invocation
+// ends as cancelled with the user's reason, its process is cancelled, and the
+// session stays cancelled.
+func TestUserCancelStopsTheActiveRoleAsCancelled(t *testing.T) {
+	s := newIdeationScenario(t)
+	requireApplied(t, s.command("turn-2", sessioncommand.KindSubmitTurn, `{"body":"Support engineers read it."}`))
+	active, err := s.store.ActiveSessionInvocations(t.Context())
+	if err != nil || len(active) != 1 {
+		t.Fatalf("active invocations = %#v, %v; want the ideation role", active, err)
+	}
+
+	requireApplied(t, s.command("cancel-1", sessioncommand.KindCancel, `{"reason":"Not worth it."}`))
+	ended := s.invocation(active[0].ID)
+	if ended.Status != store.SessionInvocationCancelled || ended.FailureKind != factory.SessionFailureCancelled || !strings.Contains(ended.StatusReason, "Not worth it.") {
+		t.Fatalf("invocation = %#v, want it cancelled with the user's reason", ended)
+	}
+	if len(s.worker.cancelled) != 1 || s.worker.cancelled[0] != active[0].ID {
+		t.Fatalf("cancelled processes = %v, want the active role process", s.worker.cancelled)
+	}
+	if state := s.session().State; state != store.IdeationStateCancelled {
+		t.Fatalf("session state = %q, want cancelled", state)
 	}
 }

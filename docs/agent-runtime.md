@@ -658,7 +658,10 @@ and structured reports as run roles, with these differences:
   resume that reveals another native session, credential projection failures,
   interrupted launches, and rejected reports end the invocation with a
   recorded failure kind and return the session to the user with a reason. The
-  user resubmits the same turn after the cause is fixed.
+  user resubmits the same turn after the cause is fixed. A cancel or a
+  no-build decision while a role is active stops that role at once: the
+  invocation ends as `cancelled` with the user's reason, and the session
+  keeps the state the user chose.
 
 ## Safety boundary
 

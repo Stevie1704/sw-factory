@@ -347,9 +347,10 @@ func (r *SessionRoles) startProcess(ctx context.Context, invocation store.Sessio
 	return session.NativeSessionID, nil
 }
 
-// CancelRole cancels the active role invocation of a session and returns the
-// session to the user with reason. Its report, if one arrives later, is
-// ignored.
+// CancelRole cancels the active role invocation of a session with reason and
+// stops its process. A session that is still role_active returns to the
+// user; a session the user already moved on, for example by a cancel, keeps
+// its state. A report that arrives later is ignored.
 func (r *SessionRoles) CancelRole(ctx context.Context, sessionID, reason string) error {
 	active, err := r.deps.Store.ActiveSessionInvocations(ctx)
 	if err != nil {

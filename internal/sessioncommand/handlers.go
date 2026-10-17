@@ -375,7 +375,8 @@ func Transition(event workflow.SessionEvent) Handler {
 }
 
 // transitionBy returns a handler that records the event eventOf chooses for
-// the current session, with the payload reason.
+// the current session, with the payload reason. A transition out of
+// role_active, such as a cancel, then stops the active role.
 func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Handler {
 	return func(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 		payload, err := payloadOf[ReasonPayload](command)
@@ -386,6 +387,7 @@ func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Han
 		if err != nil {
 			return Outcome{}, err
 		}
+		roleActive := session.State == store.IdeationStateRoleActive
 		write, err := CommandWrite(env, session, command, eventOf(session), payload.Reason)
 		if err != nil {
 			return Outcome{}, err
@@ -393,8 +395,26 @@ func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Han
 		if session, err = env.Store.TransitionIdeationSession(ctx, write); err != nil {
 			return Outcome{}, err
 		}
-		return Applied(session, "session is "+string(session.State)), nil
+		detail := "session is " + string(session.State)
+		if roleActive && env.Roles != nil {
+			detail += stopRole(ctx, env, session, payload.Reason)
+		}
+		return Applied(session, detail), nil
 	}
+}
+
+// stopRole cancels the role that was active when the user moved session on,
+// and returns a note for the outcome detail. The transition is already
+// recorded, so a failed cancel does not change the outcome: the supervisor
+// closes the invocation on its next pass because the session moved.
+func stopRole(ctx context.Context, env Env, session store.IdeationSession, reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		reason = "the user moved the session to " + string(session.State)
+	}
+	if err := env.Roles.CancelRole(ctx, session.ID, reason); err != nil {
+		return "; the active role was not stopped yet (" + err.Error() + "), the supervisor stops it on its next pass"
+	}
+	return "; the active role was cancelled"
 }
 
 // resumeEvent chooses where a parked session resumes. A session parked with

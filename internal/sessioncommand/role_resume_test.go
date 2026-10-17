@@ -34,8 +34,13 @@ func (r *storedRolesForTest) StartPlanning(ctx context.Context, sessionID, reque
 	return r.start(ctx, workflow.RolePlanning, sessionID, requestID)
 }
 
-// CancelRole is not used by these tests.
-func (r *storedRolesForTest) CancelRole(context.Context, string, string) error { return nil }
+// CancelRole records the cancellation of the active role of sessionID.
+func (r *storedRolesForTest) CancelRole(_ context.Context, sessionID, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, "cancel:"+sessionID+":"+reason)
+	return nil
+}
 
 // start persists one active invocation of role triggered by triggerID.
 func (r *storedRolesForTest) start(ctx context.Context, role, sessionID, triggerID string) error {
@@ -158,5 +163,46 @@ func TestTransientStoreFailureAtRoleStartKeepsTheTurnPending(t *testing.T) {
 	applied := c.requireOutcome("turn-1", store.IdeationCommandApplied)
 	if !strings.Contains(applied.Detail, "role started") || len(roles.calls) != 2 || len(c.history("session-1").Turns) != 1 {
 		t.Fatalf("outcome = %#v, role starts = %v; want one turn and the role started on the second pass", applied, roles.calls)
+	}
+}
+
+// TestLeavingAnActiveRoleCancelsIt verifies that a cancel or a no-build
+// decision while a role is active stops that role through the role seam,
+// with the user's reason, and that the same decision without an active role
+// cancels nothing.
+func TestLeavingAnActiveRoleCancelsIt(t *testing.T) {
+	t.Parallel()
+
+	for _, kind := range []sessioncommand.Kind{sessioncommand.KindCancel, sessioncommand.KindNoBuild} {
+		t.Run(string(kind), func(t *testing.T) {
+			t.Parallel()
+
+			c := newCoordinatorForTest(t)
+			roles := &storedRolesForTest{store: c.store}
+			c.submit("turn-1", "session-1", sessioncommand.KindSubmitTurn, c.createSession("session-1"), `{"body":"Who onboards?"}`)
+			if err := c.drainWith(t.Context(), roles); err != nil {
+				t.Fatal(err)
+			}
+			active := c.requireOutcome("turn-1", store.IdeationCommandApplied).SessionRevision
+			c.submit("leave-1", "session-1", kind, active, `{"reason":"Not now."}`)
+			if err := c.drainWith(t.Context(), roles); err != nil {
+				t.Fatal(err)
+			}
+			c.requireOutcome("leave-1", store.IdeationCommandApplied)
+			if len(roles.calls) != 2 || roles.calls[1] != "cancel:session-1:Not now." {
+				t.Fatalf("role calls = %v, want the active role cancelled with the reason", roles.calls)
+			}
+		})
+	}
+
+	c := newCoordinatorForTest(t)
+	roles := &storedRolesForTest{store: c.store}
+	c.submit("cancel-1", "session-1", sessioncommand.KindCancel, c.createSession("session-1"), `{"reason":"Not now."}`)
+	if err := c.drainWith(t.Context(), roles); err != nil {
+		t.Fatal(err)
+	}
+	c.requireOutcome("cancel-1", store.IdeationCommandApplied)
+	if len(roles.calls) != 0 {
+		t.Fatalf("role calls = %v, want none without an active role", roles.calls)
 	}
 }

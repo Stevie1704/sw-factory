@@ -54,6 +54,9 @@ type Roles interface {
 	// StartPlanning starts the planning role for the current brief; requestID
 	// is the hand-off or regeneration request.
 	StartPlanning(ctx context.Context, sessionID, requestID string) error
+	// CancelRole stops the active role of a session that the user moved out
+	// of role_active, and records it as cancelled with reason.
+	CancelRole(ctx context.Context, sessionID, reason string) error
 }
 
 // Env is what a handler uses to apply a command. Only the coordinator builds
