@@ -274,6 +274,9 @@ type agentHarness struct {
 	starts, resumes     []harness.StartRequest
 	finished            []harness.Session
 	startErr, resumeErr error
+	// startHarnesses and resumeHarnesses name the harness view that served
+	// each start and resume, in order.
+	startHarnesses, resumeHarnesses []config.Harness
 }
 
 // Capabilities identifies the headless fixture adapter.
@@ -313,11 +316,38 @@ func (*agentHarness) InspectHeadless(context.Context, harness.HeadlessInspection
 // CancelHeadless accepts fixture cancellation.
 func (*agentHarness) CancelHeadless(context.Context, harness.HeadlessSession) error { return nil }
 
-// testHeadlessHarnesses maps every supported name to one recording adapter.
+// testHeadlessHarnesses maps every supported name to a view of one recording
+// adapter that reports that name, so a role dispatches to the harness it
+// selects and the shared recorder notes which harness served each launch.
 func testHeadlessHarnesses(runtime *agentHarness) map[config.Harness]harness.HeadlessRuntime {
 	return map[config.Harness]harness.HeadlessRuntime{
-		config.HarnessCodex: runtime, config.HarnessClaude: runtime, config.HarnessCopilot: runtime,
+		config.HarnessCodex:   namedAgentHarness{agentHarness: runtime, name: config.HarnessCodex},
+		config.HarnessClaude:  namedAgentHarness{agentHarness: runtime, name: config.HarnessClaude},
+		config.HarnessCopilot: namedAgentHarness{agentHarness: runtime, name: config.HarnessCopilot},
 	}
+}
+
+// namedAgentHarness is one harness identity over a shared recording adapter.
+type namedAgentHarness struct {
+	*agentHarness
+	name config.Harness
+}
+
+// Capabilities reports the view's harness identity.
+func (h namedAgentHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: string(h.name), NativeResume: true, Headless: true}
+}
+
+// StartHeadless records the serving harness and launches through the recorder.
+func (h namedAgentHarness) StartHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	h.startHarnesses = append(h.startHarnesses, h.name)
+	return h.agentHarness.StartHeadless(ctx, request)
+}
+
+// ResumeHeadless records the serving harness and resumes through the recorder.
+func (h namedAgentHarness) ResumeHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	h.resumeHarnesses = append(h.resumeHarnesses, h.name)
+	return h.agentHarness.ResumeHeadless(ctx, request)
 }
 
 // githubIssueFixture returns the claimed issue used by agent tests.

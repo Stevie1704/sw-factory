@@ -285,6 +285,87 @@ func TestImplementationObjectionResumesTheOriginalTestSession(t *testing.T) {
 	}
 }
 
+// TestImplementationObjectionRevisesInTheRecordedTestHarness verifies that
+// in a mixed-harness run a test objection resumes the original test session
+// through the harness that recorded it while implementation stays on its own
+// harness. A frozen policy that names another test harness is refused before
+// any launch, so the recorded session never moves to a different CLI.
+func TestImplementationObjectionRevisesInTheRecordedTestHarness(t *testing.T) {
+	for _, test := range []struct {
+		name                                     string
+		testHarness, implementationHarness, next config.Harness
+	}{
+		{name: "copilot test session resumes", testHarness: config.HarnessCopilot, implementationHarness: config.HarnessCodex, next: config.HarnessCopilot},
+		{name: "claude test session beside copilot implementation resumes", testHarness: config.HarnessClaude, implementationHarness: config.HarnessCopilot, next: config.HarnessClaude},
+		{name: "copilot test session refuses a changed test harness", testHarness: config.HarnessCopilot, implementationHarness: config.HarnessCodex, next: config.HarnessClaude},
+		{name: "claude test session refuses a change to copilot", testHarness: config.HarnessClaude, implementationHarness: config.HarnessCopilot, next: config.HarnessCopilot},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, storeRuntime, _, harnessRuntime, implementation, workspace := newObjectionCycleFixtureFor(t, true, test.testHarness, test.implementationHarness)
+			if implementation.Harness != string(test.implementationHarness) || len(harnessRuntime.startHarnesses) != 2 || harnessRuntime.startHarnesses[0] != test.testHarness || harnessRuntime.startHarnesses[1] != test.implementationHarness {
+				t.Fatalf("launches = %v, implementation on %q; want test on %s then implementation on %s", harnessRuntime.startHarnesses, implementation.Harness, test.testHarness, test.implementationHarness)
+			}
+			run := *storeRuntime.current
+			if test.next != test.testHarness {
+				policy := validRepositoryConfig()
+				policy.TestPolicy.AllowAutomatedObjections = true
+				policy.RoleHarnessDefaults["test"] = test.next
+				policy.RoleHarnessDefaults["implementation"] = test.implementationHarness
+				policy.ModelOptions["test"] = []string{"gpt-5"}
+				repackageSpecification(t, storeRuntime, policy)
+			}
+			workspace.state.HeadSHA = run.CheckpointSHA
+			workspace.state.ChangedPaths = []string{"internal/factory/agent.go"}
+			objection := report.Report{
+				SchemaVersion: report.SchemaVersion, InvocationID: implementation.ID, RunID: implementation.RunID,
+				Harness: implementation.Harness, Role: "implementation", Stage: "implementation", Outcome: report.OutcomeCompleted,
+				Summary: "implementation found the protected assertion too narrow",
+				Handoff: &report.Handoff{
+					ChangeSummary:          "implementation change with a test objection",
+					AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "implementation evidence"}},
+					ProductionFilesChanged: []string{"internal/factory/agent.go"},
+					FocusedCommands:        []string{"go test ./internal/factory"},
+					TestObjections: []report.TestObjection{{
+						Test: "internal/factory/agent_test.go:TestBehavior", Claim: "the test requires an obsolete internal detail",
+						Evidence: "equivalent public behavior passes with the implementation change",
+					}},
+				},
+				NativeSessionID: "implementation-session", ReportedAt: time.Now().UTC(),
+			}
+			if _, err := report.WriteAtomicForInvocation(implementation.ResultDirectory, implementation.ID, objection); err != nil {
+				t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+			}
+
+			_, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: implementation.ID})
+
+			if test.next != test.testHarness {
+				if err == nil || !strings.Contains(err.Error(), "must resume the original "+string(test.testHarness)+" harness") {
+					t.Fatalf("AcceptAgentReport() error = %v, want the harness migration refused", err)
+				}
+				if len(harnessRuntime.resumeHarnesses) != 0 || len(harnessRuntime.startHarnesses) != 2 {
+					t.Fatalf("launches after refusal = starts %v resumes %v, want none", harnessRuntime.startHarnesses, harnessRuntime.resumeHarnesses)
+				}
+				if storeRuntime.current.Stage != store.StageTest {
+					t.Fatalf("run after refusal = stage %s, want it held at the test revision", storeRuntime.current.Stage)
+				}
+				if _, launched := storeRuntime.invocations["inv-revision-invocation"]; launched {
+					t.Fatal("refused revision persisted an invocation on another harness")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("AcceptAgentReport() error = %v", err)
+			}
+			if len(harnessRuntime.resumeHarnesses) != 1 || harnessRuntime.resumeHarnesses[0] != test.testHarness || harnessRuntime.resumes[0].ResumeSessionID != "test-session" {
+				t.Fatalf("resumes = %v %#v, want the recorded %s test session", harnessRuntime.resumeHarnesses, harnessRuntime.resumes, test.testHarness)
+			}
+			if revision := storeRuntime.invocations["inv-revision-invocation"]; revision.Harness != string(test.testHarness) || revision.Role != "test" {
+				t.Fatalf("revision invocation = %#v, want a %s test invocation", revision, test.testHarness)
+			}
+		})
+	}
+}
+
 // TestImplementationObjectionCanBeRejectedByTheTestRole verifies a test role
 // may reject a dispute with reasoning while preserving the implementation
 // changes for explicit human disposition.
@@ -534,6 +615,13 @@ func newObjectionCycleFixture(t *testing.T) (*factory.Service, *agentRunStore, *
 // explicit repository-policy setting for testing both enabled and disabled paths.
 func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (*factory.Service, *agentRunStore, *agentWorker, *agentHarness, store.Invocation, *testStageWorkspace) {
 	t.Helper()
+	return newObjectionCycleFixtureFor(t, allowAutomatedObjections, config.HarnessCodex, config.HarnessCodex)
+}
+
+// newObjectionCycleFixtureFor creates the objection-cycle fixture with the
+// test and implementation roles on the given harnesses.
+func newObjectionCycleFixtureFor(t *testing.T, allowAutomatedObjections bool, testHarness, implementationHarness config.Harness) (*factory.Service, *agentRunStore, *agentWorker, *agentHarness, store.Invocation, *testStageWorkspace) {
+	t.Helper()
 	root := t.TempDir()
 	repositoryPath := filepath.Join(root, "repository")
 	worktreePath := filepath.Join(root, "worktree")
@@ -551,7 +639,8 @@ func newObjectionCycleFixtureWith(t *testing.T, allowAutomatedObjections bool) (
 	}
 	policy := validRepositoryConfig()
 	policy.TestPolicy.AllowAutomatedObjections = allowAutomatedObjections
-	policy.RoleHarnessDefaults["test"] = config.HarnessCodex
+	policy.RoleHarnessDefaults["test"] = testHarness
+	policy.RoleHarnessDefaults["implementation"] = implementationHarness
 	policy.ModelOptions["test"] = []string{"gpt-5"}
 	storeRuntime := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	workerRuntime := &agentWorker{results: []worker.CommandResult{{ExitCode: 0}, {ExitCode: 0}, {ExitCode: 1, Stdout: "expected behavior assertion"}}}

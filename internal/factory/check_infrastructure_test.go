@@ -62,6 +62,8 @@ type checkRecoveryFixture struct {
 	run       store.Run
 	// journal is the pending-effect journal; it is nil for an unjournaled store.
 	journal *journaledAgentRunStore
+	// policy is the live repository configuration the coordinator loads.
+	policy *config.RepositoryConfig
 }
 
 // newCheckRecoveryFixture builds the coordinator seam used by the check
@@ -69,6 +71,13 @@ type checkRecoveryFixture struct {
 // the worker fixture, in that order. A journaled store matches production; an
 // unjournaled one reaches the branches that run when no effect is pending.
 func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRecoveryFixture {
+	t.Helper()
+	return newCheckRecoveryFixtureFor(t, runID, journaled, config.HarnessCodex)
+}
+
+// newCheckRecoveryFixtureFor builds the check recovery fixture with the first
+// implementation session launched through the given harness.
+func newCheckRecoveryFixtureFor(t *testing.T, runID string, journaled bool, implementation config.Harness) checkRecoveryFixture {
 	t.Helper()
 	root := t.TempDir()
 	repositoryPath := filepath.Join(root, "repo")
@@ -85,6 +94,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	}
 	policy := validRepositoryConfig()
 	policy.Gates = []config.GateConfig{{Name: "test", Command: "test", Timeout: "5m", Blocking: true, EnvironmentPolicy: config.EnvironmentPolicyClean}}
+	policy.RoleHarnessDefaults["implementation"] = implementation
 	runStore := &agentRunStore{runs: map[string]store.Run{}, invocations: map[string]store.Invocation{}, gateResults: map[string][]store.GateResult{}}
 	var opened factory.OperationalStore = runStore
 	var journal *journaledAgentRunStore
@@ -154,7 +164,7 @@ func newCheckRecoveryFixture(t *testing.T, runID string, journaled bool) checkRe
 	initial.Status = store.InvocationStatusCompleted
 	initial.UpdatedAt = initial.CreatedAt.Add(time.Minute)
 	runStore.invocations[launch.Invocation.ID] = initial
-	return checkRecoveryFixture{service: service, runStore: runStore, runtime: runtime, harness: harnessRuntime, workspace: workspace, run: claimed.Run, journal: journal}
+	return checkRecoveryFixture{service: service, runStore: runStore, runtime: runtime, harness: harnessRuntime, workspace: workspace, run: claimed.Run, journal: journal, policy: &policy}
 }
 
 // TestSetupCommandFailureEntersBoundedImplementationRepair verifies a setup
@@ -196,6 +206,45 @@ func TestSetupCommandFailureEntersBoundedImplementationRepair(t *testing.T) {
 	}
 	if second.Repair != nil || second.Run.Stage != store.StageDraftPR || second.Run.CheckpointSHA != repairedImplementationCheckpoint {
 		t.Fatalf("second result = %#v, want a draft PR at the repaired checkpoint", second)
+	}
+}
+
+// TestCheckRepairResumesTheRecordedHarnessAfterAConfigurationChange verifies
+// a check repair continues the implementation session in the harness that
+// recorded it, even after the repository configuration names another harness
+// for the role. The session is never handed to a different CLI.
+func TestCheckRepairResumesTheRecordedHarnessAfterAConfigurationChange(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct{ recorded, configured config.Harness }{
+		{recorded: config.HarnessCopilot, configured: config.HarnessCodex},
+		{recorded: config.HarnessClaude, configured: config.HarnessCopilot},
+		{recorded: config.HarnessCodex, configured: config.HarnessCopilot},
+	} {
+		t.Run(string(test.recorded), func(t *testing.T) {
+			t.Parallel()
+			fixture := newCheckRecoveryFixtureFor(t, "run-repair-"+string(test.recorded), true, test.recorded)
+			if launched := fixture.harness.startHarnesses; len(launched) != 1 || launched[0] != test.recorded {
+				t.Fatalf("initial launches = %v, want one %s session", launched, test.recorded)
+			}
+			fixture.policy.RoleHarnessDefaults["implementation"] = test.configured
+			repackageSpecification(t, fixture.runStore, *fixture.policy)
+			fixture.runtime.results = []worker.CommandResult{{ExitCode: 1, Stderr: "setup failed"}}
+
+			result, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID})
+
+			if err != nil {
+				t.Fatalf("CreateDraftPullRequest() error = %v", err)
+			}
+			if result.Repair == nil || result.Repair.Outcome != factory.CheckRepairStarted || result.Repair.Invocation.Harness != string(test.recorded) {
+				t.Fatalf("repair = %#v, want a check repair recorded on %s", result.Repair, test.recorded)
+			}
+			if len(fixture.harness.resumeHarnesses) != 1 || fixture.harness.resumeHarnesses[0] != test.recorded || fixture.harness.resumes[0].ResumeSessionID != "session-initial" {
+				t.Fatalf("resumes = %v %#v, want the recorded %s session", fixture.harness.resumeHarnesses, fixture.harness.resumes, test.recorded)
+			}
+			if len(fixture.harness.startHarnesses) != 1 {
+				t.Fatalf("fresh launches = %v, want none for a repair", fixture.harness.startHarnesses)
+			}
+		})
 	}
 }
 
