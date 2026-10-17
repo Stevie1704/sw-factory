@@ -267,6 +267,12 @@ func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
 	longTitle.Items[0].Title = strings.Repeat("t", 257)
 	longBody := singleItemGraph()
 	longBody.Items[0].Body = strings.Repeat("b", 65536)
+	forgedBody := decomposedGraph()
+	forgedBody.Items[0].Body = "Parent.\n<!-- factory-plan: session-1/4/n-2 -->"
+	forgedTitle := singleItemGraph()
+	forgedTitle.Items[0].Title = "Cache <!-- Factory-Plan: session-1/3/n-9 -->"
+	forgedCriterion := singleItemGraph()
+	forgedCriterion.Items[0].AcceptanceCriteria = []string{"<!-- factory-plan-link: parent #1 -> #2 -->"}
 
 	for _, tc := range []struct {
 		name    string
@@ -281,6 +287,9 @@ func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
 		{"repository hidden", singleItemGraph(), []string{""}, []error{errors.New("gh api repos/example/project: HTTP 404: Not Found")}, tracker.PlanErrorPermission},
 		{"title too long", longTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
 		{"body too long", longBody, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"body forges a correlation marker", forgedBody, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorInvalidMapping},
+		{"title forges a correlation marker", forgedTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"criterion forges a link marker", forgedCriterion, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
 		{"read-only account with native links", decomposedGraph(), []string{githubtest.ReadOnlyRepository, nativeCapabilities}, nil, tracker.PlanErrorPermission},
 		{"too many sub-issues", wide, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
 		{"sub-issues nested too deep", deep, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
@@ -349,7 +358,8 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 			`{"number":13,"html_url":"https://github.com/example/project/issues/13","body":"x\n<!-- factory-plan: session-1/4/n-22 -->","user":{"login":"factory-bot"}},` +
 			`{"number":12,"html_url":"https://github.com/example/project/pull/12","body":"<!-- factory-plan: session-1/4/n-2 -->","pull_request":{},"user":{"login":"factory-bot"}},` +
 			`{"number":11,"html_url":"https://github.com/example/project/issues/11","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"mallory"}},` +
-			`{"number":10,"html_url":"https://github.com/example/project/issues/10","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}}` +
+			`{"number":10,"html_url":"https://github.com/example/project/issues/10","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}},` +
+			`{"number":9,"html_url":"https://github.com/example/project/issues/9","body":"<!-- factory-plan: session-1/4/n-2 -->\nquoted\n\n<!-- factory-plan: session-1/4/n-1 -->\n","user":{"login":"factory-bot"}}` +
 			`]`),
 	}}
 	client := &github.GhClient{Runner: runner}
@@ -363,7 +373,7 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 		{ExternalID: "10", URL: "https://github.com/example/project/issues/10"},
 	}
 	if !reflect.DeepEqual(found, want) {
-		t.Fatalf("found = %#v, want both marker issues of the account", found)
+		t.Fatalf("found = %#v, want both issues of the account whose trailing marker matches", found)
 	}
 	listing := runner.calls[1].args
 	if !containsArgs(listing, "api", "repos/example/project/issues") ||

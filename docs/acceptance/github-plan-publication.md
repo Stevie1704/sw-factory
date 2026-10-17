@@ -11,7 +11,7 @@ credential.
 
 | Plan element | GitHub representation |
 | --- | --- |
-| Plan node | One issue. The title is the node title. The body contains the node body, the acceptance criteria as a task list, a `Traceability` section (session, plan revision, node, context revision, brief items), and the hidden marker `<!-- factory-plan: <session>/<plan revision>/<node> -->`. |
+| Plan node | One issue. The title is the node title. The body contains the node body, the acceptance criteria as a task list, a `Traceability` section (session, plan revision, node, context revision, brief items), and, as its last line, the hidden marker `<!-- factory-plan: <session>/<plan revision>/<node> -->`. |
 | Single-item plan | One issue, no relationships. |
 | Parent and children | The parent specification issue and one issue per child. No milestone is created; the parent is the grouping artifact. |
 | Parent edge, native | The child becomes a GitHub sub-issue of the parent (`POST /repos/{o}/{r}/issues/{parent}/sub_issues`). |
@@ -42,7 +42,11 @@ bytes.
    access, preflight returns a typed `permission` error before approval. It
    does not switch to the textual fallback, because the host offers the
    native relationship.
-4. Limits: a title longer than 256 characters or a body longer than 65,536
+4. Plan text: a node title, body, or acceptance criterion that contains
+   `<!-- factory-plan` is a typed `invalid_mapping` error. Only the factory
+   writes its markers, so plan text cannot make the correlation lookup or
+   the link verification match the wrong issue.
+5. Limits: a title longer than 256 characters or a body longer than 65,536
    characters is a typed `invalid_mapping` error. With native sub-issues, more
    than 100 sub-issues for one parent or more than eight nested levels is a
    typed `unsupported_capability` error.
@@ -55,7 +59,8 @@ no-change error.
 
 `FindPlanItems` lists the issues that the authenticated account created
 (`GET /repos/{o}/{r}/issues?state=all&creator=<login>&sort=created&direction=desc`),
-at most 10 pages of 100, and matches the exact marker. It does not use the
+at most 10 pages of 100, and matches the exact marker on the last nonblank
+line of the body. It does not use the
 search index, because the index lags behind a just-created issue. Pull requests
 and issues by other accounts never match. An issue outside the 1,000 newest
 issues of the account is not found. The publication ledger never creates an
