@@ -24,7 +24,7 @@ until the live GitHub and Azure DevOps scenarios below have run.
 | Platform | darwin/arm64, macOS 27.0.1, Go 1.27.2 (go.mod toolchain) |
 | Release | Development build, revision `783a70888554c5ff89722ecdf2e604dd25cc96c0` (branch `feat/275-acceptance-docs` on the integration branch at `85195e9`) |
 | Pinned worker image | `factory.yaml` pins `ghcr.io/stevie1704/sw-factory-worker@sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54`, built on colima (linux/arm64) from revision `5a3ac66` (same tree as integration commit `22e4d57`), scanned clean with grype, and published with `make worker-publish` on 2026-10-16. Headless lifecycle verification passed for the Codex and Claude Code adapters, and `factory-report` has `--ideation-file` and `--plan-file`. |
-| Skill smoke | Codex 0.148.0 loaded `implement`, `specification-review`, `standards-review`, `pr`, and `grilling` in the pinned image (`worker/skill-smoke.json`). The Claude Code smoke did not run: the host's Claude credentials had an expired OAuth session. |
+| Skill smoke | Codex 0.148.0 and Claude Code 2.1.232 each loaded `implement`, `specification-review`, `standards-review`, `pr`, and `grilling` in the pinned image (`worker/skill-smoke.json`). The first Claude Code attempt quoted a later line of `pr` instead of its first instruction line; the retry of `pr` alone passed. |
 | Worker harnesses | Claude Code 2.1.232 and Codex 0.148.0 (build defaults of the local image); no live invocation ran. |
 | Host harness | Not observed: no live scenario ran. The implementing agent was Claude Code (Claude Opus 5.5) under an orchestrator; it is not product evidence. |
 
@@ -80,8 +80,8 @@ is a specific unverified scenario:
 6. Azure DevOps, retry: a lost create response and the WIQL correlation
    lookup that the retry depends on.
 7. Live ideation and planning turns on Codex and on Claude Code with a worker
-   image of this release, including the paid Claude Code `grilling` skill
-   smoke (the Codex skill smoke ran).
+   image of this release. The skill smoke for both harnesses ran; no live
+   ideation or planning turn ran.
 8. A live coordinator restart during a role turn and during publication.
 
 ## Interventions, time, and usage
@@ -120,10 +120,6 @@ them.
 
 ## Open items
 
-- Record the Claude Code skill smoke for the pinned worker digest:
-  `HARNESSES=claude MANDATORY_SKILLS="implement specification-review
-  standards-review pr grilling" ./scripts/smoke-skills.sh` with valid Claude
-  credentials.
 - `factory cleanup` keeps session-role Docker volumes; `factory reset`
   removes them (ADR 0023). Which sessions cleanup may clean is an open
   product decision.
