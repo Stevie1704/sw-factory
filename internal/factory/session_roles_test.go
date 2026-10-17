@@ -165,6 +165,12 @@ func nativeSessionFromCommand(command []string) string {
 		if (argument == "--session-id" || argument == "--resume" || argument == "resume") && index+1 < len(command) {
 			return command[index+1]
 		}
+		// Copilot passes each option value in the --option=value form.
+		for _, prefix := range []string{"--session-id=", "--resume="} {
+			if value, found := strings.CutPrefix(argument, prefix); found {
+				return value
+			}
+		}
 	}
 	return freshNativeSessionForTest
 }
@@ -453,6 +459,52 @@ func TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses(t *testing.T) {
 			}
 			if fixture.worker.starts[1].WorkerID != start.WorkerID {
 				t.Fatalf("second worker = %q, want the session role worker %q that keeps the native session", fixture.worker.starts[1].WorkerID, start.WorkerID)
+			}
+		})
+	}
+}
+
+// TestSessionRolesNeverMigrateANativeSessionToAChangedHarness verifies that a
+// conversational continuation resumes only through the harness that recorded
+// the native session. When the configured harness changes between turns, the
+// next turn starts a fresh session in the new harness on the same read-only
+// snapshot contract; the recorded session is never passed to another CLI.
+func TestSessionRolesNeverMigrateANativeSessionToAChangedHarness(t *testing.T) {
+	for _, test := range []struct{ from, to config.Harness }{
+		{from: config.HarnessCopilot, to: config.HarnessCodex},
+		{from: config.HarnessCodex, to: config.HarnessCopilot},
+		{from: config.HarnessClaude, to: config.HarnessCopilot},
+	} {
+		t.Run(string(test.from)+" to "+string(test.to), func(t *testing.T) {
+			fixture := newSessionFixture(t, test.from)
+			first, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err != nil {
+				t.Fatalf("StartIdeationTurn() error = %v", err)
+			}
+			fixture.report(first, ideationResultForTest())
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile() error = %v", err)
+			}
+
+			fixture.policy.RoleHarnessDefaults[workflow.RoleIdeation] = test.to
+			fixture.userTurn(fixture.session(), "turn-2", "Support engineers read it.")
+			second, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatalf("StartIdeationTurn(turn-2) error = %v", err)
+			}
+
+			launch := fixture.worker.launches[1]
+			if second.Harness != string(test.to) || second.ResumedFrom != "" || second.NativeSessionID == first.NativeSessionID || launch.Mode != worker.HeadlessLaunchFresh {
+				t.Fatalf("second invocation = %#v, launch mode %q; want a fresh %s session", second, launch.Mode, test.to)
+			}
+			if strings.Contains(strings.Join(launch.Command, " "), first.NativeSessionID) {
+				t.Fatalf("launch command %q passes the %s session to %s", launch.Command, test.from, test.to)
+			}
+			if recorded := fixture.invocation(first.ID); recorded.Harness != string(test.from) || recorded.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("recorded invocation = %#v, want its %s identity unchanged", recorded, test.from)
+			}
+			if start := fixture.worker.starts[len(fixture.worker.starts)-1]; !start.WorktreeReadOnly {
+				t.Fatalf("worker start = %#v, want the read-only snapshot contract kept", start)
 			}
 		})
 	}
