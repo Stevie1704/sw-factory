@@ -19,13 +19,19 @@ import (
 	"testing"
 )
 
-// Field is one field of a work-item type in the scripted process.
+// Field is one field of a work-item type in the scripted process. Type and
+// ReadOnly appear only in the project's field list (GET wit/fields), as in
+// Azure DevOps: the fields of a work-item type do not carry them.
 type Field struct {
 	ReferenceName  string   `json:"referenceName"`
 	Name           string   `json:"name"`
 	AlwaysRequired bool     `json:"alwaysRequired"`
 	DefaultValue   any      `json:"defaultValue"`
 	AllowedValues  []string `json:"allowedValues"`
+	// Type is the field type, for example "string", "integer", or "double".
+	Type string `json:"-"`
+	// ReadOnly marks a field that no write may set.
+	ReadOnly bool `json:"-"`
 }
 
 // State is one state of a work-item type in the scripted process.
@@ -48,12 +54,12 @@ type WorkItemType struct {
 // StandardFields are the fields every scripted type has.
 func StandardFields() []Field {
 	return []Field{
-		{ReferenceName: "System.Title", Name: "Title", AlwaysRequired: true},
-		{ReferenceName: "System.State", Name: "State", AlwaysRequired: true, DefaultValue: "New"},
-		{ReferenceName: "System.Description", Name: "Description"},
-		{ReferenceName: "System.Tags", Name: "Tags"},
-		{ReferenceName: "System.AreaPath", Name: "Area Path", AlwaysRequired: true},
-		{ReferenceName: "Microsoft.VSTS.Common.Priority", Name: "Priority", DefaultValue: 2, AllowedValues: []string{"1", "2", "3", "4"}},
+		{ReferenceName: "System.Title", Name: "Title", AlwaysRequired: true, Type: "string"},
+		{ReferenceName: "System.State", Name: "State", AlwaysRequired: true, DefaultValue: "New", Type: "string"},
+		{ReferenceName: "System.Description", Name: "Description", Type: "html"},
+		{ReferenceName: "System.Tags", Name: "Tags", Type: "plainText"},
+		{ReferenceName: "System.AreaPath", Name: "Area Path", AlwaysRequired: true, Type: "treePath", ReadOnly: true},
+		{ReferenceName: "Microsoft.VSTS.Common.Priority", Name: "Priority", DefaultValue: 2, AllowedValues: []string{"1", "2", "3", "4"}, Type: "integer"},
 	}
 }
 
@@ -286,6 +292,8 @@ func (b *Boards) answer(ctx context.Context, call Call) (any, error) {
 			types = append(types, map[string]any{"name": value.Name, "isDisabled": value.Disabled})
 		}
 		return map[string]any{"count": len(types), "value": types}, nil
+	case call.Method == "GET" && path == ProjectPath+"/wit/fields":
+		return b.fieldList(), nil
 	case call.Method == "GET" && path == ProjectPath+"/work/backlogconfiguration":
 		return b.backlogConfiguration(), nil
 	case call.Method == "GET" && path == organizationPath+"/wit/workitemrelationtypes":
@@ -336,6 +344,23 @@ func (b *Boards) backlogConfiguration() map[string]any {
 		}
 	}
 	return map[string]any{"taskBacklog": level(0), "requirementBacklog": level(1), "portfolioBacklogs": portfolio}
+}
+
+// fieldList answers the project's field list: every field of the process
+// once, with its type and read-only flag.
+func (b *Boards) fieldList() map[string]any {
+	seen := map[string]bool{}
+	fields := []map[string]any{}
+	for _, value := range b.process {
+		for _, field := range value.Fields {
+			if seen[strings.ToLower(field.ReferenceName)] {
+				continue
+			}
+			seen[strings.ToLower(field.ReferenceName)] = true
+			fields = append(fields, map[string]any{"referenceName": field.ReferenceName, "name": field.Name, "type": field.Type, "readOnly": field.ReadOnly})
+		}
+	}
+	return map[string]any{"count": len(fields), "value": fields}
 }
 
 // typeResource answers the fields or states of one work-item type.
