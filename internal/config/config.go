@@ -313,6 +313,9 @@ type Harness string
 const (
 	HarnessCodex  Harness = "codex"
 	HarnessClaude Harness = "claude"
+	// HarnessCopilot names the GitHub Copilot CLI. Repository validation does
+	// not accept it until public selection is enabled.
+	HarnessCopilot Harness = "copilot"
 )
 
 type OverrideName string
