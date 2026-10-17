@@ -630,8 +630,18 @@ func validateCopilotToken(data []byte) error {
 			return errors.New("must hold one token on one line without whitespace")
 		}
 	}
-	return nil
+	for _, prefix := range copilotTokenPrefixes {
+		if strings.HasPrefix(token, prefix) {
+			return nil
+		}
+	}
+	return errors.New("must hold a supported Copilot token (github_pat_, gho_, or ghu_)")
 }
+
+// copilotTokenPrefixes are the token types the Copilot CLI documents as
+// supported. The pinned CLI 1.0.98 ignores COPILOT_GITHUB_TOKEN without one
+// of these prefixes and rejects classic ghp_ tokens (observed offline).
+var copilotTokenPrefixes = []string{"github_pat_", "gho_", "ghu_"}
 
 // seedCredentialFile is the one credential-seeding primitive shared by every
 // harness. It reads one explicit host file, streams its bytes into the

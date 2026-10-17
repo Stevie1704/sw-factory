@@ -347,8 +347,20 @@ func TestDockerRuntimeRefusesAnUnsafeCopilotCredentialSource(t *testing.T) {
 	if err := os.WriteFile(spaced, []byte("token=github_pat one\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The pinned CLI ignores COPILOT_GITHUB_TOKEN without a supported type
+	// prefix and rejects classic tokens (observed offline with 1.0.98).
+	classic := filepath.Join(root, "classic")
+	if err := os.WriteFile(classic, []byte("ghp_classictoken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unprefixed := filepath.Join(root, "unprefixed")
+	if err := os.WriteFile(unprefixed, []byte("plainvalue\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runtime := &worker.DockerRuntime{DockerBinary: stub}
 	for _, test := range []struct{ name, path, problem string }{
+		{name: "classic token", path: classic, problem: "supported Copilot token"},
+		{name: "no token type", path: unprefixed, problem: "supported Copilot token"},
 		{name: "relative", path: "copilot-token", problem: "absolute safe path"},
 		{name: "symlink", path: link, problem: "symbolic link"},
 		{name: "empty", path: empty, problem: "empty"},
@@ -360,8 +372,10 @@ func TestDockerRuntimeRefusesAnUnsafeCopilotCredentialSource(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.problem) {
 				t.Fatalf("SeedCopilotCredentials() error = %v, want %q refusal", err, test.problem)
 			}
-			if strings.Contains(err.Error(), "github_pat") {
-				t.Fatalf("refusal leaked credential content: %v", err)
+			for _, content := range []string{"classictoken", "plainvalue", "pat_one", "pat_two", "pat one"} {
+				if strings.Contains(err.Error(), content) {
+					t.Fatalf("refusal leaked credential content: %v", err)
+				}
 			}
 		})
 	}
