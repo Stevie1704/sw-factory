@@ -128,6 +128,7 @@ func TestParseSupportsHarnessConfigurationForms(t *testing.T) {
 		"/factory config harness=codex",
 		"/factory configure harness=claude",
 		"/factory harness codex",
+		"/factory config harness=copilot",
 	} {
 		parsed, err := command.Parse(body)
 		if err != nil {

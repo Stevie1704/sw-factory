@@ -48,6 +48,9 @@ type AgentRequest struct {
 	// ClaudeAuthPath selects the registered narrow Claude auth source when set;
 	// a distinct one-off source is refused for the same restart-safety reason.
 	ClaudeAuthPath string
+	// CopilotAuthPath selects the registered dedicated Copilot token source
+	// when set; a distinct one-off source is refused for the same reason.
+	CopilotAuthPath string
 	// PermittedPaths constrains production paths in the accepted handoff.
 	PermittedPaths []string
 	// ReviewUnitID optionally selects one persisted exact-checkpoint review unit.

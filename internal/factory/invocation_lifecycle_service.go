@@ -97,7 +97,7 @@ func (s *Service) RefreshAuth(ctx context.Context, request AuthRefreshRequest) (
 	if err := validateOptionalRunID(request.RunID); err != nil {
 		return AuthRefreshResult{}, err
 	}
-	if request.Harness != "" && request.Harness != config.HarnessCodex && request.Harness != config.HarnessClaude {
+	if request.Harness != "" && !config.IsKnownHarness(request.Harness) {
 		return AuthRefreshResult{}, fmt.Errorf("unsupported harness %q", request.Harness)
 	}
 	s.commandMu.Lock()

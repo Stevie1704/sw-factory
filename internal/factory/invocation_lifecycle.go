@@ -1414,6 +1414,8 @@ func (l *invocationLifecycle) credentialSeeding(registration config.RepositoryRe
 		overrideAuthPath = request.CodexAuthPath
 	case config.HarnessClaude:
 		overrideAuthPath = request.ClaudeAuthPath
+	case config.HarnessCopilot:
+		overrideAuthPath = request.CopilotAuthPath
 	}
 	return harnessCredentialSeeding(l.worker, registration, harnessName, overrideAuthPath)
 }

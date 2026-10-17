@@ -2,6 +2,7 @@ package factory_test
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,8 +15,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
-// TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam verifies both
-// production adapters cross only the detached worker protocol and persist a
+// TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam verifies every
+// production adapter cross only the detached worker protocol and persist a
 // harness-native identity without any local-UI dependency.
 func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 	tests := []struct {
@@ -25,6 +26,7 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 	}{
 		{name: "Codex", harness: config.HarnessCodex, model: "gpt-5", command: []string{"codex", "exec", "--json"}},
 		{name: "Claude", harness: config.HarnessClaude, model: "claude-opus-5", command: []string{"claude", "-p", "stream-json", "--verbose", "--session-id"}},
+		{name: "Copilot", harness: config.HarnessCopilot, model: "gpt-5.2", command: []string{"factory-copilot", "-p", "--output-format", "--session-id="}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -41,8 +43,9 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 			policy.ModelOptions["implementation"] = []string{test.model}
 			codexAuth := filepath.Join(t.TempDir(), "auth.json")
 			claudeAuth := filepath.Join(t.TempDir(), ".credentials.json")
+			copilotAuth := filepath.Join(t.TempDir(), "copilot-token")
 			service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{
-				CodexAuthPath: codexAuth, ClaudeAuthPath: claudeAuth,
+				CodexAuthPath: codexAuth, ClaudeAuthPath: claudeAuth, CopilotAuthPath: copilotAuth,
 			})
 
 			launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
@@ -80,6 +83,9 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 			if test.harness == config.HarnessClaude && (len(runtime.claudeSeeds) != 1 || runtime.claudeSeeds[0].AuthPath != claudeAuth) {
 				t.Fatalf("Claude credential seeds = %#v, want registered source", runtime.claudeSeeds)
 			}
+			if test.harness == config.HarnessCopilot && (len(runtime.copilotSeeds) != 1 || runtime.copilotSeeds[0].AuthPath != copilotAuth || len(runtime.codexSeeds)+len(runtime.claudeSeeds) != 0) {
+				t.Fatalf("Copilot credential seeds = %#v, want only the registered Copilot source", runtime.copilotSeeds)
+			}
 
 			refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
 			if err != nil {
@@ -93,6 +99,9 @@ func TestStartAgentLaunchesEveryHarnessThroughTheHeadlessSeam(t *testing.T) {
 			}
 			if test.harness == config.HarnessClaude && (len(runtime.claudeSeeds) != 2 || runtime.claudeSeeds[1].AuthPath != claudeAuth) {
 				t.Fatalf("Claude credential refreshes = %#v, want the registered source reseeded", runtime.claudeSeeds)
+			}
+			if test.harness == config.HarnessCopilot && (len(runtime.copilotSeeds) != 2 || runtime.copilotSeeds[1].AuthPath != copilotAuth) {
+				t.Fatalf("Copilot credential refreshes = %#v, want the registered source reseeded", runtime.copilotSeeds)
 			}
 			resumed, err := service.Resume(context.Background(), factory.ResumeRequest{RunID: launch.Invocation.RunID})
 			if err != nil {
@@ -243,6 +252,116 @@ func TestRefreshAuthExplainsHowToRegisterAMissingCredentialSource(t *testing.T) 
 	}
 }
 
+// copilotRefreshService launches one Copilot implementation invocation and
+// returns the service, the worker double, and the launched run identifier.
+func copilotRefreshService(t *testing.T, authentication config.AuthenticationConfig) (*factory.Service, *agentWorker, *headlessAgentWorker, string) {
+	t.Helper()
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+	policy.ModelOptions["implementation"] = []string{"gpt-5.2"}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, policy, authentication)
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	return service, runtime, headlessWorker, launch.Invocation.RunID
+}
+
+// TestRefreshAuthServesCopilotAndKeepsTheRecordedHarness verifies an explicit
+// Copilot refresh reseeds only the Copilot source, --resume continues the
+// recorded Copilot session, and another harness name is refused before any
+// credential effect.
+func TestRefreshAuthServesCopilotAndKeepsTheRecordedHarness(t *testing.T) {
+	t.Parallel()
+
+	tokenPath := filepath.Join(t.TempDir(), "copilot-token")
+	service, runtime, headlessWorker, runID := copilotRefreshService(t, config.AuthenticationConfig{CopilotAuthPath: tokenPath, ClaudeAuthPath: filepath.Join(t.TempDir(), ".credentials.json")})
+
+	_, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: runID, Harness: config.HarnessClaude})
+	if err == nil || !strings.Contains(err.Error(), `does not match invocation harness "copilot"`) {
+		t.Fatalf("RefreshAuth(claude) error = %v, want recorded-harness mismatch", err)
+	}
+	if len(runtime.claudeSeeds) != 0 || len(runtime.copilotSeeds) != 1 {
+		t.Fatalf("seeds after mismatch = claude %d, copilot %d; want no new projection", len(runtime.claudeSeeds), len(runtime.copilotSeeds))
+	}
+
+	refreshed, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: runID, Harness: config.HarnessCopilot, Resume: true})
+	if err != nil {
+		t.Fatalf("RefreshAuth(copilot, resume) error = %v", err)
+	}
+	if !refreshed.Resumed || refreshed.Harness != config.HarnessCopilot || len(runtime.copilotSeeds) != 2 {
+		t.Fatalf("refresh = %#v with %d Copilot seeds, want one reseed and a Copilot resume", refreshed, len(runtime.copilotSeeds))
+	}
+	last := headlessWorker.headlessStarts[len(headlessWorker.headlessStarts)-1]
+	if last.Mode != worker.HeadlessLaunchResume || !strings.Contains(strings.Join(last.Command, " "), "--resume="+refreshed.Invocation.NativeSessionID) {
+		t.Fatalf("resume launch = %#v, want the recorded Copilot session", last)
+	}
+}
+
+// TestRefreshAuthExplainsHowToRegisterAMissingCopilotSource verifies the
+// remedy names the Copilot registration option.
+func TestRefreshAuthExplainsHowToRegisterAMissingCopilotSource(t *testing.T) {
+	t.Parallel()
+
+	service, _, _, runID := copilotRefreshService(t, config.AuthenticationConfig{})
+	_, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: runID})
+	if err == nil || !strings.Contains(err.Error(), "factory register --update --copilot-auth <path>") {
+		t.Fatalf("RefreshAuth() error = %v, want Copilot registration guidance", err)
+	}
+}
+
+// TestStartAgentRefusesCopilotSelectionsBeforeAnySideEffect verifies a local
+// policy refusal for Copilot starts no worker, projects no credential, and
+// launches no process.
+func TestStartAgentRefusesCopilotSelectionsBeforeAnySideEffect(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mutate  func(*config.RepositoryConfig)
+		request factory.AgentRequest
+	}{
+		{
+			name:    "legacy harness override does not reach copilot",
+			mutate:  func(c *config.RepositoryConfig) { c.AllowedOverrides = []config.OverrideName{config.OverrideHarness} },
+			request: factory.AgentRequest{Harness: config.HarnessCopilot},
+		},
+		{
+			name: "copilot effort outside the CLI set",
+			mutate: func(c *config.RepositoryConfig) {
+				c.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+				c.AllowedOverrides = []config.OverrideName{config.OverrideReasoningEffort}
+			},
+			request: factory.AgentRequest{ReasoningEffort: "extreme"},
+		},
+		{
+			name: "copilot automatic model",
+			mutate: func(c *config.RepositoryConfig) {
+				c.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+				c.AllowedOverrides = []config.OverrideName{config.OverrideModel}
+			},
+			request: factory.AgentRequest{Model: "auto"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, runStore, runtime, _ := newAgentService(t)
+			headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+			policy := validRepositoryConfig()
+			test.mutate(&policy)
+			service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CopilotAuthPath: filepath.Join(t.TempDir(), "copilot-token")})
+
+			_, err := service.StartAgent(context.Background(), test.request)
+			var rejection *factory.PolicyRejection
+			if !errors.As(err, &rejection) {
+				t.Fatalf("StartAgent() error = %v, want a typed policy rejection", err)
+			}
+			if len(runtime.starts) != 0 || len(runtime.copilotSeeds) != 0 || len(headlessWorker.headlessStarts) != 0 || len(runStore.invocations) != 0 {
+				t.Fatalf("side effects after refusal: workers %d, seeds %d, launches %d, invocations %d", len(runtime.starts), len(runtime.copilotSeeds), len(headlessWorker.headlessStarts), len(runStore.invocations))
+			}
+		})
+	}
+}
+
 // headlessAgentWorker adds the detached process extension to the coordinator
 // test worker and replays the launched session identity the way Claude Code
 // confirms it in stream-json output.
@@ -273,10 +392,18 @@ func (w *headlessAgentWorker) InspectHeadless(context.Context, worker.HeadlessRe
 		if (argument == "--session-id" || argument == "--resume" || argument == "resume") && index+1 < len(command) {
 			identity = command[index+1]
 		}
+		for _, prefix := range []string{"--session-id=", "--resume="} {
+			if value, found := strings.CutPrefix(argument, prefix); found {
+				identity = value
+			}
+		}
 	}
 	output := `{"type":"thread.started","thread_id":"` + identity + `"}` + "\n"
 	if len(command) > 0 && command[0] == "claude" {
 		output = `{"type":"system","subtype":"init","session_id":"` + identity + `"}` + "\n"
+	}
+	if len(command) > 0 && command[0] == "factory-copilot" {
+		output = `{"sessionId":"` + identity + `"}` + "\n"
 	}
 	return worker.HeadlessInspection{
 		Status: worker.HeadlessStatusRunning,

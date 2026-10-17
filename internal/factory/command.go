@@ -64,6 +64,9 @@ const (
 	// PolicyRejectionReasoningEffortOverride means the requested reasoning
 	// effort is outside the role's repository-declared options.
 	PolicyRejectionReasoningEffortOverride PolicyRejectionCode = "reasoning_effort_override"
+	// PolicyRejectionSelectionUnsupported means the selected harness would
+	// refuse the model or reasoning effort, or replace it with its own choice.
+	PolicyRejectionSelectionUnsupported PolicyRejectionCode = "harness_selection_unsupported"
 	// PolicyRejectionCancelState means cancellation is not legal for the run.
 	PolicyRejectionCancelState PolicyRejectionCode = "cancel_state"
 	// PolicyRejectionAnswerState means the run is not waiting for clarification.
@@ -1546,12 +1549,12 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 		return CommandResult{}, err
 	}
 	wanted := config.Harness(parsed.Harness)
-	if wanted != config.HarnessCodex && wanted != config.HarnessClaude {
+	if !config.IsKnownHarness(wanted) {
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessUnavailable, Problem: fmt.Sprintf("harness %q is not available for the current implementation role", wanted)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	defaultHarness := packet.RepositoryConfig.RoleHarnessDefaults[workflow.RoleImplementation]
-	if wanted != defaultHarness && !hasOverride(packet.RepositoryConfig.AllowedOverrides, config.OverrideHarness) {
+	if wanted != defaultHarness && !packet.RepositoryConfig.AllowsHarnessOverrideTo(wanted) {
 		rejection := &PolicyRejection{Code: PolicyRejectionHarnessOverride, Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q", defaultHarness, wanted)}
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}

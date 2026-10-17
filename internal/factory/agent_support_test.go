@@ -201,6 +201,7 @@ type agentWorker struct {
 	commands                []worker.CommandRequest
 	results                 []worker.CommandResult
 	codexSeeds, claudeSeeds []worker.CredentialSeedRequest
+	copilotSeeds            []worker.CredentialSeedRequest
 	inspectResult           *worker.Inspection
 	inspectErr, seedErr     error
 	// nextCommandErr is returned once by the next command instead of a result.
@@ -262,6 +263,12 @@ func (w *agentWorker) SeedClaudeCredentials(_ context.Context, request worker.Cr
 	return w.seedErr
 }
 
+// SeedCopilotCredentials records one Copilot token projection.
+func (w *agentWorker) SeedCopilotCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
+	w.copilotSeeds = append(w.copilotSeeds, request)
+	return w.seedErr
+}
+
 // agentHarness records detached harness operations.
 type agentHarness struct {
 	starts, resumes     []harness.StartRequest
@@ -306,10 +313,10 @@ func (*agentHarness) InspectHeadless(context.Context, harness.HeadlessInspection
 // CancelHeadless accepts fixture cancellation.
 func (*agentHarness) CancelHeadless(context.Context, harness.HeadlessSession) error { return nil }
 
-// testHeadlessHarnesses maps both supported names to one recording adapter.
+// testHeadlessHarnesses maps every supported name to one recording adapter.
 func testHeadlessHarnesses(runtime *agentHarness) map[config.Harness]harness.HeadlessRuntime {
 	return map[config.Harness]harness.HeadlessRuntime{
-		config.HarnessCodex: runtime, config.HarnessClaude: runtime,
+		config.HarnessCodex: runtime, config.HarnessClaude: runtime, config.HarnessCopilot: runtime,
 	}
 }
 
