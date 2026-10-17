@@ -355,7 +355,7 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 		return e.halt(ctx, index, store.PublicationOperationAmbiguous, detail)
 	case operation.State == store.PublicationOperationAttempted || operation.State == store.PublicationOperationAmbiguous:
 		detail := fmt.Sprintf("an earlier create has an unknown outcome and no tracker item carries correlation %s; "+
-			"confirm that none exists or adopt the item through reconciliation", operation.Correlation)
+			"confirm that none exists or adopt the item through reconciliation%s", operation.Correlation, e.lookupBound())
 		return e.halt(ctx, index, store.PublicationOperationAmbiguous, detail)
 	}
 	if err := e.reserve(ctx, index); err != nil {
@@ -368,8 +368,20 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 	case tracker.WriteNotApplied(err):
 		return e.halt(ctx, index, store.PublicationOperationFailed, fmt.Sprintf("create made no change: %v", err))
 	default:
-		return e.halt(ctx, index, store.PublicationOperationAmbiguous, fmt.Sprintf("create outcome is unknown: %v; retry reconciles before it creates again", err))
+		return e.halt(ctx, index, store.PublicationOperationAmbiguous, fmt.Sprintf("create outcome is unknown: %v; retry reconciles before it creates again%s", err, e.lookupBound()))
 	}
+}
+
+// lookupBound returns the note that names the items a bounded correlation
+// lookup reads, or nothing for a lookup that reads the whole tracker. An
+// item outside the bound is not found, so the operator must check the
+// tracker before confirming that no item exists.
+func (e *execution) lookupBound() string {
+	bounded, ok := e.publisher.Tracker.(tracker.BoundedPlanLookup)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("; the lookup reads only %s, so check the tracker for an older item before you confirm that none exists", bounded.PlanLookupBound())
 }
 
 // createRelationship verifies and, when it is absent, creates the

@@ -626,3 +626,37 @@ func TestInterruptDerivesTheOutcomeFromTheLedger(t *testing.T) {
 		t.Fatalf("session = %s, receipt = %#v; want published with three items and three links", session.State, recorded)
 	}
 }
+
+// boundedLookupForTest is a tracker whose correlation lookup reads only
+// part of the tracker.
+type boundedLookupForTest struct {
+	*trackertest.PlanTracker
+}
+
+// PlanLookupBound describes the scripted lookup window.
+func (boundedLookupForTest) PlanLookupBound() string {
+	return "the 1,000 newest items"
+}
+
+// TestAmbiguousCreateNamesTheLookupBoundBeforeConfirmation verifies that an
+// unknown create outcome with no match tells the operator which items the
+// lookup read, so that the operator checks older items before confirming
+// that none exists.
+func TestAmbiguousCreateNamesTheLookupBoundBeforeConfirmation(t *testing.T) {
+	t.Parallel()
+
+	h := newApprovedHarness(t)
+	h.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
+	if _, err := h.publisherWith(h.store, boundedLookupForTest{h.fake}).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.operation("item/n-2"); !strings.Contains(got.Detail, "the lookup reads only the 1,000 newest items") {
+		t.Fatalf("item/n-2 after the timeout = %#v, want the lookup bound named", got)
+	}
+	if _, err := h.publisherWith(h.store, boundedLookupForTest{h.fake}).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.operation("item/n-2"); got.State != store.PublicationOperationAmbiguous || !strings.Contains(got.Detail, "the lookup reads only the 1,000 newest items") {
+		t.Fatalf("item/n-2 = %#v, want the lookup bound named before confirmation", got)
+	}
+}

@@ -388,8 +388,10 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 	assertReadOnly(t, runner.calls)
 }
 
-// TestFindPlanItemsStopsAtItsListingBound verifies that the lookup reads at
-// most ten full pages and stops early on a short page.
+// TestFindPlanItemsStopsAtItsListingBound verifies that the lookup reads the
+// 1,000 newest issues of the account, ten full pages without pull requests,
+// that pull requests in the listing do not count toward the bound, and that
+// it stops early on a short page.
 func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
 	t.Parallel()
 
@@ -412,6 +414,31 @@ func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
 	if len(full.calls) != 11 {
 		t.Fatalf("calls = %d, want the account and ten pages", len(full.calls))
 	}
+
+	mixed := &fakeCommandRunner{outputs: [][]byte{[]byte(`{"login":"factory-bot"}`)}}
+	for page := range 25 {
+		mixed.outputs = append(mixed.outputs, []byte(mixedListPage(page*100+1)))
+	}
+	if _, err := (&github.GhClient{Runner: mixed}).FindPlanItems(context.Background(), planRepository, "session-1/4/n-2"); err != nil {
+		t.Fatalf("FindPlanItems() error = %v", err)
+	}
+	if len(mixed.calls) != 21 {
+		t.Fatalf("calls = %d, want the account and twenty half-pull-request pages, which hold 1,000 issues", len(mixed.calls))
+	}
+}
+
+// mixedListPage returns one full listing page whose first 50 entries are
+// pull requests and whose last 50 are issues without the marker.
+func mixedListPage(first int) string {
+	entries := make([]string, 0, 100)
+	for number := first; number < first+100; number++ {
+		pull := ""
+		if number < first+50 {
+			pull = `,"pull_request":{}`
+		}
+		entries = append(entries, `{"number":`+strconv.Itoa(number)+`,"body":"other","user":{"login":"factory-bot"}`+pull+`}`)
+	}
+	return "[" + strings.Join(entries, ",") + "]"
 }
 
 // issueRefs returns the neutral references of two created issues.
@@ -638,5 +665,21 @@ func TestPartialLinkFailureIsVerifiedBeforeARetry(t *testing.T) {
 	exists, err := client.FindPlanRelationship(context.Background(), planRepository, link)
 	if err != nil || !exists {
 		t.Fatalf("FindPlanRelationship() = %t, %v; want the link GitHub created", exists, err)
+	}
+}
+
+// TestGitHubNamesItsCorrelationLookupBound verifies that the GitHub adapter
+// tells publication which issues its correlation lookup reads, so the
+// operator sees the bound before confirming that no issue exists.
+func TestGitHubNamesItsCorrelationLookupBound(t *testing.T) {
+	t.Parallel()
+
+	var publisher tracker.PlanPublisher = &github.GhClient{}
+	bounded, ok := publisher.(tracker.BoundedPlanLookup)
+	if !ok {
+		t.Fatal("GhClient does not describe its bounded correlation lookup")
+	}
+	if got := bounded.PlanLookupBound(); got != "the 1,000 newest issues that the authenticated account created in the repository" {
+		t.Fatalf("PlanLookupBound() = %q", got)
 	}
 }
