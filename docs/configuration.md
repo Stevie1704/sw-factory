@@ -1332,7 +1332,10 @@ Session commands (ADR 0021, ADR 0024):
   no second role. `edit_draft` passes plan validation before
   the coordinator saves it.
 - `approve` names the digests of a preview that `preview_plan` rendered,
-  because only the coordinator talks to the tracker. Publication needs a
+  because only the coordinator talks to the tracker. When the approval is
+  recorded but publication does not start, for example because the tracker
+  refused its preflight, the outcome is `applied` and names the cause; the
+  session stays approved, and the page offers publish instead of approve. Publication needs a
   tracker adapter with plan publication; otherwise the command is
   `unsupported`. Publication never adds `agent-ready` and never starts a run.
 - `GET /api/sessions` lists the sessions of the registered repository, and

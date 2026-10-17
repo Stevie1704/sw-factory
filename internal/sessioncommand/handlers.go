@@ -499,7 +499,9 @@ func previewPlan(ctx context.Context, env Env, command store.IdeationCommand) (O
 // approve records an approval that binds the previewed publication, with the
 // request ID as approval ID, and then publishes it. A changed rendering is
 // refused before any tracker write. A resumed command whose approval exists
-// continues with publication.
+// continues with publication. When the approval is recorded but publication
+// does not start, the approval stands: the outcome is applied and names why
+// publication did not start.
 func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -521,7 +523,27 @@ func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 			return Outcome{}, err
 		}
 	}
-	return publishAttempt(ctx, env, command)
+	outcome, err := publishAttempt(ctx, env, command)
+	if err == nil || ctx.Err() != nil || store.IsTransient(err) {
+		return outcome, err
+	}
+	return approvedWithoutPublication(ctx, env, command, err)
+}
+
+// approvedWithoutPublication returns the applied outcome of an approval whose
+// publication did not start, with the cause and the next actions. A session
+// that left approved, for example because publication started, keeps cause
+// as the error, so the dispatcher settles the publication attempt.
+func approvedWithoutPublication(ctx context.Context, env Env, command store.IdeationCommand, cause error) (Outcome, error) {
+	session, err := env.Store.IdeationSession(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, errors.Join(cause, err)
+	}
+	if session.State != store.IdeationStateApproved || session.ApprovalID != command.RequestID {
+		return Outcome{}, cause
+	}
+	return Applied(session, "plan approved, but publication did not start: "+cause.Error()+
+		"; fix the cause and publish the approved plan, or edit the draft to review a new revision"), nil
 }
 
 // recordApproval checks plan validation and the preview digests against a
