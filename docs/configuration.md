@@ -1314,9 +1314,11 @@ Session commands (ADR 0021, ADR 0024):
   HTTP 409 `request_reused`. A stale revision gets HTTP 409 `conflict` with
   the expected and the current revision; reload the session and decide again.
 - When the supervisor heartbeat is missing or expired, a new command gets HTTP
-  503 with the outcome `unavailable` and nothing is stored. The UI never
-  starts a second writer. Run `factory start` and submit again. Read-only
-  pages and session reads keep working.
+  503 with the outcome `unavailable` and nothing is stored. A clean
+  coordinator stop records a heartbeat that expires at once, so this answer
+  starts at the stop. The UI never starts a second writer. Run
+  `factory start` and submit again. Read-only pages and session reads keep
+  working.
 - `submit_turn` starts the ideation role for the accepted turn; its optional
   `corrects` names the earlier user answer it changes. `hand_off` names the
   brief revision the page showed and lists every unresolved question of it in

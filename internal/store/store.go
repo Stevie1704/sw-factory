@@ -1501,8 +1501,10 @@ func validateSupervisorHeartbeat(heartbeat SupervisorHeartbeat) error {
 	if heartbeat.StartedAt.IsZero() || heartbeat.RenewedAt.IsZero() || heartbeat.ExpiresAt.IsZero() {
 		return errors.New("supervisor heartbeat timestamps are required")
 	}
-	if !heartbeat.ExpiresAt.After(heartbeat.RenewedAt) {
-		return errors.New("supervisor heartbeat expiry must follow renewal")
+	// A clean stop records ExpiresAt equal to RenewedAt: the coordinator stays
+	// observable and is no longer live.
+	if heartbeat.ExpiresAt.Before(heartbeat.RenewedAt) {
+		return errors.New("supervisor heartbeat expiry must not precede renewal")
 	}
 	return nil
 }
