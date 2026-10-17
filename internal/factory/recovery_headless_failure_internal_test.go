@@ -418,27 +418,28 @@ func TestAutomaticResumeIsBoundedToOnePerInvocation(t *testing.T) {
 // invocation relaunches, resumes, cancels, and finishes no Copilot process,
 // the invocation stays completed, and the run stays active.
 func TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect(t *testing.T) {
-	assertRestartAfterReportAcceptanceRepeatsNoEffect(t, config.HarnessCopilot)
+	assertRestartAfterReportAcceptanceIsANoOp(t, config.HarnessCopilot)
 }
 
 // TestCoordinatorRestartAfterAnAcceptedImplementationReportKeepsTheRunActive
 // verifies the clean-implementation startup rule is harness-neutral: a run
 // without an independent test stage whose implementation report was accepted
-// is a healthy run awaiting its checkpoint, not an interrupted one.
+// is a healthy run awaiting its checkpoint, not an interrupted one. Copilot
+// runs the same check through the test above, which its acceptance doc cites.
 func TestCoordinatorRestartAfterAnAcceptedImplementationReportKeepsTheRunActive(t *testing.T) {
 	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude} {
 		t.Run(string(harnessName), func(t *testing.T) {
-			assertRestartAfterReportAcceptanceRepeatsNoEffect(t, harnessName)
+			assertRestartAfterReportAcceptanceIsANoOp(t, harnessName)
 		})
 	}
 }
 
-// assertRestartAfterReportAcceptanceRepeatsNoEffect accepts a completed
+// assertRestartAfterReportAcceptanceIsANoOp accepts a completed
 // implementation report for the given harness, restarts the coordinator, and
 // verifies the restart touches no process and leaves the run active at the
 // implementation stage. The fixture declares no independent test stage, so
 // implementation is a clean start boundary for it.
-func assertRestartAfterReportAcceptanceRepeatsNoEffect(t *testing.T, harnessName config.Harness) {
+func assertRestartAfterReportAcceptanceIsANoOp(t *testing.T, harnessName config.Harness) {
 	t.Helper()
 	fixture := newHeadlessRecoveryFixture(t, harnessName, recoverySessionID)
 	processes := &headlessProcessRecoveryWorker{headlessRecoveryWorker: fixture.worker, harness: harnessName, onLaunch: runningProcess(harnessName)}

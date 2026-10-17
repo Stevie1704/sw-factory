@@ -667,7 +667,8 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 // a clean-stage launch may be the second attempt at an already accepted report.
 // A completed implementation invocation does not block: its acceptance
 // committed the declared implementation/active transition in the same step,
-// and progression continues with the checkpoint, not a second launch.
+// progression continues with the checkpoint, and validateLaunchHistory still
+// refuses a second implementation launch over that history.
 func invocationBlocksCleanStart(run store.Run, invocation store.Invocation) bool {
 	switch run.Stage {
 	case store.StageClaim:
