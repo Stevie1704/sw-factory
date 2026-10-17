@@ -342,6 +342,8 @@ func credentialHarnessLabel(harnessName string) string {
 		return string(config.HarnessCodex)
 	case config.HarnessClaude:
 		return string(config.HarnessClaude)
+	case config.HarnessCopilot:
+		return string(config.HarnessCopilot)
 	default:
 		return "harness"
 	}

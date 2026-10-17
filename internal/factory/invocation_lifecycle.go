@@ -1436,6 +1436,11 @@ func harnessCredentialSeeding(workerRuntime worker.WorkerRuntime, registration c
 		if seeder, ok := workerRuntime.(worker.ClaudeCredentialSeeder); ok {
 			seed = seeder.SeedClaudeCredentials
 		}
+	case config.HarnessCopilot:
+		registeredAuthPath = registration.Authentication.CopilotAuthPath
+		if seeder, ok := workerRuntime.(worker.CopilotCredentialSeeder); ok {
+			seed = seeder.SeedCopilotCredentials
+		}
 	}
 	if overrideAuthPath != "" && (registeredAuthPath == "" || filepath.Clean(overrideAuthPath) != filepath.Clean(registeredAuthPath)) {
 		return nil, "", fmt.Errorf("%s auth source override is not restart-safe; configure the source on the registered repository", harnessName)

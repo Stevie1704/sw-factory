@@ -32,7 +32,7 @@ var resetRetainedResources = []string{
 	"installed factory, factory-report, and factory-worker-headless binaries",
 	"Docker worker images",
 	"repository-declared cache directories",
-	"host Codex and Claude credential sources and host harness state",
+	"host Codex, Claude, and Copilot credential sources and host harness state",
 	"GitHub label definitions, issues, pull requests, reviews, comments, commit statuses, and merged history",
 	"remote factory/* branches",
 }

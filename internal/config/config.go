@@ -134,6 +134,11 @@ type AuthenticationConfig struct {
 	// file. A macOS host keeps this credential in the login Keychain rather
 	// than a file, so the path is declared only where a file exists.
 	ClaudeAuthPath string `yaml:"claude_auth_path"`
+	// CopilotAuthPath is an optional host path to one file holding the
+	// dedicated GitHub Copilot CLI token. It is never the host gh login,
+	// GH_TOKEN, GITHUB_TOKEN, or ~/.copilot state. Registration does not set
+	// or validate it until public Copilot selection is enabled.
+	CopilotAuthPath string `yaml:"copilot_auth_path,omitempty"`
 }
 
 type RepositoryConfig struct {
