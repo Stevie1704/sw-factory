@@ -1,0 +1,23 @@
+Usage: copilot skill <COMMAND>
+
+Manage skills available to Copilot.
+
+Skills are reusable instructions (SKILL.md files) that extend Copilot with
+specialized capabilities. They are discovered from several sources:
+  Project   .github/skills/, .agents/skills/, or .claude/skills/
+  Personal  ~/.copilot/skills/ or ~/.agents/skills/
+  Plugin    Installed plugins that bundle skills
+  Custom    Directories added with `copilot skill add <directory>`
+
+Use `copilot skill add` to add a skill from a file, URL, or directory.
+
+Commands:
+  list     List available skills
+  add      Add a skill from a file, URL, or directory
+  remove   Remove a skill or custom skill directory
+  enable   Enable a skill
+  disable  Disable a skill
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')

@@ -1,0 +1,145 @@
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session 00000000-0000-4000-8000-000000000001"}
+<TIMESTAMP> [INFO] Workspace initialized: 00000000-0000-4000-8000-000000000001 (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] Session 00000000-0000-4000-8000-000000000001 could not be loaded: Error: Cannot create session from empty events array
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session 00000000-0000-4000-8000-000000000001"}
+<TIMESTAMP> [INFO] Workspace initialized: 00000000-0000-4000-8000-000000000001 (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] Session 00000000-0000-4000-8000-000000000001 could not be loaded: Error: Cannot create session from empty events array
+<TIMESTAMP> [ERROR] Error: No session, task, or name matched '00000000-0000-4000-8000-000000000001'.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [ERROR] Error: No session, task, or name matched '00000000-0000-4000-8000-0000000000ff'.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [ERROR] Error: No session or task matched 'factory-missing-name'.
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session aaaaaaa1-0000-4000-8000-000000000001"}
+<TIMESTAMP> [INFO] Workspace initialized: aaaaaaa1-0000-4000-8000-000000000001 (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session aaaaaaa1-0000-4000-8000-000000000002"}
+<TIMESTAMP> [INFO] Workspace initialized: aaaaaaa1-0000-4000-8000-000000000002 (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [ERROR] Error: No session, task, or name matched 'aaaaaaa1'.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session 00000000-0000-4000-8000-0000000000cc"}
+<TIMESTAMP> [INFO] Workspace initialized: 00000000-0000-4000-8000-0000000000cc (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] resume-auto-cd: loadWorkspace(00000000-0000-4000-8000-0000000000cc) failed: Error: Failed to load workspace from /copilot/session-state/00000000-0000-4000-8000-0000000000cc/workspace.yaml: Error: Invalid YAML: did not find expected ',' or '}' at line 2 column 1, while parsing a flow mapping
+<TIMESTAMP> [WARNING] Session 00000000-0000-4000-8000-0000000000cc could not be loaded: Error: Cannot create session from empty events array
+<TIMESTAMP> [ERROR] Error: No session, task, or name matched '00000000-0000-4000-8000-0000000000cc'.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] Failed to fetch release list: request failed: error sending request for url (https://api.github.com/repos/github/copilot-cli/releases?per_page=100): error sending request for url (https://api.github.com/repos/github/copilot-cli/releases?per_page=100): client error (Connect): dns error: error resolving DNS: failed to lookup address information: Temporary failure in name resolution
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] Authentication token validation failed: Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Failed to fetch GitHub CLI user login: network fetch failed: request failed: error sending request for url (https://api.github.com/copilot_internal/user)
+<TIMESTAMP> [ERROR] [rust:copilot_runtime::auth::manager_orchestration] Unsupported token type, ignoring.
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [userSettings] Ignoring unknown top-level key(s) in user settings file "/copilot/settings.json": "remote". They are not recognized user settings and have no effect.
+<TIMESTAMP> [WARNING] [rust:copilot_runtime::session::pending_request_flow] event was not delivered to its registered session host {"error":"GenericFailure, no session host is registered for session <GENERATED-UUID>"}
+<TIMESTAMP> [INFO] Workspace initialized: <GENERATED-UUID> (checkpoints: 0)
+<TIMESTAMP> [INFO] Starting Copilot CLI: 1.0.98
+<TIMESTAMP> [INFO] Node.js version: v24.20.0
+<TIMESTAMP> [ERROR] No authentication information found.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget
+<TIMESTAMP> [WARNING] [userSettings] Ignoring unknown top-level key(s) in user settings file "/copilot/settings.json": "remote". They are not recognized user settings and have no effect.
+<TIMESTAMP> [WARNING] Session 00000000-0000-4000-8000-000000000001 could not be loaded: Error: Cannot create session from empty events array
+<TIMESTAMP> [ERROR] Error: No session, task, or name matched '00000000-0000-4000-8000-000000000001'.
+<TIMESTAMP> [WARNING] CAFE metrics startup did not settle within the shutdown budget

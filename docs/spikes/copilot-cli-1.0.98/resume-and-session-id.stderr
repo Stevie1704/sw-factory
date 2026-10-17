@@ -1,0 +1,5 @@
+error: the argument '--resume [<value>]' cannot be used with '--session-id <id>'
+
+Usage: copilot --prompt <text> --output-format <format> --allow-all-tools --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions --resume [<value>]
+
+For more information, try '--help'.
