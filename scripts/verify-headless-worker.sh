@@ -20,6 +20,13 @@ WORKER_REFERENCE="$1"
 temporary_root="$(mktemp -d "$REPOSITORY_ROOT/.headless-verify.XXXXXX")"
 fake_codex="$temporary_root/codex"
 fake_claude="$temporary_root/claude"
+fake_copilot="$temporary_root/copilot"
+# A sentinel, not a credential: it proves the launcher's projection path and
+# fails GitHub validation if the real CLI ever sends it. It carries a
+# supported token-type prefix because the pinned CLI ignores
+# COPILOT_GITHUB_TOKEN without one (observed offline with 1.0.98).
+copilot_token="$temporary_root/copilot-token"
+copilot_sentinel="github_pat_factory_verification_sentinel_not_a_token"
 results_directory="$temporary_root/results"
 container_name="factory-headless-verify-$$"
 
@@ -210,15 +217,120 @@ esac
 EOF
 chmod 0755 "$fake_claude"
 
+cat > "$fake_copilot" <<'EOF'
+#!/bin/sh
+
+# This executable stands in for the pinned Copilot CLI behind the real
+# in-image launcher factory-copilot. It refuses a launch the launcher did not
+# prepare: the sentinel token must arrive only as COPILOT_GITHUB_TOKEN, no
+# other GitHub token or Copilot control may survive, and the private Copilot
+# home must hold the managed settings and the curated skills. It preserves the
+# exact prompt, emits the adapter's provisional identity evidence, and uses
+# the real in-image report command for completion.
+set -eu
+
+for terminal_binary in cmux tmux; do
+  if command -v "$terminal_binary" >/dev/null 2>&1; then
+    echo "headless Copilot unexpectedly resolved $terminal_binary" >&2
+    exit 1
+  fi
+done
+if [ -t 0 ] || [ -t 1 ] || [ -t 2 ]; then
+  echo "headless Copilot unexpectedly inherited a TTY" >&2
+  exit 1
+fi
+
+session=""
+prompt=""
+resume=0
+output_format=""
+for argument in "$@"; do
+  case "$argument" in
+    --prompt=*) prompt="${argument#--prompt=}" ;;
+    --output-format=*) output_format="${argument#--output-format=}" ;;
+    --session-id=*) session="${argument#--session-id=}" ;;
+    --resume=*)
+      resume=1
+      session="${argument#--resume=}"
+      ;;
+    --allow-all|--yolo|--allow-all-paths|--allow-all-urls|--continue|--resume|--remote|--share*|--add-dir*|--plugin-dir*)
+      echo "headless Copilot received a forbidden option" >&2
+      exit 1
+      ;;
+  esac
+done
+
+test "$output_format" = "json"
+test -n "$session"
+test "${COPILOT_GITHUB_TOKEN:-}" = "github_pat_factory_verification_sentinel_not_a_token"
+test "${COPILOT_HOME:-}" = /home/factory/.copilot
+test "${COPILOT_AUTO_UPDATE:-}" = false
+test -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}${COPILOT_ALLOW_ALL:-}"
+cmp -s /usr/local/share/factory-copilot/settings.json "$COPILOT_HOME/settings.json"
+test -s "$COPILOT_HOME/skills/implement/SKILL.md"
+printf '%s\n' "loaded" > /results/headless-verification-skill
+if [ "$resume" -eq 1 ]; then
+  printf '%s' "$prompt" > /results/headless-verification-resume-prompt
+else
+  printf '%s' "$prompt" > /results/headless-verification-prompt
+fi
+printf '{"sessionId":"%s"}\n' "$session"
+
+case "${FAKE_HARNESS_MODE:-complete}" in
+  complete)
+    /usr/local/bin/factory-report \
+      --outcome completed \
+      --summary "headless Docker lifecycle verification" \
+      --change-summary "verified the worker lifecycle" \
+      --acceptance "lifecycle=real Docker verification" \
+      --focused-command "scripts/verify-headless-worker.sh" \
+      --native-session-id "$session"
+    ;;
+  hold)
+    # Ignore TERM so the worker helper must prove its SIGKILL escalation path.
+    trap '' TERM
+    while :; do
+      sleep 1
+    done
+    ;;
+  *)
+    echo "unknown FAKE_HARNESS_MODE" >&2
+    exit 2
+    ;;
+esac
+EOF
+chmod 0755 "$fake_copilot"
+printf '%s\n' "$copilot_sentinel" > "$copilot_token"
+# The launcher runs as the worker user and reads the projection like the
+# factory-managed 0444 copy.
+chmod 0444 "$copilot_token"
+
+# An image built before the Copilot harness has no launcher. It stays
+# verifiable for Codex and Claude, and the Copilot checks say they did not run.
+copilot_supported=no
+if "$DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh \
+    "$WORKER_REFERENCE" -c 'test -x /usr/local/bin/factory-copilot' >/dev/null 2>&1; then
+  copilot_supported=yes
+fi
+
+set -- --mount "type=bind,src=$fake_codex,dst=/tmp/factory-verification-codex,readonly" \
+  --mount "type=bind,src=$fake_claude,dst=/tmp/factory-verification-claude,readonly" \
+  --mount "type=bind,src=$results_directory,dst=/results"
+if [ "$copilot_supported" = yes ]; then
+  # The fake replaces only the network-facing CLI; the launcher under test is
+  # the image's own factory-copilot.
+  set -- "$@" \
+    --mount "type=bind,src=$fake_copilot,dst=/usr/local/bin/copilot,readonly" \
+    --mount "type=bind,src=$copilot_token,dst=/run/factory-auth/copilot-token,readonly"
+fi
+
 echo "Starting headless verification container from $WORKER_REFERENCE"
 "$DOCKER" run -d --pull=never \
   --name "$container_name" \
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --network none \
-  --mount "type=bind,src=$fake_codex,dst=/tmp/factory-verification-codex,readonly" \
-  --mount "type=bind,src=$fake_claude,dst=/tmp/factory-verification-claude,readonly" \
-  --mount "type=bind,src=$results_directory,dst=/results" \
+  "$@" \
   --workdir /work \
   "$WORKER_REFERENCE" sleep infinity >/dev/null
 
@@ -290,6 +402,16 @@ harness_command() {
           --session-id "$session" "$prompt"
       fi
       ;;
+    copilot)
+      printf '%s\n' factory-copilot "--prompt=$prompt" --output-format=json --allow-all-tools \
+        --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps \
+        --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN
+      if [ "$resume" = yes ]; then
+        printf '%s\n' "--resume=$session"
+      else
+        printf '%s\n' "--session-id=$session"
+      fi
+      ;;
   esac
 }
 
@@ -314,7 +436,15 @@ run_headless() {
   # shellcheck disable=SC2046
   set -- "$@" $(harness_command "$harness" "$replace" "$session" "$prompt")
   IFS="$original_ifs"
-  "$DOCKER" exec -d \
+  # A host token or a trust switch in the caller's environment must not reach
+  # Copilot; the launcher removes both. Only this verification plants them,
+  # because the coordinator's worker policy already refuses token variables.
+  planted=""
+  if [ "$harness" = copilot ]; then
+    planted="--env GH_TOKEN=planted-host-token --env COPILOT_ALLOW_ALL=true"
+  fi
+  # shellcheck disable=SC2086
+  "$DOCKER" exec -d $planted \
     --env "FACTORY_INVOCATION_ID=$invocation_id" \
     --env FACTORY_RUN_ID=headless-verification-run \
     --env "FACTORY_HARNESS=$harness" \
@@ -412,9 +542,69 @@ SETTINGS"
   echo "  worktree-declared hooks refused and every curated worker skill loaded"
 }
 
+# assert_copilot_launcher_contract runs the image's real launcher and pinned
+# Copilot CLI in disposable offline containers. It needs no credential: a
+# missing projection fails in the launcher, and the sentinel reaches the
+# CLI's own token validation, which proves the projected token, not a host or
+# gh credential, is the one the CLI read. Live suppression of repository
+# hooks, MCP servers, plugins, and instructions stays release blocker RB-7.
+assert_copilot_launcher_contract() {
+  echo "Verifying the pinned Copilot CLI behind factory-copilot"
+  copilot_session=6c2b8e4f-1d3a-4b7c-9e5f-0a8d2c4b6e19
+  set -- run --rm --pull=never --cap-drop ALL --security-opt no-new-privileges --network none \
+    --workdir /work --entrypoint /bin/sh
+
+  missing_status=0
+  missing_stderr="$("$DOCKER" "$@" "$WORKER_REFERENCE" -c 'factory-copilot --version 2>&1 >/dev/null')" || missing_status=$?
+  if [ "$missing_status" -ne 78 ] || [ "$missing_stderr" != "factory-copilot: credential unavailable" ]; then
+    echo "factory-copilot without a credential did not report the one seam line" >&2
+    exit 1
+  fi
+
+  # The planted user-level MCP file and settings must not survive the launch,
+  # project skills must stay hidden, and the CLI must stay on its pinned
+  # release with no downloaded update.
+  probe='set -eu
+mkdir -p /home/factory/.copilot /work/.github/skills/planted-repository-skill
+printf "{\"mcpServers\":{\"planted\":{\"command\":\"/bin/false\"}}}\n" > /home/factory/.copilot/mcp-config.json
+printf "{\"disableAllHooks\":false}\n" > /home/factory/.copilot/settings.json
+printf -- "---\nname: planted-repository-skill\ndescription: planted\n---\nbody\n" \
+  > /work/.github/skills/planted-repository-skill/SKILL.md
+status=0
+factory-copilot --prompt=noop --output-format=json --allow-all-tools --no-ask-user --no-auto-update \
+  --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions \
+  --secret-env-vars=COPILOT_GITHUB_TOKEN --session-id='"$copilot_session"' \
+  >/tmp/copilot.stdout 2>/tmp/copilot.stderr || status=$?
+test "$status" -eq 1
+test ! -s /tmp/copilot.stdout
+test "$(head -n 1 /tmp/copilot.stderr)" = "Error: Authentication token found but could not be validated."
+if grep -q "'"$copilot_sentinel"'" /tmp/copilot.stderr; then exit 1; fi
+test ! -e /home/factory/.copilot/mcp-config.json
+cmp -s /usr/local/share/factory-copilot/settings.json /home/factory/.copilot/settings.json
+test "$(ls /home/factory/.cache/copilot/pkg/*/)" = "$(copilot --version | sed -n "s/^GitHub Copilot CLI \(.*\)\.$/\1/p")"
+factory-copilot skill list > /tmp/copilot.skills
+if grep -q planted-repository-skill /tmp/copilot.skills; then exit 1; fi
+for skill in $(ls /home/factory/.copilot/skills); do
+  grep -q "$skill" /tmp/copilot.skills
+done'
+  if ! "$DOCKER" "$@" \
+      --mount "type=bind,src=$copilot_token,dst=/run/factory-auth/copilot-token,readonly" \
+      "$WORKER_REFERENCE" -c "$probe"; then
+    echo "the pinned Copilot CLI behind factory-copilot broke the worker contract" >&2
+    exit 1
+  fi
+  echo "  credential refusal, token projection, managed settings, pinned release, and curated skills verified"
+}
+
 verify_harness codex headless-verification-session '"type":"thread.started"'
 verify_harness claude 8f14e45f-ceea-467a-9575-1b0a4b2a4bd9 '"subtype":"init"'
 assert_claude_session_contract
+if [ "$copilot_supported" = yes ]; then
+  verify_harness copilot 3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53 '"sessionId":"3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53"'
+  assert_copilot_launcher_contract
+else
+  echo "Copilot checks did not run: $WORKER_REFERENCE predates the Copilot harness (no factory-copilot)"
+fi
 
 # The resources a release exports carry no Go source. The release automation
 # already ran these checks against the base image the release names.

@@ -20,6 +20,9 @@ FROM node:22-bookworm-slim
 ARG NPM_VERSION=11.21.0
 ARG CLAUDE_VERSION=2.1.232
 ARG CODEX_VERSION=0.148.0
+# The release docs/spikes/0003-copilot-cli-protocol.md proved. Change it only
+# together with a new compatibility record.
+ARG COPILOT_VERSION=1.0.98
 ARG FACTORY_BASE_VERSION=1
 # The Factory release this base belongs to. A release coordinator refuses a
 # worker image whose inherited label names another release
@@ -53,7 +56,17 @@ RUN npm install --global "npm@${NPM_VERSION}" \
     && npm install --global \
       "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
+      "@github/copilot@${COPILOT_VERSION}" \
     && npm cache clean --force
+
+# The Copilot CLI is started only through factory-copilot, which projects the
+# dedicated token into its own process and restores the image-owned user
+# settings before every launch (docs/worker-runtime.md). An npm-installed
+# Copilot CLI only reports new releases; autoUpdate=false in the settings and
+# COPILOT_AUTO_UPDATE=false keep it from downloading one. The gh CLI is
+# deliberately absent: its login would be a fallback Copilot credential.
+COPY worker/factory-copilot /usr/local/bin/factory-copilot
+COPY worker/copilot-settings.json /usr/local/share/factory-copilot/settings.json
 
 # The npm shim always marks Codex as npm-managed, so its CLI opens an
 # interactive "Update now (runs `npm install -g @openai/codex`)" prompt on
@@ -82,13 +95,15 @@ ENV HOME=/home/factory \
 # otherwise opens an interactive trust prompt that consumes the coordinator's
 # prompt instead of the composer.
 RUN useradd --create-home --uid 10001 --user-group --shell /bin/bash factory \
-    && mkdir -p /home/factory/.claude /home/factory/.codex \
+    && mkdir -p /home/factory/.claude /home/factory/.codex /home/factory/.copilot \
        /work /git /cache /invocation /results /run/factory-auth \
     && printf '[projects."/work"]\ntrust_level = "trusted"\n' > /home/factory/.codex/config.toml \
     && chown -R factory:factory /home/factory /work /git /cache /invocation /results /run/factory-auth \
     && chown root:root /run/factory-auth \
     && chmod 0755 /run/factory-auth \
-    && chmod 0755 /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless
+    && chmod 0700 /home/factory/.copilot \
+    && chmod 0755 /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless /usr/local/bin/factory-copilot \
+    && chmod 0444 /usr/local/share/factory-copilot/settings.json
 
 USER factory
 WORKDIR /work

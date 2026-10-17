@@ -45,7 +45,7 @@ func validateAgentRequest(request AgentRequest) error {
 	if request.ReasoningEffort != "" && strings.ContainsAny(request.ReasoningEffort, "\x00\r\n ") {
 		return errors.New("agent reasoning effort contains unsafe characters")
 	}
-	for harnessName, path := range map[string]string{"Codex": request.CodexAuthPath, "Claude": request.ClaudeAuthPath} {
+	for harnessName, path := range map[string]string{"Codex": request.CodexAuthPath, "Claude": request.ClaudeAuthPath, "Copilot": request.CopilotAuthPath} {
 		if path == "" {
 			continue
 		}
@@ -72,8 +72,10 @@ type AgentPolicy struct {
 // resolveAgentPolicy applies the frozen repository harness, model, and
 // reasoning-effort policy for one role. Each setting defaults to the role's
 // declared option, and only a repository-declared override permission widens
-// it. Every refusal is a typed policy rejection so the coordinator can report
-// it in stable vocabulary.
+// it. The combined selection must also be one the chosen harness honours, so
+// a launch never relies on the harness substituting another model or effort.
+// Every refusal is a typed policy rejection so the coordinator can report it
+// in stable vocabulary before any worker, directory, or credential effect.
 func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest) (AgentPolicy, error) {
 	harnessName, err := resolveHarnessPolicy(repository, request)
 	if err != nil {
@@ -87,24 +89,30 @@ func resolveAgentPolicy(repository config.RepositoryConfig, request AgentRequest
 	if err != nil {
 		return AgentPolicy{}, err
 	}
+	if err := config.ValidateHarnessSelection(harnessName, model, effort); err != nil {
+		return AgentPolicy{}, &PolicyRejection{
+			Code:    PolicyRejectionSelectionUnsupported,
+			Problem: fmt.Sprintf("harness %q cannot honour the selection for role %q: model %q, reasoning effort %q %s", harnessName, request.Role, model, effort, err.Error()),
+		}
+	}
 	return AgentPolicy{Harness: harnessName, Model: model, ReasoningEffort: effort}, nil
 }
 
 // resolveHarnessPolicy selects the role's harness and refuses an override the
-// repository has not explicitly permitted.
+// repository has not explicitly permitted for that target harness.
 func resolveHarnessPolicy(repository config.RepositoryConfig, request AgentRequest) (config.Harness, error) {
 	declared := repository.RoleHarnessDefaults[request.Role]
 	selected := request.Harness
 	if selected == "" {
 		selected = declared
 	}
-	if selected != config.HarnessCodex && selected != config.HarnessClaude {
+	if !config.IsKnownHarness(selected) {
 		return "", &PolicyRejection{
 			Code:    PolicyRejectionHarnessUnavailable,
 			Problem: fmt.Sprintf("no supported harness policy for role %q", request.Role),
 		}
 	}
-	if request.Harness != "" && request.Harness != declared && !hasOverride(repository.AllowedOverrides, config.OverrideHarness) {
+	if request.Harness != "" && request.Harness != declared && !repository.AllowsHarnessOverrideTo(request.Harness) {
 		return "", &PolicyRejection{
 			Code:    PolicyRejectionHarnessOverride,
 			Problem: fmt.Sprintf("repository configuration does not allow harness override from %q to %q for role %q", declared, request.Harness, request.Role),

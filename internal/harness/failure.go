@@ -48,6 +48,10 @@ type FailureError struct {
 	// NativeSessionMismatch reports that a resume revealed a native session
 	// other than the recorded one. The exit keeps its recovery category.
 	NativeSessionMismatch bool
+	// HarnessMissing reports that the worker image has no executable for the
+	// selected harness, so the process never started. The exit keeps its
+	// recovery category, and the message names the cause.
+	HarnessMissing bool
 }
 
 // Error returns a bounded message that cannot expose adapter output or
@@ -73,6 +77,9 @@ func (e *FailureError) Error() string {
 	}
 	if e.NativeSessionMismatch {
 		category += ": resumed a different native session"
+	}
+	if e.HarnessMissing {
+		category += ": the worker image has no executable for this harness"
 	}
 	return category
 }
@@ -112,6 +119,12 @@ func NewNativeSessionMismatchError(harnessName string) error {
 	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName), NativeSessionMismatch: true}
 }
 
+// NewHarnessMissingError creates a redacted unexpected-exit failure for a
+// launch on a worker image that has no executable for the harness.
+func NewHarnessMissingError(harnessName string) error {
+	return &FailureError{Kind: FailureUnexpectedExit, Harness: safeHarnessName(harnessName), HarnessMissing: true}
+}
+
 // NewRateLimitError creates a redacted temporary-capacity failure.
 func NewRateLimitError(harnessName string) error {
 	return &FailureError{Kind: FailureRateLimited, Harness: safeHarnessName(harnessName)}
@@ -135,7 +148,7 @@ func ClassifyError(err error, harnessName ...string) error {
 		if len(harnessName) != 0 {
 			name = harnessName[0]
 		}
-		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name), OutOfMemory: typed.OutOfMemory, NativeSessionMismatch: typed.NativeSessionMismatch}
+		return &FailureError{Kind: typed.Kind, Harness: safeHarnessName(name), OutOfMemory: typed.OutOfMemory, NativeSessionMismatch: typed.NativeSessionMismatch, HarnessMissing: typed.HarnessMissing}
 	}
 	text := strings.ToLower(err.Error())
 	name := ""
@@ -166,6 +179,13 @@ func IsOutOfMemory(err error) bool {
 func IsNativeSessionMismatch(err error) bool {
 	var typed *FailureError
 	return errors.As(err, &typed) && typed.NativeSessionMismatch
+}
+
+// IsHarnessMissing reports whether err represents a launch on a worker image
+// that has no executable for the harness.
+func IsHarnessMissing(err error) bool {
+	var typed *FailureError
+	return errors.As(err, &typed) && typed.HarnessMissing
 }
 
 // IsUnexpectedExit reports whether err represents an unexpected harness exit.

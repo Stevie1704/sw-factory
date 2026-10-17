@@ -170,7 +170,7 @@ func smoke(repository string, policy config.RepositoryConfig) ([]HarnessSmoke, s
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].Harness < pinned[j].Harness })
 	encoded, _ := json.Marshal(pinned)
 	var coverage []HarnessSmoke
-	for _, name := range []config.Harness{config.HarnessClaude, config.HarnessCodex} {
+	for _, name := range []config.Harness{config.HarnessClaude, config.HarnessCodex, config.HarnessCopilot} {
 		if !harness.RequiresSkillSmoke(&policy, string(name)) {
 			continue
 		}

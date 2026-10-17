@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "results": [
+    {
+      "scenario": "copilot-mixed-harness-recovery",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "covers coordinator semantics with stub Copilot output; identity, failure, and capacity shapes stay provisional until RB-1 to RB-5 close"
+    },
+    {
+      "scenario": "copilot-mixed-harness-recovery",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "no Copilot credential: offline delivery by operator decision for #287; live validation is a release blocker of #281"
+    }
+  ]
+}

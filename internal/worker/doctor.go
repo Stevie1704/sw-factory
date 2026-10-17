@@ -422,10 +422,17 @@ func harnessSkillRoot(name string) (string, error) {
 		return "/home/factory/.codex/skills", nil
 	case "claude":
 		return "/home/factory/.claude/skills", nil
+	case "copilot":
+		return "/home/factory/.copilot/skills", nil
 	default:
 		return "", fmt.Errorf("unsupported harness skill probe %q", name)
 	}
 }
+
+// copilotManagedSettings is the image-owned copy of the Copilot user settings
+// that factory-copilot installs into the private Copilot home before every
+// launch. Its disabledSkills list is Copilot's model-visibility switch.
+const copilotManagedSettings = "/usr/local/share/factory-copilot/settings.json"
 
 // skillContractProbe builds the in-worker shell probe asserting each skill is
 // present, self-named, unduplicated, and model-visible under both harness
@@ -441,6 +448,9 @@ func skillContractProbe(harness, root string, skills []string) (string, error) {
 		probe += "grep -q '^name: " + skill + "$' " + directory + "/SKILL.md\n"
 		probe += "! grep -q 'disable-model-invocation' " + directory + "/SKILL.md\n"
 		probe += "! grep -rq 'allow_implicit_invocation' " + directory + "/agents\n"
+		if harness == "copilot" {
+			probe += "jq -e --arg skill " + skill + " '(.disabledSkills // []) | index($skill) == null' " + copilotManagedSettings + " >/dev/null\n"
+		}
 	}
 	return probe + harness + " --version\n", nil
 }

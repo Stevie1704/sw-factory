@@ -256,6 +256,94 @@ func TestPullRequestWriterSummaryPrecedesTheReadinessHandOff(t *testing.T) {
 	}
 }
 
+// TestCopilotAndMixedHarnessWorkflowsReachReadiness verifies a complete run
+// from implementation through both review axes and the PR writer to the
+// ready hand-off, once with every role on Copilot and twice with Copilot
+// mixed with Codex and Claude. Each role launches on its configured harness
+// and records it, and the read-only roles keep a read-only worker.
+func TestCopilotAndMixedHarnessWorkflowsReachReadiness(t *testing.T) {
+	for _, test := range []struct {
+		name                                         string
+		implementation, specification, standards, pr config.Harness
+	}{
+		{name: "copilot only", implementation: config.HarnessCopilot, specification: config.HarnessCopilot, standards: config.HarnessCopilot, pr: config.HarnessCopilot},
+		{name: "claude implements, copilot and codex review, copilot writes", implementation: config.HarnessClaude, specification: config.HarnessCopilot, standards: config.HarnessCodex, pr: config.HarnessCopilot},
+		{name: "copilot implements, claude and copilot review, codex writes", implementation: config.HarnessCopilot, specification: config.HarnessClaude, standards: config.HarnessCopilot, pr: config.HarnessCodex},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNonBlockingReadinessFixture(t, configurePullRequestWriter, func(policy *config.RepositoryConfig) {
+				policy.RoleHarnessDefaults["implementation"] = test.implementation
+				policy.RoleHarnessDefaults["spec_review"] = test.specification
+				policy.RoleHarnessDefaults["standards_review"] = test.standards
+				policy.RoleHarnessDefaults["pr_writer"] = test.pr
+			})
+			run := reachReviewedCheckpoint(t, fixture)
+			if outcome := drive(t, fixture); outcome != "invocation_active" {
+				t.Fatalf("first pass outcome = %q, want the pr_writer executing", outcome)
+			}
+			writers := pullRequestWriterInvocations(t, fixture, run.ID)
+			if len(writers) != 1 {
+				t.Fatalf("pr_writer invocations = %#v, want one", writers)
+			}
+			writePullRequestWriterReport(t, writers[0], report.Report{
+				Outcome: report.OutcomeCompleted, Summary: "summary written",
+				PullRequestSummary: &report.PullRequestSummary{Body: "## Summary\n\nAdds the behavior."},
+			})
+			drive(t, fixture)
+
+			if ready := fixture.currentRun(t); ready.Stage != store.StageReady || fixture.pullRequests.existing.Draft {
+				t.Fatalf("run = %s draft=%v, want the ready hand-off", ready.Stage, fixture.pullRequests.existing.Draft)
+			}
+			want := []config.Harness{test.implementation, test.specification, test.standards, test.pr}
+			if got := fixture.harness.startHarnesses; strings.Join(harnessNames(got), ",") != strings.Join(harnessNames(want), ",") {
+				t.Fatalf("launches = %v, want %v", got, want)
+			}
+			wantByRole := map[string]config.Harness{"implementation": test.implementation, "spec_review": test.specification, "standards_review": test.standards, "pr_writer": test.pr}
+			for _, invocation := range runInvocations(t, fixture, run.ID) {
+				if invocation.Harness != string(wantByRole[invocation.Role]) {
+					t.Fatalf("%s invocation recorded harness %q, want %s", invocation.Role, invocation.Harness, wantByRole[invocation.Role])
+				}
+			}
+			readOnly := 0
+			for _, start := range fixture.worker.starts {
+				if start.Role == "spec_review" || start.Role == "standards_review" || start.Role == "pr_writer" {
+					if !start.WorktreeReadOnly {
+						t.Fatalf("%s worker start = %#v, want a read-only worktree", start.Role, start)
+					}
+					readOnly++
+				}
+			}
+			if readOnly != 3 {
+				t.Fatalf("read-only role workers = %d, want both reviewers and the PR writer", readOnly)
+			}
+		})
+	}
+}
+
+// harnessNames renders harness identities for an order-sensitive comparison.
+func harnessNames(values []config.Harness) []string {
+	names := make([]string, len(values))
+	for index, value := range values {
+		names[index] = string(value)
+	}
+	return names
+}
+
+// runInvocations returns every persisted invocation of a run.
+func runInvocations(t *testing.T, fixture *nonBlockingReadinessFixture, runID string) []store.Invocation {
+	t.Helper()
+	opened, err := store.Open(context.Background(), fixture.operationalPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	invocations, err := opened.Invocations(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Invocations() error = %v", err)
+	}
+	return invocations
+}
+
 // TestPullRequestWriterFailureDoesNotBlockTheHandOff verifies a failed,
 // invalid, timed-out, or unlaunchable writer leaves the hand-off with the
 // coordinator section only and emits a warning event.

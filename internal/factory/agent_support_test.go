@@ -201,6 +201,7 @@ type agentWorker struct {
 	commands                []worker.CommandRequest
 	results                 []worker.CommandResult
 	codexSeeds, claudeSeeds []worker.CredentialSeedRequest
+	copilotSeeds            []worker.CredentialSeedRequest
 	inspectResult           *worker.Inspection
 	inspectErr, seedErr     error
 	// nextCommandErr is returned once by the next command instead of a result.
@@ -262,11 +263,20 @@ func (w *agentWorker) SeedClaudeCredentials(_ context.Context, request worker.Cr
 	return w.seedErr
 }
 
+// SeedCopilotCredentials records one Copilot token projection.
+func (w *agentWorker) SeedCopilotCredentials(_ context.Context, request worker.CredentialSeedRequest) error {
+	w.copilotSeeds = append(w.copilotSeeds, request)
+	return w.seedErr
+}
+
 // agentHarness records detached harness operations.
 type agentHarness struct {
 	starts, resumes     []harness.StartRequest
 	finished            []harness.Session
 	startErr, resumeErr error
+	// startHarnesses and resumeHarnesses name the harness view that served
+	// each start and resume, in order.
+	startHarnesses, resumeHarnesses []config.Harness
 }
 
 // Capabilities identifies the headless fixture adapter.
@@ -306,11 +316,38 @@ func (*agentHarness) InspectHeadless(context.Context, harness.HeadlessInspection
 // CancelHeadless accepts fixture cancellation.
 func (*agentHarness) CancelHeadless(context.Context, harness.HeadlessSession) error { return nil }
 
-// testHeadlessHarnesses maps both supported names to one recording adapter.
+// testHeadlessHarnesses maps every supported name to a view of one recording
+// adapter that reports that name, so a role dispatches to the harness it
+// selects and the shared recorder notes which harness served each launch.
 func testHeadlessHarnesses(runtime *agentHarness) map[config.Harness]harness.HeadlessRuntime {
 	return map[config.Harness]harness.HeadlessRuntime{
-		config.HarnessCodex: runtime, config.HarnessClaude: runtime,
+		config.HarnessCodex:   namedAgentHarness{agentHarness: runtime, name: config.HarnessCodex},
+		config.HarnessClaude:  namedAgentHarness{agentHarness: runtime, name: config.HarnessClaude},
+		config.HarnessCopilot: namedAgentHarness{agentHarness: runtime, name: config.HarnessCopilot},
 	}
+}
+
+// namedAgentHarness is one harness identity over a shared recording adapter.
+type namedAgentHarness struct {
+	*agentHarness
+	name config.Harness
+}
+
+// Capabilities reports the view's harness identity.
+func (h namedAgentHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: string(h.name), NativeResume: true, Headless: true}
+}
+
+// StartHeadless records the serving harness and launches through the recorder.
+func (h namedAgentHarness) StartHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	h.startHarnesses = append(h.startHarnesses, h.name)
+	return h.agentHarness.StartHeadless(ctx, request)
+}
+
+// ResumeHeadless records the serving harness and resumes through the recorder.
+func (h namedAgentHarness) ResumeHeadless(ctx context.Context, request harness.HeadlessStartRequest) (harness.HeadlessSession, error) {
+	h.resumeHarnesses = append(h.resumeHarnesses, h.name)
+	return h.agentHarness.ResumeHeadless(ctx, request)
 }
 
 // githubIssueFixture returns the claimed issue used by agent tests.
@@ -366,15 +403,16 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 }
 
 // newDispatchingAgentService recreates a coordinator that derives real
-// headless adapters from the supplied worker process runtime.
-func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime worker.WorkerRuntime, policy config.RepositoryConfig, authentication config.AuthenticationConfig) *factory.Service {
+// headless adapters from the supplied worker process runtime. changedPaths
+// are the worktree changes the coordinator observes at report acceptance.
+func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime worker.WorkerRuntime, policy config.RepositoryConfig, authentication config.AuthenticationConfig, changedPaths ...string) *factory.Service {
 	t.Helper()
 	repackageSpecification(t, runStore, policy)
 	run := *runStore.current
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Authentication: authentication, OperationalDataPath: filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"), RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml")}}}
 	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}}, statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
 	runStore.github = githubRuntime
-	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
+	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA, ChangedPaths: changedPaths}}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil }, Worker: runtime, Tracker: githubRuntime, Worktree: worktree, Now: func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) }, NewRunID: func() (string, error) { return "generated-dispatch", nil }})
 }
 

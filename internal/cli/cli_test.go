@@ -523,6 +523,55 @@ func TestRunRegisterUpdatesCredentialSourcesForAMatchingRepository(t *testing.T)
 	}
 }
 
+// TestRunRegisterStoresACopilotTokenSourceAloneOrOnUpdate verifies the
+// Copilot source is registered and updated through the same command, and an
+// update with only --copilot-auth keeps the other sources.
+func TestRunRegisterStoresACopilotTokenSourceAloneOrOnUpdate(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.yaml")
+	repositoryPath := filepath.Join(root, "repository")
+	if err := os.MkdirAll(repositoryPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidRepositoryConfig(t, repositoryPath)
+	var output bytes.Buffer
+	if code := cli.Run(context.Background(), []string{"init", "--config", configPath}, &output, &output); code != 0 {
+		t.Fatalf("init exit code = %d, output = %s", code, output.String())
+	}
+	firstToken := filepath.Join(root, "credentials", "copilot-token")
+	codexAuthPath := filepath.Join(root, "credentials", "codex-auth.json")
+	if code := cli.Run(context.Background(), []string{
+		"register", "--config", configPath, "--repository", repositoryPath,
+		"--github-owner", "example", "--github-repository", "project", "--authorized-user", "alice",
+		"--operational-data", filepath.Join(root, "state", "factory.db"),
+		"--codex-auth", codexAuthPath, "--copilot-auth", firstToken,
+	}, &output, &output); code != 0 {
+		t.Fatalf("register exit code = %d, output = %s", code, output.String())
+	}
+
+	secondToken := filepath.Join(root, "credentials", "copilot-token-2")
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{
+		"register", "--config", configPath, "--update", "--repository", repositoryPath, "--copilot-auth", secondToken,
+	}, &output, &output); code != 0 {
+		t.Fatalf("update exit code = %d, output = %s", code, output.String())
+	}
+	host, err := config.LoadHost(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := host.Repositories[0].Authentication; got.CopilotAuthPath != secondToken || got.CodexAuthPath != codexAuthPath {
+		t.Fatalf("authentication = %#v, want updated Copilot source and kept Codex source", got)
+	}
+
+	output.Reset()
+	if code := cli.Run(context.Background(), []string{"register", "--config", configPath, "--update", "--repository", repositoryPath}, &output, &output); code == 0 || !strings.Contains(output.String(), "--copilot-auth") {
+		t.Fatalf("empty update exit code = %d, output = %q, want a refusal that names --copilot-auth", code, output.String())
+	}
+}
+
 func TestRunRegisterReportsAnErrorWhenTheRepositoryDoesNotExist(t *testing.T) {
 	t.Parallel()
 

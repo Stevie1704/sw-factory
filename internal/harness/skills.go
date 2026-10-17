@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -34,7 +33,7 @@ const GrillingSkill = "grilling"
 // RequiredSkills returns the role-mandated skills one harness must prove under
 // one repository policy: the mandatory set, plus the skill of each optional
 // role (pr_writer, ideation) that harness can run, because the role defaults
-// to it or the policy allows harness overrides. A repository that does not
+// to it or a harness override may select it. A repository that does not
 // declare an optional role needs no evidence for its skill. An unavailable
 // policy requires every role skill, so the check fails closed.
 func RequiredSkills(policy *config.RepositoryConfig, harnessName string) []string {
@@ -47,7 +46,7 @@ func RequiredSkills(policy *config.RepositoryConfig, harnessName string) []strin
 		{workflow.RoleIdeation, GrillingSkill},
 	} {
 		selected, declared := policy.RoleHarnessDefaults[optional.role]
-		if declared && (strings.TrimSpace(string(selected)) == harnessName || slices.Contains(policy.AllowedOverrides, config.OverrideHarness)) {
+		if declared && (strings.TrimSpace(string(selected)) == harnessName || policy.AllowsHarnessOverrideTo(config.Harness(harnessName))) {
 			required = append(required, optional.skill)
 		}
 	}

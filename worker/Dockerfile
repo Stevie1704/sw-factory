@@ -27,12 +27,15 @@ COPY --from=go-toolchain /usr/local/go /usr/local/go
 RUN ln -s /usr/local/go/bin/go /usr/local/bin/go \
     && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
-# Both harnesses read a skill set from their role home, and the role home is a
+# Every harness reads a skill set from its role home, and the role home is a
 # worker-owned volume seeded from this image. Baking the curated set keeps the
 # agent-visible instructions pinned by the worker image digest instead of
 # leaking a personal host skill directory into a run. worker/SKILLS.md records
-# the provenance and the curation rule.
+# the provenance and the curation rule. The Copilot root is its personal skill
+# directory under the private Copilot home; a base image without Copilot
+# carries it unused.
 COPY --chown=factory:factory skills /home/factory/.codex/skills
 COPY --chown=factory:factory skills /home/factory/.claude/skills
+COPY --chown=factory:factory skills /home/factory/.copilot/skills
 
 USER factory

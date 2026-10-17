@@ -77,6 +77,48 @@ esac
 
 var _ worker.HeadlessProcessRuntime = (*worker.DockerRuntime)(nil)
 
+// TestDockerRuntimeReportsWhetherAFreshLaunchAdoptedAProcess verifies that a
+// fresh launch reports adoption when a process already owns the invocation,
+// so an adapter requires its assigned identity back only from a new process.
+func TestDockerRuntimeReportsWhetherAFreshLaunchAdoptedAProcess(t *testing.T) {
+	root := t.TempDir()
+	dockerStub := root + "/docker-stub"
+	dockerScript := `#!/bin/sh
+set -eu
+case "${1:-}" in
+  container)
+    printf 'true\t%s\t\n' "ghcr.io/example/factory-worker@` + testWorkerDigest + `"
+    ;;
+  exec)
+    case "$*" in
+      *factory-worker-headless*inspect*)
+        printf '{"status":"%s","exit_code":0,"stdout":"","stderr":"","stdout_truncated":false,"stderr_truncated":false}\n' "${WORKER_HEADLESS_STATUS:-missing}"
+        ;;
+    esac
+    ;;
+esac
+`
+	if err := os.WriteFile(dockerStub, []byte(dockerScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: dockerStub}
+	request := worker.HeadlessRequest{
+		RunID: "run-headless-adopt", WorkerID: "worker-headless-adopt", InvocationID: "inv-headless-adopt",
+		Command: []string{"copilot", "--session-id=x"}, EnvironmentPolicy: worker.EnvironmentPolicyRole,
+		Role: "implementation", Mode: worker.HeadlessLaunchFresh,
+	}
+	for status, adopted := range map[string]bool{"missing": false, "starting": true, "running": true, "exited": true} {
+		t.Setenv("WORKER_HEADLESS_STATUS", status)
+		execution, err := runtime.StartHeadless(context.Background(), request)
+		if err != nil {
+			t.Fatalf("StartHeadless(%s) error = %v", status, err)
+		}
+		if execution.Adopted != adopted {
+			t.Fatalf("StartHeadless(%s).Adopted = %v, want %v", status, execution.Adopted, adopted)
+		}
+	}
+}
+
 // TestDockerRuntimeReportsAHeadlessOutOfMemoryKill verifies that a detached
 // process records a root-owned out-of-memory baseline at launch, and that only
 // a failed exit whose kernel kill count grew is reported as out of memory.

@@ -295,7 +295,7 @@ workflow controller and not the operational store.
 _Avoid_: Onboarding checklist, onboarding state machine
 
 **Worker skill set**:
-The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
+The curated craft skills the worker image installs into the skill root of each harness in the role home (`.codex/skills`, `.claude/skills`, and `.copilot/skills`), pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill
 
 **Worker skill smoke evidence**:
@@ -444,9 +444,16 @@ when configured, and native session identifier when known.
 _Avoid_: Process transcript
 
 **Harness**:
-A configured coding tool, such as Codex or Claude Code, launched through the
-headless harness seam with a role-specific prompt and native resume behavior.
+A configured coding tool, such as Codex, Claude Code, or Copilot CLI, launched
+through the headless harness seam with a role-specific prompt and native resume
+behavior.
 _Avoid_: Lead agent, attached tool
+
+**Harness override target**:
+A harness that an allowed harness override may select for a role, listed in
+`override_harnesses`. When the list is omitted, the targets are Codex and
+Claude Code, so a new adapter never widens an existing override permission.
+_Avoid_: Any installed harness
 
 **Role**:
 The coordinator-owned responsibility assigned to an invocation, such as implementation, architecture, test, or review. The factory-owned role registry couples each role to its invocation stage, embedded Markdown prompt version, default permitted paths, and report contract; repository guidance cannot change role ownership.
