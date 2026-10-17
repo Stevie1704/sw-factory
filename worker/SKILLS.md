@@ -1,8 +1,9 @@
 # Worker skill set
 
-The worker image ships a curated skill set at `$HOME/.codex/skills` and
-`$HOME/.claude/skills`. Both harnesses read those directories, so a role agent
-sees the same craft references whichever adapter runs it.
+The worker image ships a curated skill set at `$HOME/.codex/skills`,
+`$HOME/.claude/skills`, and `$HOME/.copilot/skills`. Each harness reads its own
+directory, so a role agent sees the same craft references whichever adapter
+runs it.
 
 The set is factory-owned and pinned by the worker image digest recorded in
 `factory.yaml`. A run never reads a personal skill directory from the host, so
@@ -12,16 +13,37 @@ an agent's visible instructions stay reproducible for the run's digest. See
 ## Supported harnesses and discovery roots
 
 The worker image installs the harnesses pinned by `worker/base.Dockerfile`.
-Each one reads the skill set from its own role home, so the two installations
+Each one reads the skill set from its own role home, so the installations
 are separate roots holding the same names rather than one shared root.
 
 | Harness | Installed root | Other roots it also reads |
 | --- | --- | --- |
 | `codex` | `$HOME/.codex/skills` | `$HOME/.agents/skills`, the project `.codex/skills`, the system cache root |
 | `claude` | `$HOME/.claude/skills` | the project `.claude/skills`, installed plugins |
+| `copilot` | `$HOME/.copilot/skills` (`$COPILOT_HOME/skills`, personal skills) | `$HOME/.agents/skills`; the project `.github/skills`, `.claude/skills`, and `.agents/skills`; installed plugins; built-in skills |
 
 Pinned Codex still discovers the deprecated `$CODEX_HOME/skills` root, so the
 `.codex/skills` installation remains the supported location for that version.
+
+The Copilot CLI is the pinned release recorded in
+`docs/spikes/0003-copilot-cli-protocol.md`. Its private home
+`$HOME/.copilot` is on the role volume. The launcher `factory-copilot`
+restores the image-owned settings in that home before every launch:
+`ignoredSkillsLocations: ["/work"]` hides every project skill root in the
+worktree, and installed plugins are removed. `disabledSkills` names only the
+two built-in skills `customize-cloud-agent` and `github-pr-media`, never a
+curated skill.
+
+Docker copies the image's skills into a role volume only while the volume is
+empty. A session role keeps its volume when its worker moves to a new image,
+so a volume first created from an image without Copilot has no
+`.copilot/skills`, and a later skill change does not reach an existing
+volume. The launcher therefore refuses a Copilot home that lacks any
+role-mandated skill: it prints `factory-copilot: role skills missing;
+recreate the role volume` and exits 78. The launch fails as an unexpected
+exit; a run invocation keeps the line in its `harness-failure.log`. The remedy
+is to remove that role volume, so Docker seeds a new one from the current
+image.
 
 `$HOME/.agents/skills` is deliberately left empty and the checks assert it
 stays that way. A second root holding the same names would let one skill name
@@ -42,11 +64,12 @@ switch that removes a shipped skill from the model-visible catalog:
 | --- | --- | --- |
 | `codex` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | absent, so the skill is advertised |
 | `claude` | `disable-model-invocation: true` in the `SKILL.md` front matter | absent, so the skill is advertised |
+| `copilot` | the skill name in `disabledSkills` of the managed `settings.json` | only the two built-in skills are named |
 
 A hidden skill under pinned Codex is reachable only through an explicit
 `$skill-name` mention in the prompt text. The factory role prompts name a skill
 in backticks as prose, which is not an explicit mention, so a hidden skill
-would leave a role mandated to use guidance it cannot reach. Neither switch
+would leave a role mandated to use guidance it cannot reach. No switch
 appears in this set: role prompts, not activation metadata, decide which role
 uses which skill.
 
@@ -88,7 +111,17 @@ middle one costs a model call.
    that exists only in that skill's body. It records the result in
    `worker/skill-smoke.json`, keyed by image digest and harness version. It
    needs a host credential for each harness it smokes and skips any harness
-   without one. Set `HARNESSES` to smoke a subset.
+   without one. Set `HARNESSES` to smoke a subset. `HARNESSES` defaults to
+   `codex claude`; Copilot is smoked only when named, and only with the
+   dedicated token file in `COPILOT_TOKEN_PATH`, which has no default:
+
+   ```sh
+   HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh
+   ```
+
+   The Copilot call runs through `factory-copilot` with the production
+   isolation options. The token reaches the worker only on standard input
+   and a private tmpfs at `/run/factory-auth`, never a Docker argument.
 
 3. Startup diagnosis, deterministic and offline:
 
@@ -101,8 +134,9 @@ middle one costs a model call.
    result for that exact digest and harness version. It never makes a model
    call of its own. The image contract is checked for every shipped harness,
    while missing smoke evidence blocks only for harnesses selected by
-   `role_harness_defaults`, or for both supported harnesses when
-   `allowed_overrides` contains `harness`. An unselected harness is reported
+   `role_harness_defaults`, or for each override target when
+   `allowed_overrides` contains `harness`. Copilot is checked only when the
+   repository can select it. An unselected harness is reported
    as advisory until the repository can select it.
 
 The smoke exits non-zero when any harness it was asked to prove produced no
@@ -122,6 +156,17 @@ the startup diagnosis.
 `worker/skill-smoke.json` holds a `codex` record and a `claude` record for the
 pinned digest, so the startup diagnosis passes both `worker skill contract`
 checks.
+
+There is no `copilot` record, and none may be written without a live run. The
+smoke can drive Copilot, but no dedicated Copilot credential was available,
+so no live call has happened (release blocker RB-7 in
+[Copilot CLI release evidence](../docs/acceptance/copilot.md)). A repository
+that can select Copilot therefore fails `factory doctor` with
+`harness.skills.evidence_stale` until an operator runs the Copilot smoke for
+its pinned image. Offline, `scripts/verify-headless-worker.sh` runs
+`factory-copilot skill list` with the pinned CLI and requires every curated
+skill in the listing and no planted project skill. A listing is not
+activation evidence.
 
 macOS keeps the Claude Code credential in the login Keychain rather than in a
 file. Usually the smoke finds no file at the default `CLAUDE_AUTH_PATH` and

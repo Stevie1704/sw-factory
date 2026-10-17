@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -337,14 +338,10 @@ func credentialProjectionHarness(err error) string {
 // credentialHarnessLabel bounds the adapter identity included in recovery
 // guidance so malformed persisted data cannot become an output channel.
 func credentialHarnessLabel(harnessName string) string {
-	switch config.Harness(harnessName) {
-	case config.HarnessCodex:
-		return string(config.HarnessCodex)
-	case config.HarnessClaude:
-		return string(config.HarnessClaude)
-	default:
-		return "harness"
+	if config.IsKnownHarness(config.Harness(harnessName)) {
+		return harnessName
 	}
+	return "harness"
 }
 
 // harnessFailureDiagnosticName is the invocation-local file that records what a
@@ -371,12 +368,23 @@ func writeHarnessFailureDiagnostic(invocationRoot, occasion string, cause error,
 		return ""
 	}
 	path := filepath.Join(invocationRoot, harnessFailureDiagnosticName)
-	transcript = boundHarnessFailureTranscript(transcript)
+	transcript = boundHarnessFailureTranscript(maskGitHubTokens(transcript))
 	body := fmt.Sprintf("observed at: %s\noccasion: %s\ncause: %v\n\nharness output:\n%s\n", observedAt.Format(time.RFC3339), occasion, cause, transcript)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		return ""
 	}
 	return path
+}
+
+// gitHubTokenShape matches the GitHub token formats a harness could print:
+// fine-grained (github_pat_), OAuth (gho_), user-to-server (ghu_), classic
+// (ghp_), server-to-server (ghs_), and refresh (ghr_) tokens.
+var gitHubTokenShape = regexp.MustCompile(`\b(?:github_pat_|gh[opusr]_)[A-Za-z0-9_]+`)
+
+// maskGitHubTokens replaces every GitHub token shape in harness output, so a
+// token a harness printed never reaches a diagnostic file on the host.
+func maskGitHubTokens(output string) string {
+	return gitHubTokenShape.ReplaceAllString(output, "[masked GitHub token]")
 }
 
 // boundHarnessFailureTranscript keeps both the beginning and end of a

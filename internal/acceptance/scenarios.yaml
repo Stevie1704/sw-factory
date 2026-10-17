@@ -416,3 +416,59 @@ scenarios:
     gaps:
       - issue: 265
         summary: factory reset and factory cleanup do not remove session-role Docker volumes or the snapshot worktree of a role active at coordinator stop (ADR 0023).
+
+  - id: copilot-mixed-harness-recovery
+    title: Run and recover a Copilot and mixed-harness workflow
+    fixture: A registered repository whose roles run on Copilot alone and on Copilot mixed with Codex and Claude, with a disposable issue and a registered Copilot token.
+    objective: Take a run to the ready hand-off and recover it from each injected interruption without lost identity, repeated work, or unauthorized progression.
+    authority:
+      - The operator authorizes the run, the coordinator restarts, and factory auth refresh.
+      - A paused run's disposition stays with the human.
+    interfaces:
+      - factory start and factory stop
+      - factory status --json
+      - factory reconcile --json
+      - factory resume --json
+      - factory auth refresh --resume
+      - /factory cancel
+    injected_conditions:
+      - The coordinator stops before the launched native identity is persisted, and again after report acceptance.
+      - The worker container is removed while a Copilot session is active.
+      - The Copilot process exits unexpectedly, finds no recorded session, is denied by policy, or hits a capacity limit.
+      - The Copilot credential expires.
+      - The repository configuration names another harness for a role with a recorded session.
+      - A report is missing, malformed, or names another invocation, run, role, or harness.
+      - The run is cancelled while the Copilot process works, and the process writes a report afterwards.
+    success:
+      - Each role runs on its configured harness, and read-only roles keep a read-only worker.
+      - Repairs, test objections, and conversational turns continue the recorded session in the harness that created it, or start fresh in the new harness for a conversational turn.
+      - Automatic recovery resumes a session at most once; denial and missing session state pause for a person and never start a fresh session.
+      - Expired authentication pauses, and factory auth refresh --resume continues the same session.
+      - Only the exact invocation report advances the run; a cancelled run accepts no late report.
+      - Lifecycle reasons, status comments, and errors carry no harness output.
+    failure:
+      - The agent edits the operational store or the role volume to move a session to another harness.
+      - The agent starts a fresh session to work around a paused one.
+    cleanup:
+      - Cancel or complete the run and remove its resources with factory cleanup.
+    deterministic_tests:
+      - "internal/factory:TestCopilotAndMixedHarnessWorkflowsReachReadiness"
+      - "internal/factory:TestMixedHarnessReviewRoundRepairsInTheRecordedImplementationHarness"
+      - "internal/factory:TestCheckRepairResumesTheRecordedHarnessAfterAConfigurationChange"
+      - "internal/factory:TestImplementationObjectionRevisesInTheRecordedTestHarness"
+      - "internal/factory:TestSessionRolesNeverMigrateANativeSessionToAChangedHarness"
+      - "internal/factory:TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses"
+      - "internal/factory:TestHeadlessStartupRecreatesWorkerAndResumesOnce"
+      - "internal/factory:TestHeadlessRecoveryAdoptsAnIdentityLaunchedBeforeItWasPersisted"
+      - "internal/factory:TestHeadlessRecoverySettlesNativeFailuresThroughTheRecordedAdapter"
+      - "internal/factory:TestHeadlessRecoveryBoundsAnUnexpectedCopilotExit"
+      - "internal/factory:TestHeadlessRecoveryResumesTheSameCopilotSessionAfterAuthRefresh"
+      - "internal/factory:TestCopilotReportAcceptanceAdmitsOnlyTheExactInvocationReport"
+      - "internal/factory:TestCancelledCopilotRunStopsItsProcessAndRefusesALateReport"
+      - "internal/factory:TestCleanupConfirmsHeadlessResourcesForEveryHarness"
+      - "internal/effect:TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss"
+      - "internal/effect:TestResultAcceptanceReplayDoesNotRepeatFinalization"
+      - "internal/harness:TestCopilotHeadlessMapsObservedFailuresToTypedOutcomes"
+    gaps:
+      - issue: 281
+        summary: Copilot identity, failure, and capacity shapes are provisional until live evidence closes release blockers RB-1 to RB-8; capacity maps to an unexpected exit.

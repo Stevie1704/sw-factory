@@ -17,6 +17,12 @@ const LifecycleReasonAutomaticHarnessRecoveryExhausted = "automatic harness reco
 // same limit, so an operator raises the limit or accepts the risk and resumes.
 const LifecycleReasonHarnessOutOfMemory = "harness out of memory"
 
+// LifecycleReasonHarnessMissing identifies a pause after a launch on a worker
+// image that has no executable for the selected harness. A Run keeps its
+// frozen image, so neither an automatic nor an explicit resume can succeed;
+// an operator upgrades the worker and cancels the Run.
+const LifecycleReasonHarnessMissing = "harness missing from worker image"
+
 // LifecycleReasonCheckInfrastructureUnavailable identifies a check pause whose
 // gate suite or repair launch failed for infrastructure reasons. An explicit
 // resume retries the checks at the same checkpoint without spending a repair

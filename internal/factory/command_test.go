@@ -403,6 +403,44 @@ func TestHandleCommandPersistsAClaudeHarnessConfiguration(t *testing.T) {
 	}
 }
 
+// TestHandleCommandSelectsCopilotOnlyAfterAnExplicitOptIn verifies the
+// comment command keeps an old harness permission away from Copilot and
+// accepts Copilot once override_harnesses lists it.
+func TestHandleCommandSelectsCopilotOnlyAfterAnExplicitOptIn(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		targets []config.Harness
+		outcome factory.CommandOutcome
+	}{
+		{name: "legacy permission", outcome: factory.CommandRejected},
+		{name: "explicit opt-in", targets: []config.Harness{config.HarnessCopilot}, outcome: factory.CommandAccepted},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			policy := commandRepositoryConfig()
+			policy.OverrideHarnesses = test.targets
+			packet, err := json.Marshal(factory.SpecificationPacket{Version: 1, RepositoryConfig: policy})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run := commandRun(t, store.StatusActive)
+			run.SpecificationPacket = string(packet)
+			githubAdapter := &commandGitHub{issue: tracker.Issue{Number: 42, State: "open", Labels: []string{tracker.LabelAgentRunning}}, statusComment: tracker.Comment{ID: "status-1"}}
+			service := newCommandService(&commandRunStore{current: &run, latest: &run}, githubAdapter, nil)
+
+			result, _ := service.HandleCommand(context.Background(), factory.CommandRequest{IssueNumber: 42, Comment: tracker.Comment{ID: "15", Author: "alice", Body: "/factory config harness=copilot"}})
+			if result.Outcome != test.outcome {
+				t.Fatalf("outcome = %q (rejection %v), want %q", result.Outcome, result.Rejection, test.outcome)
+			}
+			if test.outcome == factory.CommandRejected && (result.Rejection == nil || result.Rejection.Code != factory.PolicyRejectionHarnessOverride) {
+				t.Fatalf("rejection = %v, want harness_override", result.Rejection)
+			}
+		})
+	}
+}
+
 // TestHandleCommandRefusesIssueSuppliedProcessArguments verifies a comment
 // cannot inject a flag or an extra argument into a launched harness process.
 func TestHandleCommandRefusesIssueSuppliedProcessArguments(t *testing.T) {

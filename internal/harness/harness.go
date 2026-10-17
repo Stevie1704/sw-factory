@@ -18,6 +18,8 @@ const (
 	NameCodex = "codex"
 	// NameClaude identifies the Claude Code adapter.
 	NameClaude = "claude"
+	// NameCopilot identifies the GitHub Copilot CLI adapter.
+	NameCopilot = "copilot"
 	// maxPromptBytes leaves headroom beneath Linux's single-argument limit.
 	maxPromptBytes = 96 << 10
 )
@@ -83,8 +85,9 @@ type Runtime interface {
 // NewHeadlessAdapters creates every supported headless adapter.
 func NewHeadlessAdapters(processRuntime worker.HeadlessProcessRuntime) map[config.Harness]HeadlessRuntime {
 	return map[config.Harness]HeadlessRuntime{
-		config.HarnessCodex:  NewCodexHeadless(processRuntime),
-		config.HarnessClaude: NewClaudeHeadless(processRuntime),
+		config.HarnessCodex:   NewCodexHeadless(processRuntime),
+		config.HarnessClaude:  NewClaudeHeadless(processRuntime),
+		config.HarnessCopilot: NewCopilotHeadless(processRuntime),
 	}
 }
 

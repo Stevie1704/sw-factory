@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
 )
 
 // Kind identifies a command understood by the coordinator.
@@ -46,6 +48,10 @@ const (
 	HarnessCodex Harness = "codex"
 	// HarnessClaude selects Claude for a later invocation.
 	HarnessClaude Harness = "claude"
+	// HarnessCopilot selects the GitHub Copilot CLI for a later invocation.
+	// The grammar accepts the name; repository policy decides whether the
+	// selection is permitted.
+	HarnessCopilot Harness = "copilot"
 )
 
 // Request is the typed command produced by Parse.
@@ -269,7 +275,7 @@ func unexpectedArgument(verb string) *ParseError {
 // parseHarness validates the one supported harness argument shape.
 func parseHarness(arguments []string) (Harness, *ParseError) {
 	if len(arguments) == 0 {
-		return "", &ParseError{Code: ParseErrorMissingHarness, Problem: "configure requires harness=codex, harness=claude, or a harness name"}
+		return "", &ParseError{Code: ParseErrorMissingHarness, Problem: "configure requires harness=codex, harness=claude, harness=copilot, or a harness name"}
 	}
 	if len(arguments) != 1 {
 		return "", &ParseError{Code: ParseErrorUnexpectedArgument, Problem: "configure accepts exactly one harness value"}
@@ -282,7 +288,7 @@ func parseHarness(arguments []string) (Harness, *ParseError) {
 		value = configured
 	}
 	harness := Harness(value)
-	if harness != HarnessCodex && harness != HarnessClaude {
+	if !config.IsKnownHarness(config.Harness(harness)) {
 		return "", &ParseError{Code: ParseErrorUnsupportedHarness, Problem: fmt.Sprintf("harness %q is not supported", value)}
 	}
 	return harness, nil

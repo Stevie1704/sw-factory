@@ -28,6 +28,7 @@ const (
 	stateStderr       = "stderr"
 	stateStdoutLimit  = "stdout_truncated"
 	stateStderrLimit  = "stderr_truncated"
+	stateStartFailed  = "start_failed"
 	stateCancelMarker = "cancelled"
 	stateLock         = "lock"
 	inspectionBytes   = 512 << 10
@@ -70,6 +71,8 @@ type inspectionWire struct {
 	StdoutTruncated bool `json:"stdout_truncated"`
 	// StderrTruncated reports that stderr exceeded the retained bound.
 	StderrTruncated bool `json:"stderr_truncated"`
+	// StartFailed reports that the helper could not start the command.
+	StartFailed bool `json:"start_failed"`
 }
 
 // main dispatches the fixed helper operations and keeps errors on stderr so
@@ -178,9 +181,7 @@ func runProcess(arguments []string) error {
 	commandProcess.Stderr = stderrWriter
 	commandProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := commandProcess.Start(); err != nil {
-		_, _ = stderr.WriteString("process start failed\n")
-		_ = writeState(*stateDir, stateStatus, string(statusExited))
-		_ = writeState(*stateDir, stateExitCode, "127")
+		recordStartFailure(*stateDir, stderr)
 		return fmt.Errorf("start headless command: %w", err)
 	}
 	if err := writeState(*stateDir, statePID, strconv.Itoa(commandProcess.Process.Pid)); err != nil {
@@ -233,6 +234,16 @@ func runProcess(arguments []string) error {
 	return nil
 }
 
+// recordStartFailure records a command that could not start. The state file
+// is the classification evidence, because no child output can write it; the
+// stderr line is only a diagnostic.
+func recordStartFailure(stateDir string, stderr *os.File) {
+	_, _ = stderr.WriteString(worker.HeadlessStartFailedMarker + "\n")
+	_ = writeState(stateDir, stateStartFailed, "1")
+	_ = writeState(stateDir, stateStatus, string(statusExited))
+	_ = writeState(stateDir, stateExitCode, strconv.Itoa(worker.HeadlessStartFailedExitCode))
+}
+
 // inspectProcess prints one bounded state response and marks a vanished
 // running process as lost for coordinator recovery.
 func inspectProcess(arguments []string) error {
@@ -268,6 +279,7 @@ func inspectProcess(arguments []string) error {
 		Status: string(status), ExitCode: readExitCode(stateDir),
 		Stdout: base64.StdEncoding.EncodeToString(stdout), Stderr: base64.StdEncoding.EncodeToString(stderr),
 		StdoutTruncated: stdoutTruncated, StderrTruncated: stderrTruncated,
+		StartFailed: readBoolean(statePath(stateDir, stateStartFailed)),
 	}
 	return json.NewEncoder(os.Stdout).Encode(wire)
 }
@@ -352,7 +364,7 @@ func validateStateDir(path string) error {
 
 // clearStateForReplacement removes only files owned by one invocation state.
 func clearStateForReplacement(stateDir string) error {
-	for _, name := range []string{statePID, stateExitCode, stateStdout, stateStderr, stateStdoutLimit, stateStderrLimit, stateCancelMarker} {
+	for _, name := range []string{statePID, stateExitCode, stateStdout, stateStderr, stateStdoutLimit, stateStderrLimit, stateCancelMarker, stateStartFailed} {
 		if err := os.Remove(statePath(stateDir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("clear headless state: %w", err)
 		}

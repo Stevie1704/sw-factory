@@ -1,0 +1,91 @@
+#!/bin/bash
+
+# factory-copilot starts the pinned GitHub Copilot CLI inside a factory
+# worker. The coordinator's harness adapter calls it with the complete Copilot
+# argument list, which it passes through unchanged.
+#
+# The launcher owns three worker-side rules (docs/worker-runtime.md):
+# - The dedicated Copilot token reaches the CLI only as COPILOT_GITHUB_TOKEN
+#   in this process. It is read from the read-only credential projection, so
+#   it never appears in Docker arguments, the coordinator environment, or
+#   headless state files. Other GitHub tokens and Copilot, telemetry, and CI
+#   controls from the caller's environment are removed.
+# - The Copilot home is the private role-volume directory, and the
+#   factory-managed user settings are restored before every launch. User-level
+#   MCP configuration, hooks, and plugins that an earlier session left behind
+#   are removed. Native session state stays for resume.
+# - A missing, empty, or unreadable credential gives exactly one stderr line,
+#   "factory-copilot: credential unavailable", and exit status 78
+#   (EX_CONFIG). The credential and its path are never printed.
+# - A Copilot home without every role-mandated skill gives exactly one stderr
+#   line, "factory-copilot: role skills missing; recreate the role volume",
+#   and exit status 78. Docker seeds a role volume from the image only while
+#   the volume is empty, so a volume first created from an image without
+#   Copilot never receives the skills (worker/SKILLS.md).
+set -euo pipefail
+
+credential_file=/run/factory-auth/copilot-token
+managed_settings=/usr/local/share/factory-copilot/settings.json
+copilot_home=/home/factory/.copilot
+# role_skills are the role-mandated worker skills (internal/harness/skills.go).
+role_skills="implement specification-review standards-review pr grilling"
+
+# credential_unavailable reports the one failure line the adapter maps to an
+# authentication failure.
+credential_unavailable() {
+  printf 'factory-copilot: credential unavailable\n' >&2
+  exit 78
+}
+
+# remove_caller_controls unsets every caller variable that could select
+# another credential or change Copilot, telemetry, or CI behavior.
+remove_caller_controls() {
+  local name
+  for name in $(compgen -e); do
+    case "$name" in
+      COPILOT_* | GH_* | GITHUB_* | OTEL_* | CI) unset "$name" ;;
+    esac
+  done
+}
+
+# restore_managed_configuration replaces the user settings atomically and
+# removes user-level executable configuration from the Copilot home.
+restore_managed_configuration() {
+  umask 077
+  mkdir -p "$copilot_home"
+  rm -rf "$copilot_home/mcp-config.json" "$copilot_home/hooks" "$copilot_home/installed-plugins"
+  # An interrupted launch can leave a read-only copy that cp cannot replace.
+  rm -f "$copilot_home/settings.json.new"
+  cp "$managed_settings" "$copilot_home/settings.json.new"
+  mv -f "$copilot_home/settings.json.new" "$copilot_home/settings.json"
+}
+
+# require_role_skills refuses a Copilot home that lacks a role-mandated skill,
+# so no role runs without the guidance its prompt names.
+require_role_skills() {
+  local skill
+  for skill in $role_skills; do
+    if [ ! -f "$copilot_home/skills/$skill/SKILL.md" ]; then
+      printf 'factory-copilot: role skills missing; recreate the role volume\n' >&2
+      exit 78
+    fi
+  done
+}
+
+token=""
+# Standard error is redirected before the input, so a failed open cannot
+# print the projection path.
+{ IFS= read -r token || true; } 2>/dev/null <"$credential_file" || true
+token="${token%$'\r'}"
+if [ -z "$token" ]; then
+  credential_unavailable
+fi
+
+remove_caller_controls
+restore_managed_configuration
+require_role_skills
+
+export COPILOT_HOME="$copilot_home"
+export COPILOT_AUTO_UPDATE=false
+export COPILOT_GITHUB_TOKEN="$token"
+exec copilot "$@"

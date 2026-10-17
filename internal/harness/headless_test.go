@@ -199,8 +199,11 @@ type headlessTestWorker struct {
 	inspections  []worker.HeadlessInspection
 	inspectCalls int
 	startErr     error
-	cancelCalls  int
-	finishCalls  int
+	// adopted reports that a process already owned the invocation, so the
+	// launch reused it instead of starting the requested command.
+	adopted     bool
+	cancelCalls int
+	finishCalls int
 	// respond derives the projection from the recorded launch, so a test can
 	// verify that an adapter-assigned native identity round-trips.
 	respond func(worker.HeadlessRequest) worker.HeadlessInspection
@@ -231,7 +234,7 @@ func (w *headlessTestWorker) StartHeadless(_ context.Context, request worker.Hea
 	if w.startErr != nil {
 		return worker.HeadlessExecution{}, w.startErr
 	}
-	return worker.HeadlessExecution{RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID}, nil
+	return worker.HeadlessExecution{RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID, Adopted: w.adopted}, nil
 }
 
 // InspectHeadless returns the controlled process state.
@@ -262,8 +265,8 @@ func (w *headlessTestWorker) FinishHeadless(context.Context, worker.HeadlessRequ
 
 var _ worker.HeadlessProcessRuntime = (*headlessTestWorker)(nil)
 
-// TestHeadlessAdaptersShareOneLifecycleContract verifies both production
-// adapters satisfy the same terminal-free seam: headless capabilities, a
+// TestHeadlessAdaptersShareOneLifecycleContract verifies every production
+// adapter satisfies the same terminal-free seam: headless capabilities, a
 // detached launch that needs no workspace, exact-session resume, idempotent
 // cleanup, and a refusal to inspect another harness's native session.
 func TestHeadlessAdaptersShareOneLifecycleContract(t *testing.T) {
@@ -289,6 +292,18 @@ func TestHeadlessAdaptersShareOneLifecycleContract(t *testing.T) {
 				return adapter
 			},
 			stdout:  `{"type":"system","subtype":"init","session_id":"` + headlessTestSession + `"}` + "\n",
+			session: headlessTestSession,
+		},
+		{
+			name: harness.NameCopilot,
+			build: func(runtime worker.HeadlessProcessRuntime) harness.HeadlessRuntime {
+				adapter := harness.NewCopilotHeadless(runtime)
+				adapter.NewSessionID = func() (string, error) { return headlessTestSession, nil }
+				return adapter
+			},
+			// Provisional identity evidence pending RB-1: a session identity
+			// field in a complete JSONL object of the current process.
+			stdout:  `{"sessionId":"` + headlessTestSession + `"}` + "\n",
 			session: headlessTestSession,
 		},
 	} {
@@ -354,7 +369,7 @@ func TestHeadlessAdaptersShareOneLifecycleContract(t *testing.T) {
 // dispatches through this map alone.
 func TestHeadlessAdaptersResolveToTheHarnessTheyAreKeyedBy(t *testing.T) {
 	adapters := harness.NewHeadlessAdapters(&headlessTestWorker{})
-	if len(adapters) != 2 {
+	if len(adapters) != 3 {
 		t.Fatalf("headless adapters = %#v, want both production harnesses", adapters)
 	}
 	for selected, adapter := range adapters {

@@ -25,6 +25,17 @@ const (
 	HeadlessLaunchResume HeadlessLaunchMode = "resume"
 )
 
+// HeadlessStartFailedMarker is the stderr line the worker helper records,
+// with exit status HeadlessStartFailedExitCode, when the requested command
+// cannot start at all, for example because the worker image has no such
+// executable. It is a diagnostic only: a started command could print the
+// same line, so classification reads HeadlessInspection.StartFailed instead.
+const HeadlessStartFailedMarker = "process start failed"
+
+// HeadlessStartFailedExitCode is the exit status recorded with
+// HeadlessStartFailedMarker.
+const HeadlessStartFailedExitCode = 127
+
 // HeadlessStatus is the worker-owned lifecycle projection for one detached
 // process. It contains no Docker name, host PID, or terminal identity.
 type HeadlessStatus string
@@ -77,6 +88,11 @@ type HeadlessExecution struct {
 	WorkerID string
 	// InvocationID identifies the process state.
 	InvocationID string
+	// Adopted reports that a process already owned the invocation, so this
+	// call reused it and did not run the requested command. An adapter that
+	// assigned a native identity for this call can require it back only when
+	// Adopted is false.
+	Adopted bool
 }
 
 // HeadlessInspection reports bounded detached-process state and diagnostics.
@@ -97,6 +113,10 @@ type HeadlessInspection struct {
 	// OutOfMemory reports that the process exited with a failure after the
 	// worker's memory limit killed a process during the invocation.
 	OutOfMemory bool
+	// StartFailed reports helper-owned evidence that the command could not
+	// start at all, such as a harness executable missing from the image. No
+	// process output can set it.
+	StartFailed bool
 }
 
 // HeadlessProcessRuntime is the optional worker extension for terminal-free
@@ -129,13 +149,13 @@ func (r *DockerRuntime) StartHeadless(ctx context.Context, request HeadlessReque
 	case HeadlessStatusStarting, HeadlessStatusRunning:
 		// A detached process already owns the invocation, or a resume is still
 		// in flight. Both states are idempotent observations across response loss.
-		return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID}, nil
+		return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID, Adopted: true}, nil
 	case HeadlessStatusExited:
 		if request.Mode == HeadlessLaunchFresh {
 			// A fresh launch is idempotent across coordinator response loss. The
 			// durable helper state is the launch boundary, so never create a
 			// second native process for the same invocation.
-			return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID}, nil
+			return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID, Adopted: true}, nil
 		}
 	case HeadlessStatusCancelled:
 		if request.Mode != HeadlessLaunchResume {
@@ -290,6 +310,9 @@ type headlessInspectionWire struct {
 	StdoutTruncated bool `json:"stdout_truncated"`
 	// StderrTruncated reports incomplete retained diagnostic output.
 	StderrTruncated bool `json:"stderr_truncated"`
+	// StartFailed reports that the helper could not start the command. It is
+	// absent from a helper in a worker image built before the field existed.
+	StartFailed *bool `json:"start_failed"`
 }
 
 // toInspection validates the worker helper's neutral wire values.
@@ -308,7 +331,17 @@ func (w headlessInspectionWire) toInspection() (HeadlessInspection, error) {
 	if err != nil {
 		return HeadlessInspection{}, errors.New("headless process stderr is not valid base64")
 	}
-	return HeadlessInspection{Status: status, ExitCode: w.ExitCode, Stdout: string(stdout), Stderr: string(stderr), StdoutTruncated: w.StdoutTruncated, StderrTruncated: w.StderrTruncated}, nil
+	return HeadlessInspection{Status: status, ExitCode: w.ExitCode, Stdout: string(stdout), Stderr: string(stderr), StdoutTruncated: w.StdoutTruncated, StderrTruncated: w.StderrTruncated, StartFailed: w.startFailed(string(stderr))}, nil
+}
+
+// startFailed returns the helper's start-failure state. A helper from an
+// older worker image reports no state; for it the exit status and the
+// leading stderr marker stay the evidence, which is all that helper records.
+func (w headlessInspectionWire) startFailed(stderr string) bool {
+	if w.StartFailed != nil {
+		return *w.StartFailed
+	}
+	return HeadlessStatus(w.Status) == HeadlessStatusExited && w.ExitCode == HeadlessStartFailedExitCode && strings.HasPrefix(stderr, HeadlessStartFailedMarker+"\n")
 }
 
 // validateHeadlessRequest validates identity, command, policy, and explicit

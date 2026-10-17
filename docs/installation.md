@@ -34,8 +34,12 @@ Each release `vX.Y.Z` publishes these artifacts on its GitHub release page:
 The worker base image is `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z`. A release
 refers to it only by digest. `factory version --json` prints that digest as
 `worker_base_image`. The image is published for both worker platforms. It
-carries the pinned Codex and Claude Code releases and the worker-only helpers
-`factory-report` and `factory-worker-headless`. Because of this, the host
+carries the pinned Codex, Claude Code, and GitHub Copilot CLI releases, the
+Copilot launcher `factory-copilot`, and the worker-only helpers
+`factory-report` and `factory-worker-headless`. Copilot support is not
+released yet: a repository can select it only after an operator records a live
+Copilot skill smoke ([GitHub Copilot
+CLI](https://github.com/Stevie1704/sw-factory/blob/main/docs/configuration.md#github-copilot-cli)). Because of this, the host
 needs only `factory`.
 
 The `factory` binary contains every resource that onboarding needs: the
@@ -108,7 +112,8 @@ Install the new archive in place of the old one. A release coordinator
 accepts only a worker image built from the worker base image of its own
 release. After an upgrade, `factory doctor` reports `worker.release.mismatch`
 until you rebuild the repository worker image from the new base image,
-record its digest in `factory.yaml`, and record a new skill smoke. Prepare
+record its digest in `factory.yaml`, and record a new skill smoke for every
+harness the repository can select, Copilot included. Prepare
 the new release's resources with `factory onboard prepare`, or run `factory
 onboard`, to do these steps with an agent.
 

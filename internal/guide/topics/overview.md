@@ -55,7 +55,7 @@ directory: `~/Library/Application Support` on macOS, `$XDG_CONFIG_HOME` or
 - **Run**: one supervised execution for one issue. It owns the frozen
   specification, a `factory/<run-id>` branch, a worktree, and at most one
   pull request. One repository has at most one active run.
-- **Invocation**: one harness attempt (Codex or Claude Code) for one role in
+- **Invocation**: one harness attempt (Codex, Claude Code, or Copilot CLI) for one role in
   a run. A role is implementation, architecture, test, review, or another
   factory-declared role.
 - **Worker**: the isolated Docker container of an invocation. It sees only

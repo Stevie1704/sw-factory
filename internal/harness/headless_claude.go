@@ -93,7 +93,7 @@ func (c *ClaudeHeadless) StartHeadless(ctx context.Context, request HeadlessStar
 	// process was given. Requiring the newly generated identity there would
 	// cancel a healthy run. Exact-session enforcement belongs on resume, where
 	// it guards against a forked conversation.
-	return c.launch(ctx, request, claudeHeadlessCommand(request, assigned, false), worker.HeadlessLaunchFresh, "")
+	return c.launch(ctx, request, claudeHeadlessCommand(request, assigned, false), worker.HeadlessLaunchFresh, "", "")
 }
 
 // ResumeHeadless continues the exact persisted native session and never
@@ -109,7 +109,7 @@ func (c *ClaudeHeadless) ResumeHeadless(ctx context.Context, request HeadlessSta
 	if !validSessionID(request.ResumeSessionID) {
 		return HeadlessSession{}, errors.New("Claude native session id must be a version-four UUID")
 	}
-	return c.launch(ctx, request, claudeHeadlessCommand(request, request.ResumeSessionID, true), worker.HeadlessLaunchResume, request.ResumeSessionID)
+	return c.launch(ctx, request, claudeHeadlessCommand(request, request.ResumeSessionID, true), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
 // claudeHeadlessCommand translates one neutral request into the documented
@@ -147,7 +147,9 @@ func claudeHeadlessCommand(request HeadlessStartRequest, sessionID string, resum
 // never treats human-readable output as a native session identity.
 func claudeInitSessionID(output string) string {
 	identity := ""
-	forEachHeadlessEvent(output, func(line string) bool {
+	// An unreadable line ends the scan before any identity was found, so a
+	// scan error leaves identity empty and needs no separate handling.
+	_ = forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type      string `json:"type"`
 			Subtype   string `json:"subtype"`
@@ -174,7 +176,7 @@ func claudeInitSessionID(output string) string {
 func classifyClaudeEvents(output string) *HeadlessFailure {
 	category := ""
 	resultSeen, resultFailed := false, false
-	forEachHeadlessEvent(output, func(line string) bool {
+	scanErr := forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type              string `json:"type"`
 			Subtype           string `json:"subtype"`
@@ -196,6 +198,10 @@ func classifyClaudeEvents(output string) *HeadlessFailure {
 		}
 		return true
 	})
+	if scanErr != nil {
+		// Unread events could name any outcome, so none is inferred.
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameClaude)}
+	}
 	if resultSeen && !resultFailed {
 		return nil
 	}

@@ -129,3 +129,28 @@ func TestCancelPIDEscalatesWithoutReportingSuccessEarly(t *testing.T) {
 		t.Fatal("cancelPID() returned while the child was still alive")
 	}
 }
+
+// TestStartFailureIsHelperStateThatAReplacementClears verifies the helper
+// records a command that could not start as its own state file, which no
+// child output can write, and that a replacement launch removes it.
+func TestStartFailureIsHelperStateThatAReplacementClears(t *testing.T) {
+	stateDir := t.TempDir()
+	stderr, err := os.Create(statePath(stateDir, stateStderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+	recordStartFailure(stateDir, stderr)
+	if !readBoolean(statePath(stateDir, stateStartFailed)) {
+		t.Fatal("start failure was not recorded as helper state")
+	}
+	if status, err := readStatus(stateDir); err != nil || status != statusExited {
+		t.Fatalf("status = %q, %v; want exited", status, err)
+	}
+	if err := clearStateForReplacement(stateDir); err != nil {
+		t.Fatal(err)
+	}
+	if readBoolean(statePath(stateDir, stateStartFailed)) {
+		t.Fatal("replacement kept the earlier start failure")
+	}
+}

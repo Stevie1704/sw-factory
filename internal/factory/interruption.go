@@ -37,7 +37,7 @@ type ResumeResult struct {
 type AuthRefreshRequest struct {
 	// RunID optionally selects one opaque factory run identifier.
 	RunID string
-	// Harness selects codex or claude. Empty uses the invocation's harness.
+	// Harness selects codex, claude, or copilot. Empty uses the invocation's harness.
 	Harness config.Harness
 	// Resume continues the affected native session after the credential source
 	// has been projected. It is deliberately opt-in so the default refresh

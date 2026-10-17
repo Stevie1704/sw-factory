@@ -42,6 +42,7 @@ var credentialFilePatterns = []string{
 	".env", ".env.*", ".netrc", ".git-credentials", ".npmrc", ".pypirc",
 	"*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ecdsa*", "id_ed25519*",
 	"auth.json", "credentials.json", ".credentials.json", "claude-credentials.json",
+	"copilot-token",
 }
 
 // factoryArtifactPrefix starts the name of a top-level proof directory that

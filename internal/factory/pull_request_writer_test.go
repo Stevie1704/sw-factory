@@ -46,9 +46,14 @@ func reachReviewedCheckpoint(t *testing.T, fixture *nonBlockingReadinessFixture)
 	if _, err := fixture.service.RunBaseline(ctx, factory.BaselineRequest{RunID: claimed.Run.ID}); err != nil {
 		t.Fatalf("RunBaseline() error = %v", err)
 	}
-	implementation, err := fixture.service.StartAgent(ctx, factory.AgentRequest{RunID: claimed.Run.ID})
-	if err != nil {
-		t.Fatalf("StartAgent(implementation) error = %v", err)
+	var implementation factory.AgentLaunchResult
+	if fixture.currentRun(t).Stage == store.StageTest {
+		implementation = passTestStage(t, fixture, claimed.Run.ID)
+	} else {
+		implementation, err = fixture.service.StartAgent(ctx, factory.AgentRequest{RunID: claimed.Run.ID})
+		if err != nil {
+			t.Fatalf("StartAgent(implementation) error = %v", err)
+		}
 	}
 	fixture.workspace.state.ChangedPaths = []string{"internal/factory/lint.go"}
 	fixture.acceptReport(t, implementation, report.Report{
@@ -254,6 +259,145 @@ func TestPullRequestWriterSummaryPrecedesTheReadinessHandOff(t *testing.T) {
 	if !strings.Contains(final, "An agent (`pr_writer`) wrote this summary") {
 		t.Fatalf("final PR body = %q, want the advisory note", final)
 	}
+}
+
+// TestCopilotAndMixedHarnessWorkflowsReachReadiness verifies a complete run
+// from implementation through both review axes and the PR writer to the
+// ready hand-off, once with every role on Copilot, the test stage included,
+// and twice with Copilot
+// mixed with Codex and Claude. Each role launches on its configured harness
+// and records it, and the read-only roles keep a read-only worker.
+func TestCopilotAndMixedHarnessWorkflowsReachReadiness(t *testing.T) {
+	for _, test := range []struct {
+		name                                         string
+		implementation, specification, standards, pr config.Harness
+		// testStage runs the test role on Copilot before implementation.
+		testStage bool
+	}{
+		{name: "copilot only", implementation: config.HarnessCopilot, specification: config.HarnessCopilot, standards: config.HarnessCopilot, pr: config.HarnessCopilot, testStage: true},
+		{name: "claude implements, copilot and codex review, copilot writes", implementation: config.HarnessClaude, specification: config.HarnessCopilot, standards: config.HarnessCodex, pr: config.HarnessCopilot},
+		{name: "copilot implements, claude and copilot review, codex writes", implementation: config.HarnessCopilot, specification: config.HarnessClaude, standards: config.HarnessCopilot, pr: config.HarnessCodex},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newNonBlockingReadinessFixture(t, configurePullRequestWriter, func(policy *config.RepositoryConfig) {
+				policy.RoleHarnessDefaults["implementation"] = test.implementation
+				policy.RoleHarnessDefaults["spec_review"] = test.specification
+				policy.RoleHarnessDefaults["standards_review"] = test.standards
+				policy.RoleHarnessDefaults["pr_writer"] = test.pr
+				if test.testStage {
+					policy.TestPolicy.Mode = config.TestModeRequired
+					policy.RoleHarnessDefaults["test"] = config.HarnessCopilot
+					policy.ModelOptions["test"] = []string{"gpt-5"}
+				}
+			})
+			run := reachReviewedCheckpoint(t, fixture)
+			if outcome := drive(t, fixture); outcome != "invocation_active" {
+				t.Fatalf("first pass outcome = %q, want the pr_writer executing", outcome)
+			}
+			writers := pullRequestWriterInvocations(t, fixture, run.ID)
+			if len(writers) != 1 {
+				t.Fatalf("pr_writer invocations = %#v, want one", writers)
+			}
+			writePullRequestWriterReport(t, writers[0], report.Report{
+				Outcome: report.OutcomeCompleted, Summary: "summary written",
+				PullRequestSummary: &report.PullRequestSummary{Body: "## Summary\n\nAdds the behavior."},
+			})
+			drive(t, fixture)
+
+			if ready := fixture.currentRun(t); ready.Stage != store.StageReady || fixture.pullRequests.existing.Draft {
+				t.Fatalf("run = %s draft=%v, want the ready hand-off", ready.Stage, fixture.pullRequests.existing.Draft)
+			}
+			want := []config.Harness{test.implementation, test.specification, test.standards, test.pr}
+			if test.testStage {
+				want = append([]config.Harness{config.HarnessCopilot}, want...)
+			}
+			if got := fixture.harness.startHarnesses; strings.Join(harnessNames(got), ",") != strings.Join(harnessNames(want), ",") {
+				t.Fatalf("launches = %v, want %v", got, want)
+			}
+			wantByRole := map[string]config.Harness{"test": config.HarnessCopilot, "implementation": test.implementation, "spec_review": test.specification, "standards_review": test.standards, "pr_writer": test.pr}
+			for _, invocation := range runInvocations(t, fixture, run.ID) {
+				if invocation.Harness != string(wantByRole[invocation.Role]) {
+					t.Fatalf("%s invocation recorded harness %q, want %s", invocation.Role, invocation.Harness, wantByRole[invocation.Role])
+				}
+			}
+			readOnly := 0
+			for _, start := range fixture.worker.starts {
+				if start.Role == "spec_review" || start.Role == "standards_review" || start.Role == "pr_writer" {
+					if !start.WorktreeReadOnly {
+						t.Fatalf("%s worker start = %#v, want a read-only worktree", start.Role, start)
+					}
+					readOnly++
+				}
+			}
+			if readOnly != 3 {
+				t.Fatalf("read-only role workers = %d, want both reviewers and the PR writer", readOnly)
+			}
+		})
+	}
+}
+
+// passTestStage runs the test role, hands its red focused test to the
+// implementation role, and returns the implementation launch the accepted
+// test handoff started.
+func passTestStage(t *testing.T, fixture *nonBlockingReadinessFixture, runID string) factory.AgentLaunchResult {
+	t.Helper()
+	testFile := filepath.Join(fixture.workspace.workspace.Worktree, "internal", "factory", "behavior_test.go")
+	if err := os.MkdirAll(filepath.Dir(testFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(testFile, []byte("package factory_test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	launch, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: runID})
+	if err != nil {
+		t.Fatalf("StartAgent(test) error = %v", err)
+	}
+	if launch.Invocation.Role != "test" {
+		t.Fatalf("first launch role = %q, want test", launch.Invocation.Role)
+	}
+	fixture.workspace.state.ChangedPaths = []string{"internal/factory/behavior_test.go"}
+	fixture.worker.results = append(fixture.worker.results, worker.CommandResult{ExitCode: 1, Stdout: "expected behavior assertion"})
+	fixture.acceptReport(t, launch, report.Report{
+		Outcome: report.OutcomeCompleted, Summary: "focused behavior test is red on base",
+		TestHandoff: &report.TestHandoff{
+			AcceptanceCoverage:      []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "focused test"}},
+			ChangedFiles:            []string{"internal/factory/behavior_test.go"},
+			FocusedTestCommand:      "go test ./internal/factory -run TestBehavior",
+			ExpectedFailureReason:   "expected behavior assertion",
+			ObservedFailureEvidence: []report.Evidence{{Kind: "exit_code", Detail: "focused command exited with code 1"}},
+		},
+	})
+	for _, invocation := range runInvocations(t, fixture, runID) {
+		if invocation.Role == "implementation" && invocation.Status == store.InvocationStatusActive {
+			return factory.AgentLaunchResult{Invocation: invocation}
+		}
+	}
+	t.Fatal("accepted test handoff started no implementation invocation")
+	return factory.AgentLaunchResult{}
+}
+
+// harnessNames renders harness identities for an order-sensitive comparison.
+func harnessNames(values []config.Harness) []string {
+	names := make([]string, len(values))
+	for index, value := range values {
+		names[index] = string(value)
+	}
+	return names
+}
+
+// runInvocations returns every persisted invocation of a run.
+func runInvocations(t *testing.T, fixture *nonBlockingReadinessFixture, runID string) []store.Invocation {
+	t.Helper()
+	opened, err := store.Open(context.Background(), fixture.operationalPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = opened.Close() }()
+	invocations, err := opened.Invocations(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("Invocations() error = %v", err)
+	}
+	return invocations
 }
 
 // TestPullRequestWriterFailureDoesNotBlockTheHandOff verifies a failed,

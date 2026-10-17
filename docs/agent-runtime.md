@@ -7,8 +7,8 @@ mutations, Git history, or workflow transitions.
 
 ## Harness adapters
 
-Codex and Claude Code are interchangeable at the role-selection boundary. Both
-implement the factory-owned `HeadlessRuntime` seam used by every production
+Codex, Claude Code, and the GitHub Copilot CLI are interchangeable at the
+role-selection boundary. Each one implements the factory-owned `HeadlessRuntime` seam used by every production
 launch: capability discovery, terminal-free launch, exact native resume,
 running/exited inspection, cancellation, and accepted-completion shutdown. An
 adapter translates one harness-neutral invocation into native commands and
@@ -18,27 +18,31 @@ The coordinator resolves the adapter from the frozen repository policy for the
 role, so workflow code never names a tool. `Capabilities` reports the adapter
 identity. The check-repair path dispatches on the harness recorded for the
 session under repair and refuses to continue when the resolved adapter reports
-a different identity, so mid-session migration between Codex and Claude is not
-possible.
+a different identity, so a session never migrates to another harness.
 
 Each adapter translates the validated model and reasoning effort into its own
 arguments: Codex uses `-m` and `-c model_reasoning_effort=`, Claude Code uses
-`--model` and `--effort`. The effort names differ between the two, and Claude
-Code silently falls back to its default for a level it does not recognize, so
-the repository-declared options per role are what constrain the value.
+`--model` and `--effort`, Copilot uses `--model` and `--reasoning-effort`. The
+effort names differ between the harnesses, and Claude Code silently falls back
+to its default for a level it does not recognize, so the repository-declared
+options per role are what constrain the value. Claude Code and Copilot also
+have closed effort sets, and Copilot's model `auto` lets the CLI choose another
+model, so the coordinator refuses such a pairing before launch
+(`harness_selection_unsupported`).
 
-The two adapters differ in how a native session identity is obtained:
+The adapters differ in how a native session identity is obtained:
 
 | Harness | Native session identity | Resume |
 | --- | --- | --- |
 | Codex headless | Read from the machine-readable `thread.started` event emitted by `codex exec --json` and retained in the invocation | `codex exec --json ... resume <uuid>` with the exec flags before the subcommand |
 | Claude Code headless | Assigned with `--session-id <uuid>` and confirmed by the `system`/`init` event's `session_id` in the `stream-json` output | `claude -p ... --resume <uuid>`, refused when the confirmed identity differs |
+| Copilot CLI headless | Assigned with `--session-id=<uuid>` and confirmed by a top-level `sessionId` or `session_id` field of a JSONL line in the output of the current process. This evidence is provisional until release blocker RB-1 names the real event; absent or ambiguous evidence fails closed. | `factory-copilot ... --resume=<uuid>` with the complete UUID only; the CLI fails closed on an unknown UUID. Bare `--resume`, `--continue`, and names are never passed. |
 
 ### Headless execution
 
 A repository whose declared roles all select a harness with a headless adapter
 launches every role through `HeadlessRuntime`, and per-role selection may mix
-Codex and Claude Code. The adapter asks the existing per-invocation Docker
+Codex, Claude Code, and Copilot. The adapter asks the existing per-invocation Docker
 worker to run the harness; it never starts a harness, SDK loop, file operation,
 or shell command on the coordinator host. The worker uses `docker exec -d` with
 neither a TTY nor attached stdin, and stores bounded stdout/stderr in the
@@ -47,16 +51,16 @@ invocation's private role-home process state.
 Each adapter owns its own native command, session assignment, and event
 vocabulary:
 
-| | Codex | Claude Code |
-| --- | --- | --- |
-| Command | `codex exec --json` | `claude -p --output-format stream-json --verbose` |
-| Launch event | `thread.started` | `system` / `init` |
-| Failure events | `error` and `turn.failed`, classified from code, status, or documented message | the machine `error` category on an `api_retry` system event or an API-error message, applied only when the run also ended in a failed `result` |
+| | Codex | Claude Code | Copilot CLI |
+| --- | --- | --- | --- |
+| Command | `codex exec --json` | `claude -p --output-format stream-json --verbose` | `factory-copilot --prompt=… --output-format=json --allow-all-tools --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN` |
+| Launch event | `thread.started` | `system` / `init` | provisional: a top-level `sessionId` or `session_id` field (RB-1) |
+| Failure events | `error` and `turn.failed`, classified from code, status, or documented message | the machine `error` category on an `api_retry` system event or an API-error message, applied only when the run also ended in a failed `result` | the first stderr line: a missing or unvalidated credential is an authentication failure. Every other shape (expired token, rate limit, policy or model denial) is not observed yet (RB-5) and settles as an unexpected exit, never as a capacity retry. |
 
 Machine output is control-plane input only. Claude Code retries a failed API
 request before it gives up, so a retry category becomes a coordinator outcome
 only when the final `result` event reports `is_error`; the result text itself is
-never a category. Both adapters repeat that classification on settled-process
+never a category. The adapters repeat that classification on settled-process
 inspection, so a failure arriving after launch discovery still reaches the
 factory's typed outcome. Model text is never a workflow result.
 
@@ -81,6 +85,15 @@ the credential its own role volume already holds, which is why startup
 diagnosis reports a missing source as a warning rather than a failure. That case
 is real for Claude Code on macOS, where the login credential lives in the
 Keychain rather than in a file a host can hand over.
+
+Copilot is the exception ([ADR 0028](adr/0028-copilot-cli-joins-the-headless-seam-behind-live-evidence.md)).
+Its only credential is the dedicated token file `copilot_auth_path`; the role
+volume keeps no Copilot login, so a repository whose role defaults select
+Copilot needs that source, and diagnosis blocks without it. The launcher
+exports the token as `COPILOT_GITHUB_TOKEN` to the Copilot process only. The
+coordinator's `gh` login, `GH_TOKEN`, `GITHUB_TOKEN`, and `~/.copilot` are never
+a Copilot credential. `factory auth refresh --harness copilot` reseeds the
+token and, with `--resume`, continues the recorded Copilot session.
 
 Either way the worker runs on the CLI's own subscription credentials, and its
 `init` event reports `apiKeySource: "none"`. That keeps the run on the
@@ -107,23 +120,35 @@ mode, which is the documented API-key path for scripted runs, is also
 unavailable to the factory because it skips skill discovery and would remove the
 curated worker skill set the role prompts mandate.
 
-Both adapters disable the harness's own approval gates, because the worker is
+Every adapter disables the harness's own approval gates, because the worker is
 the security boundary and an inner gate would stall an unattended invocation.
 The Claude launch additionally passes `--strict-mcp-config` with an empty
 `--mcp-config` set, so a session loads no MCP server from any configuration
 file. A factory role home is created by the worker image and is never seeded
 from a host harness directory, so a session inherits no personal plugin, hook,
 MCP server, or setting. The only skills a session sees are the curated set the
-worker image installs into both role homes, which the worker image digest pins
+worker image installs into each role home, which the worker image digest pins
 for the run; `worker/SKILLS.md` records the set and ADR 0006 records the
-boundary. Each role prompt names the skills that role may use, because both
-harnesses advertise every installed skill to every role. A skill a role prompt
+boundary. Each role prompt names the skills that role may use, because every
+harness advertises every installed skill to every role. A skill a role prompt
 mandates must therefore stay out of each harness's hidden-skill metadata;
 `worker/SKILLS.md` records that activation contract and how it is verified. `DISABLE_AUTOUPDATER=1` keeps Claude Code on the
 version pinned by the run's worker image digest, so a tool upgrade cannot
 change behavior halfway through a run.
 
-Harness contract tests drive both adapters through the complete lifecycle
+The Copilot adapter starts the in-worker launcher `factory-copilot`, never the
+bare CLI. The launcher gives the dedicated token only to the Copilot process,
+removes caller variables that could select another credential, and restores
+the image-owned Copilot settings before every launch: project skills hidden,
+hooks, session export, memory, and automatic updates off, no trusted folder.
+`--allow-all-tools` replaces the approval gate as for the other harnesses;
+`--allow-all`, `--yolo`, `--add-dir`, `--plugin-dir`, and remote or sharing
+options are never passed. `--disable-builtin-mcps` removes the built-in GitHub
+MCP server, and `--no-custom-instructions` asks the CLI to ignore repository
+instruction files. That a live run honors every suppression is release
+blocker RB-7; see [Copilot CLI release evidence](acceptance/copilot.md).
+
+Harness contract tests drive every adapter through the complete lifecycle
 against controlled stub executables before any live run.
 
 ## Starting an invocation

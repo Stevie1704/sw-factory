@@ -249,3 +249,196 @@ func runSkillSmokeScript(t *testing.T, script, dir, dockerBody string, environme
 	}
 	return skillSmokeRun{err: err, stderr: stderr.String(), evidence: string(recorded)}
 }
+
+// copilotSmokeToken is the dedicated Copilot credential the copilot smoke
+// tests project. No assertion may find it outside the worker's standard input.
+const copilotSmokeToken = "github_pat_smoke_test_only_0000"
+
+// answeringCopilot is a stub Docker body for the copilot smoke. It logs every
+// Docker argument list and the standard input of each prompt call, reports the
+// pinned CLI version, and quotes the first instruction line of every skill.
+// Each Docker call is one log line.
+const answeringCopilot = `
+printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
+case "$*" in
+  *--version*) printf 'GitHub Copilot CLI 1.0.98.\nRun '"'"'copilot update'"'"' to check for updates.\n' ;;
+  *) cat >> "$SMOKE_STDIN_LOG"; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+esac
+`
+
+// copilotSmokeRun is the observable result of one copilot smoke run: the
+// script result, every Docker argument list, and the standard input the prompt
+// calls received.
+type copilotSmokeRun struct {
+	skillSmokeRun
+	dockerArguments string
+	stdin           string
+}
+
+// runCopilotSmoke runs scripts/smoke-skills.sh for the copilot harness with a
+// dedicated token file. The extra environment is applied last, so a test can
+// replace the token path.
+func runCopilotSmoke(t *testing.T, dockerBody string, environment ...string) copilotSmokeRun {
+	t.Helper()
+	dir := t.TempDir()
+	token := filepath.Join(dir, "copilot-token")
+	if err := os.WriteFile(token, []byte(copilotSmokeToken+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dockerLog := filepath.Join(dir, "docker.log")
+	stdinLog := filepath.Join(dir, "stdin.log")
+	base := []string{"HARNESSES=copilot", "COPILOT_TOKEN_PATH=" + token, "SMOKE_DOCKER_LOG=" + dockerLog, "SMOKE_STDIN_LOG=" + stdinLog}
+	smoke := runSkillSmokeScript(t, "../scripts/smoke-skills.sh", dir, dockerBody, append(base, environment...)...)
+	arguments, _ := os.ReadFile(dockerLog)
+	stdin, _ := os.ReadFile(stdinLog)
+	return copilotSmokeRun{skillSmokeRun: smoke, dockerArguments: string(arguments), stdin: string(stdin)}
+}
+
+// smokeRecord is one record of the skill smoke evidence file.
+type smokeRecord struct {
+	ImageDigest    string   `json:"image_digest"`
+	Harness        string   `json:"harness"`
+	HarnessVersion string   `json:"harness_version"`
+	Skills         []string `json:"skills"`
+}
+
+// recordsOf returns the evidence records of one harness.
+func recordsOf(t *testing.T, evidence, harness string) []smokeRecord {
+	t.Helper()
+	var recorded struct {
+		Records []smokeRecord `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(evidence), &recorded); err != nil {
+		t.Fatalf("evidence is not JSON: %v\n%s", err, evidence)
+	}
+	var matching []smokeRecord
+	for _, record := range recorded.Records {
+		if record.Harness == harness {
+			matching = append(matching, record)
+		}
+	}
+	return matching
+}
+
+// TestSkillSmokeRecordsCopilotThroughTheLauncher verifies that the copilot
+// smoke asks through the factory-copilot launcher, streams the dedicated
+// token only through standard input, and keys the record by the image digest
+// and the pinned CLI version line.
+func TestSkillSmokeRecordsCopilotThroughTheLauncher(t *testing.T) {
+	smoke := runCopilotSmoke(t, answeringCopilot)
+	if smoke.err != nil {
+		t.Fatalf("copilot smoke failed: %v\n%s", smoke.err, smoke.stderr)
+	}
+	records := recordsOf(t, smoke.evidence, "copilot")
+	if len(records) != 1 {
+		t.Fatalf("copilot records = %d, want 1:\n%s", len(records), smoke.evidence)
+	}
+	record := records[0]
+	if record.HarnessVersion != "GitHub Copilot CLI 1.0.98." {
+		t.Errorf("harness_version = %q, want the pinned CLI version line", record.HarnessVersion)
+	}
+	if record.ImageDigest != "sha256:0000000000000000000000000000000000000000000000000000000000000000" {
+		t.Errorf("image_digest = %q", record.ImageDigest)
+	}
+	skills := slices.Clone(record.Skills)
+	slices.Sort(skills)
+	if got := strings.Join(skills, " "); got != "implement pr specification-review standards-review" {
+		t.Errorf("recorded skills = %q", got)
+	}
+	if strings.Contains(smoke.dockerArguments, copilotSmokeToken) || strings.Contains(smoke.stderr, copilotSmokeToken) {
+		t.Errorf("the token reached a Docker argument or the output:\n%s\n%s", smoke.dockerArguments, smoke.stderr)
+	}
+	if !strings.Contains(smoke.stdin, copilotSmokeToken) {
+		t.Errorf("the token did not reach the worker through standard input")
+	}
+	for _, line := range strings.Split(strings.TrimSpace(smoke.dockerArguments), "\n") {
+		if strings.Contains(line, "--version") {
+			if !strings.Contains(line, "--network none") {
+				t.Errorf("the version probe runs with network access: %s", line)
+			}
+			continue
+		}
+		for _, want := range []string{"factory-copilot", "--no-custom-instructions", "--disable-builtin-mcps", "--no-remote-export", "--secret-env-vars=COPILOT_GITHUB_TOKEN", "/run/factory-auth/copilot-token"} {
+			if !strings.Contains(line, want) {
+				t.Errorf("prompt call lacks %q: %s", want, line)
+			}
+		}
+		for _, forbidden := range []string{"--allow-all ", "--yolo", "GH_TOKEN", "GITHUB_TOKEN="} {
+			if strings.Contains(line, forbidden) {
+				t.Errorf("prompt call contains %q: %s", forbidden, line)
+			}
+		}
+	}
+}
+
+// TestSkillSmokeNeverRecordsCopilotWithoutADedicatedCredential verifies that
+// an unset, empty, or missing dedicated token file skips the copilot smoke
+// with a failing exit status and no record, even when the host offers a
+// GitHub token or a Copilot home that a fallback could use.
+func TestSkillSmokeNeverRecordsCopilotWithoutADedicatedCredential(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".copilot"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".copilot", "config.json"), []byte(`{"token":"host"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty-token")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, tokenPath := range map[string]string{"unset": "", "empty file": empty, "missing file": empty + ".missing"} {
+		t.Run(name, func(t *testing.T) {
+			smoke := runCopilotSmoke(t, answeringCopilot,
+				"COPILOT_TOKEN_PATH="+tokenPath, "HOME="+home, "GH_TOKEN=gho_host", "GITHUB_TOKEN=ghu_host")
+			if smoke.err == nil {
+				t.Fatalf("smoke passed without a dedicated Copilot credential:\n%s", smoke.stderr)
+			}
+			if records := recordsOf(t, smoke.evidence, "copilot"); len(records) != 0 {
+				t.Errorf("smoke recorded copilot evidence without a credential:\n%s", smoke.evidence)
+			}
+			if smoke.dockerArguments != "" {
+				t.Errorf("smoke started a worker without a credential:\n%s", smoke.dockerArguments)
+			}
+			if !strings.Contains(smoke.stderr, "No copilot credential") {
+				t.Errorf("smoke does not name the missing credential:\n%s", smoke.stderr)
+			}
+		})
+	}
+}
+
+// TestSkillSmokeNeverRecordsAFailedCopilotCall verifies that an
+// authentication failure, a disabled organization policy, an unavailable
+// model, or a reply without the skill content records no copilot evidence and
+// fails the smoke. The token never reaches the smoke output.
+func TestSkillSmokeNeverRecordsAFailedCopilotCall(t *testing.T) {
+	tests := map[string]string{
+		// The stderr line the pinned CLI printed offline for an unvalidated token.
+		"token not validated": `echo "Error: Authentication token found but could not be validated." >&2; exit 1`,
+		// The live shapes are unobserved (RB-5). Any non-zero exit must fail.
+		"organization policy": `echo "Copilot CLI is disabled by your organization policy" >&2; exit 1`,
+		"unavailable model":   `echo "Model is not available" >&2; exit 1`,
+		// A zero exit without the skill content is not evidence either.
+		"reply without skill": `echo "I cannot access that model right now."`,
+	}
+	for name, failure := range tests {
+		t.Run(name, func(t *testing.T) {
+			body := `
+case "$*" in
+  *--version*) echo "GitHub Copilot CLI 1.0.98." ;;
+  *) cat > /dev/null; ` + failure + ` ;;
+esac
+`
+			smoke := runCopilotSmoke(t, body)
+			if smoke.err == nil {
+				t.Fatalf("smoke passed with a failed Copilot call:\n%s", smoke.stderr)
+			}
+			if records := recordsOf(t, smoke.evidence, "copilot"); len(records) != 0 {
+				t.Errorf("smoke recorded copilot evidence for a failed call:\n%s", smoke.evidence)
+			}
+			if strings.Contains(smoke.stderr, copilotSmokeToken) {
+				t.Errorf("the token reached the smoke output")
+			}
+		})
+	}
+}

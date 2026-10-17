@@ -31,6 +31,22 @@ if [ -n "${GO_VERSION:-}" ] && [ "$GO_VERSION" != "$approved_go" ]; then
 fi
 GO_VERSION="$approved_go"
 
+# The compatibility record names the only proved Copilot CLI release. A
+# different COPILOT_VERSION is refused, because the image check below compares
+# the installed CLI with this value and would otherwise accept any release.
+proved_copilot_manifest=docs/spikes/copilot-cli-1.0.98/manifest.json
+proved_copilot="$(sed -n 's/^ *"version": "\([^"]*\)".*/\1/p' "$proved_copilot_manifest" | head -n 1)"
+if [ -z "$proved_copilot" ]; then
+  echo "$proved_copilot_manifest names no Copilot CLI release" >&2
+  exit 1
+fi
+if [ -n "${COPILOT_VERSION:-}" ] && [ "$COPILOT_VERSION" != "$proved_copilot" ]; then
+  echo "COPILOT_VERSION=$COPILOT_VERSION differs from the proved Copilot CLI $proved_copilot ($proved_copilot_manifest)." >&2
+  echo "Unset COPILOT_VERSION, or prove the new release and update its compatibility record first." >&2
+  exit 1
+fi
+COPILOT_VERSION="$proved_copilot"
+
 platform_args=""
 if [ -n "$WORKER_PLATFORM" ]; then
   platform_args="--platform=$WORKER_PLATFORM"
@@ -45,6 +61,7 @@ echo "Building factory base image $WORKER_BASE_IMAGE with Go $GO_VERSION"
   --build-arg "NPM_VERSION=$NPM_VERSION" \
   --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION" \
   --build-arg "CODEX_VERSION=$CODEX_VERSION" \
+  --build-arg "COPILOT_VERSION=$COPILOT_VERSION" \
   --build-arg "FACTORY_BASE_VERSION=1" \
   --build-arg "FACTORY_RELEASE=$FACTORY_RELEASE" \
   --file worker/base.Dockerfile \
@@ -82,6 +99,7 @@ echo "Verifying local image reference $local_reference"
   --cap-drop ALL \
   --security-opt no-new-privileges \
   --env "APPROVED_GO=go$GO_VERSION" \
+  --env "APPROVED_COPILOT=$COPILOT_VERSION" \
   "$local_reference" /bin/sh -c '
   set -eu
   test "$(id -u)" = 10001
@@ -92,6 +110,12 @@ echo "Verifying local image reference $local_reference"
   test -x /usr/local/bin/factory-worker-headless
   command -v codex >/dev/null
   command -v claude >/dev/null
+  # The Copilot CLI is the proved release, starts only through its launcher,
+  # and has no gh login to fall back to.
+  test -x /usr/local/bin/factory-copilot
+  test -r /usr/local/share/factory-copilot/settings.json
+  test "$(copilot --version | head -n 1)" = "GitHub Copilot CLI $APPROVED_COPILOT."
+  if command -v gh >/dev/null; then exit 1; fi
   command -v git >/dev/null
   command -v go >/dev/null
   command -v gofmt >/dev/null
@@ -132,6 +156,7 @@ tar -C "$repository_root" \
   --exclude='*/.run' \
   --exclude='*/.codex' \
   --exclude='*/.claude' \
+  --exclude='*/.copilot' \
   --exclude='./.env' \
   --exclude='./.env.*' \
   --exclude='auth.json' \

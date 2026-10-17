@@ -116,12 +116,12 @@ func TestResolveAgentPolicyHonoursDeclaredOverridePermissions(t *testing.T) {
 		Role:            "test",
 		Harness:         config.HarnessClaude,
 		Model:           "gpt-9",
-		ReasoningEffort: "extreme",
+		ReasoningEffort: "max",
 	})
 	if err != nil {
 		t.Fatalf("resolveAgentPolicy() error = %v", err)
 	}
-	if policy != (AgentPolicy{Harness: config.HarnessClaude, Model: "gpt-9", ReasoningEffort: "extreme"}) {
+	if policy != (AgentPolicy{Harness: config.HarnessClaude, Model: "gpt-9", ReasoningEffort: "max"}) {
 		t.Fatalf("policy = %#v, want the explicitly permitted overrides", policy)
 	}
 }
@@ -135,5 +135,69 @@ func TestResolveAgentPolicyRefusesAnUnsupportedHarness(t *testing.T) {
 	var rejection *PolicyRejection
 	if !errors.As(err, &rejection) || rejection.Code != PolicyRejectionHarnessUnavailable {
 		t.Fatalf("resolveAgentPolicy() error = %v, want a typed harness-unavailable rejection", err)
+	}
+}
+
+// TestResolveAgentPolicySelectsCopilotForAMixedRepository verifies Copilot is
+// an ordinary per-role selection next to Codex and Claude.
+func TestResolveAgentPolicySelectsCopilotForAMixedRepository(t *testing.T) {
+	repository := policyRepository()
+	repository.RoleHarnessDefaults["review"] = config.HarnessCopilot
+	repository.ModelOptions["review"] = []string{"gpt-5.2"}
+	repository.ReasoningEffortOptions["review"] = []string{"minimal"}
+	policy, err := resolveAgentPolicy(repository, AgentRequest{Role: "review"})
+	if err != nil {
+		t.Fatalf("resolveAgentPolicy() error = %v", err)
+	}
+	if policy != (AgentPolicy{Harness: config.HarnessCopilot, Model: "gpt-5.2", ReasoningEffort: "minimal"}) {
+		t.Fatalf("policy = %#v, want the declared Copilot defaults", policy)
+	}
+}
+
+// TestResolveAgentPolicyKeepsALegacyHarnessOverrideAwayFromCopilot verifies an
+// existing allowed_overrides: [harness] does not widen to Copilot until the
+// repository lists it in override_harnesses.
+func TestResolveAgentPolicyKeepsALegacyHarnessOverrideAwayFromCopilot(t *testing.T) {
+	legacy := policyRepository()
+	legacy.AllowedOverrides = []config.OverrideName{config.OverrideHarness}
+	_, err := resolveAgentPolicy(legacy, AgentRequest{Role: "test", Harness: config.HarnessCopilot})
+	var rejection *PolicyRejection
+	if !errors.As(err, &rejection) || rejection.Code != PolicyRejectionHarnessOverride {
+		t.Fatalf("legacy override to Copilot error = %v, want harness_override rejection", err)
+	}
+	if _, err := resolveAgentPolicy(legacy, AgentRequest{Role: "test", Harness: config.HarnessClaude, ReasoningEffort: "high"}); err != nil {
+		t.Fatalf("legacy override to Claude error = %v, want the original authorization kept", err)
+	}
+
+	optedIn := legacy
+	optedIn.OverrideHarnesses = []config.Harness{config.HarnessCopilot}
+	policy, err := resolveAgentPolicy(optedIn, AgentRequest{Role: "test", Harness: config.HarnessCopilot})
+	if err != nil || policy.Harness != config.HarnessCopilot {
+		t.Fatalf("opted-in override = %#v, %v, want Copilot", policy, err)
+	}
+}
+
+// TestResolveAgentPolicyRefusesSelectionsTheHarnessCannotHonour verifies a
+// model or effort that the final harness would refuse or replace is refused
+// before launch, even when an override permits the value.
+func TestResolveAgentPolicyRefusesSelectionsTheHarnessCannotHonour(t *testing.T) {
+	repository := policyRepository()
+	repository.AllowedOverrides = []config.OverrideName{config.OverrideHarness, config.OverrideModel, config.OverrideReasoningEffort}
+	repository.OverrideHarnesses = []config.Harness{config.HarnessClaude, config.HarnessCopilot}
+	for _, test := range []struct {
+		name    string
+		request AgentRequest
+	}{
+		{name: "copilot automatic model", request: AgentRequest{Role: "test", Harness: config.HarnessCopilot, Model: "auto"}},
+		{name: "copilot unknown effort", request: AgentRequest{Role: "test", Harness: config.HarnessCopilot, ReasoningEffort: "extreme"}},
+		{name: "claude minimal effort", request: AgentRequest{Role: "test", Harness: config.HarnessClaude, ReasoningEffort: "minimal"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := resolveAgentPolicy(repository, test.request)
+			var rejection *PolicyRejection
+			if !errors.As(err, &rejection) || rejection.Code != PolicyRejectionSelectionUnsupported {
+				t.Fatalf("resolveAgentPolicy() error = %v, want %q", err, PolicyRejectionSelectionUnsupported)
+			}
+		})
 	}
 }

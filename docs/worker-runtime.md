@@ -38,7 +38,7 @@ The Docker adapter uses these stable paths regardless of the host checkout:
 | `/cache/<name>` | `read_only` declared per cache | A repository cache, whose host directory the registration maps by name |
 | `/invocation` | read-only | The frozen invocation packet for the active role |
 | `/results` | read-write | The invocation-scoped `report.json` result directory |
-| `/run/factory-auth` | managed; written only by the adapter, read-only for the role | A factory-managed Codex credential volume, separate from role session state |
+| `/run/factory-auth` | managed; written only by the adapter, read-only for the role | The factory-managed harness credential volume (one file per harness), separate from role session state |
 
 Headless process state is kept in the role volume at
 `/home/factory/.factory-headless/<invocation-id>`. The helper atomically records
@@ -78,6 +78,75 @@ reuse credentials without inheriting another role's session context. Docker
 seeds a fresh role volume from the worker image, so the role home starts with
 the curated skill set the image installs and with nothing personal from the
 host.
+
+Each credential copy is completed beside its projection file and renamed over
+it, so a harness that starts during a reseed reads the old or the new copy,
+never a partial file. A repeated seed converges on the same file. Seeding one
+harness never touches another harness's file.
+
+### GitHub Copilot CLI
+
+The base image installs the Copilot CLI release that
+`docs/spikes/0003-copilot-cli-protocol.md` proved (`COPILOT_VERSION` in
+`worker/base.Dockerfile`; `scripts/build-worker.sh` reads it from the proof's
+manifest and refuses a different override). The worker image never
+contains the `gh` CLI, because a `gh` login is a fallback Copilot credential.
+An image built before Copilot support has no Copilot files; Codex and Claude
+workers from that image are unchanged.
+
+The Copilot credential is a dedicated token file, never the host `gh` login,
+`GH_TOKEN`, `GITHUB_TOKEN`, Keychain, or `~/.copilot`. Its registered host path
+is `authentication.copilot_auth_path`. The adapter checks that the file holds
+one `github_pat_`, `gho_`, or `ghu_` token on one line, because the pinned CLI
+ignores `COPILOT_GITHUB_TOKEN` without one of these prefixes and rejects
+classic `ghp_` tokens. It streams the file to
+`/run/factory-auth/copilot-token` (root-owned, mode `0444`). Copilot gets no
+role-home link.
+
+The adapter never starts `copilot` directly. It starts
+`/usr/local/bin/factory-copilot` with the complete Copilot argument list, and
+the launcher:
+
+1. Reads the first line of `/run/factory-auth/copilot-token`. When the file is
+   missing, empty, or unreadable it writes exactly
+   `factory-copilot: credential unavailable` to standard error and exits 78.
+   It never prints the token or the projection path.
+2. Unsets every `COPILOT_*`, `GH_*`, `GITHUB_*`, and `OTEL_*` variable and
+   `CI` from its environment. A caller cannot select another credential,
+   trust the worktree with `COPILOT_ALLOW_ALL`, choose a model through
+   `COPILOT_MODEL`, or turn on telemetry export.
+3. Restores the private Copilot home `/home/factory/.copilot` on the role
+   volume: it replaces `settings.json` with the image-owned
+   `/usr/local/share/factory-copilot/settings.json` and removes
+   `mcp-config.json`, `hooks/`, and `installed-plugins/`. Native session state
+   (`session-state/`) stays for exact resume.
+4. Exports `COPILOT_HOME`, `COPILOT_AUTO_UPDATE=false`, and
+   `COPILOT_GITHUB_TOKEN` only in its own process and runs `copilot` with the
+   arguments unchanged.
+
+The token therefore never appears in Docker arguments, the coordinator
+environment, headless state files, or diagnostics. A role with shell access
+can still read its own projected token; the token's narrow permission is the
+boundary (release blocker RB-4).
+
+The managed settings hide all project skills (`ignoredSkillsLocations:
+["/work"]`), disable all hooks, session export, automatic updates, memory, and
+the automatic model switch on rate limits (`continueOnAutoMode: false`), trust
+no folder, and disable only the two built-in skills. Repository hooks, MCP
+servers, and plugins load only for a trusted folder, and the worker never
+trusts `/work`. Whether a live run honors every suppression is release blocker
+RB-7. Removing the role volumes removes Copilot sessions. Ordinary cleanup
+never removes the shared credential volume; only a complete `factory reset`
+removes it, together with the projected Copilot token.
+
+The skill smoke (`HARNESSES=copilot COPILOT_TOKEN_PATH=<token file>
+scripts/smoke-skills.sh`) starts the same launcher in a disposable worker.
+It streams the token on standard input into a private tmpfs at
+`/run/factory-auth`, because the image keeps that directory root-owned for
+the read-only projection of a run. Copilot support is not released: no live
+run, probe, or smoke has been recorded. The open release blockers are in
+[Copilot CLI release evidence](acceptance/copilot.md), and the operator steps
+are in [GitHub Copilot CLI](configuration.md#github-copilot-cli).
 
 The coordinator prepares `/git` from the repository's objects, refs, and
 worktree state. Git configuration, remote definitions, hooks, submodules, and
@@ -155,6 +224,22 @@ cannot forge an out-of-memory failure.
 
 When the kernel exposes no `oom_kill` count, or the baseline could not be
 recorded, an out-of-memory kill stays an ordinary failed exit.
+
+When the helper cannot start the requested command, it records its own
+`start_failed` state, exit status 127, and the stderr line
+`process start failed`. The state names the cause, because a started
+command can print the same line. A helper in an image built before that
+state existed records only the line and the status, so for it the adapter
+still reads them. This happens, for example,
+when a repository selects Copilot on a worker image built before
+`factory-copilot` existed. The harness adapter reports an unexpected exit
+that names the missing executable. The coordinator does not resume it,
+because a Run keeps its frozen image and a resume would meet the same image.
+It pauses the run as `harness missing from worker image (<harness>)` with the
+action: rebuild the worker with `scripts/build-worker.sh`, re-pin
+`worker_build.digest` in `factory.yaml`, and cancel the Run with
+`/factory cancel`. `/factory resume` is refused for this pause. Only Runs
+claimed after the repin use the new image.
 
 A command that reaches the PID limit sees `fork` fail. The worker becomes
 usable again when the processes that hold its PIDs end.
@@ -235,7 +320,13 @@ The contract tests use a controlled Docker executable. Live Docker and harness
 checks remain environment checks and are not ordinary unit-test dependencies.
 `scripts/verify-headless-worker.sh` runs the real command-lifetime and
 resource-limit checks after the headless lifecycle checks, so `make
-worker-build` and the CI worker verification job both run them. To run them
+worker-build` and the CI worker verification job both run them. For an image
+with `factory-copilot`, the script also drives the image's real launcher with a
+fake `copilot`, then runs the pinned CLI offline with a sentinel token. It
+checks the credential refusal line, that the CLI reads the projected token
+(its own validation fails without network), the restored settings, the pinned
+release in the loader cache, and the curated skill listing. For an older image
+it prints that the Copilot checks did not run. To run them
 alone against the pinned worker, use:
 
 ```sh

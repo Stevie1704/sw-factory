@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -134,6 +135,10 @@ type AuthenticationConfig struct {
 	// file. A macOS host keeps this credential in the login Keychain rather
 	// than a file, so the path is declared only where a file exists.
 	ClaudeAuthPath string `yaml:"claude_auth_path"`
+	// CopilotAuthPath is an optional host path to one file holding the
+	// dedicated GitHub Copilot CLI token. It is never the host gh login,
+	// GH_TOKEN, GITHUB_TOKEN, or ~/.copilot state.
+	CopilotAuthPath string `yaml:"copilot_auth_path,omitempty"`
 }
 
 type RepositoryConfig struct {
@@ -158,9 +163,14 @@ type RepositoryConfig struct {
 	RetryLimits            RetryLimits         `yaml:"retry_limits"`
 	TestPolicy             TestPolicy          `yaml:"test_policy"`
 	AllowedOverrides       []OverrideName      `yaml:"allowed_overrides"`
-	Caches                 []CacheConfig       `yaml:"caches"`
-	WorkerBuild            WorkerBuildConfig   `yaml:"worker_build"`
-	BaseSynchronization    BaseSynchronization `yaml:"base_synchronization"`
+	// OverrideHarnesses lists the harnesses a harness override may select.
+	// When it is omitted, a harness override reaches only the original Codex
+	// and Claude adapters, so an existing permission does not widen when the
+	// factory adds an adapter (ADR 0027).
+	OverrideHarnesses   []Harness           `yaml:"override_harnesses,omitempty"`
+	Caches              []CacheConfig       `yaml:"caches"`
+	WorkerBuild         WorkerBuildConfig   `yaml:"worker_build"`
+	BaseSynchronization BaseSynchronization `yaml:"base_synchronization"`
 	// ReviewUnits freezes the repository-owned workload and normal fan-out
 	// policy. Zero values use the factory defaults.
 	ReviewUnits ReviewUnitConfig `yaml:"review_units,omitempty"`
@@ -313,7 +323,103 @@ type Harness string
 const (
 	HarnessCodex  Harness = "codex"
 	HarnessClaude Harness = "claude"
+	// HarnessCopilot names the GitHub Copilot CLI.
+	HarnessCopilot Harness = "copilot"
 )
+
+// legacyHarnessOverrideTargets are the harnesses an allowed harness override
+// reached before the repository could name its override targets.
+var legacyHarnessOverrideTargets = []Harness{HarnessCodex, HarnessClaude}
+
+// harnessReasoningEfforts holds the closed effort value set of each harness
+// whose CLI rejects other values. Codex has no closed set.
+var harnessReasoningEfforts = map[Harness][]string{
+	HarnessClaude:  {"low", "medium", "high", "xhigh", "max"},
+	HarnessCopilot: {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
+}
+
+// unknownHarnessProblem is the validation problem for a harness name that
+// IsKnownHarness refuses.
+const unknownHarnessProblem = "must be codex, claude, or copilot"
+
+// IsKnownHarness reports whether the factory ships an adapter named h.
+func IsKnownHarness(h Harness) bool {
+	return h == HarnessCodex || h == HarnessClaude || h == HarnessCopilot
+}
+
+// ValidateHarnessSelection rejects a model or reasoning-effort value that the
+// selected harness would refuse or replace with a value of its own choice.
+// An empty effort means no selection.
+func ValidateHarnessSelection(h Harness, model, effort string) error {
+	if !IsKnownHarness(h) {
+		return fmt.Errorf("harness %q is not supported", h)
+	}
+	if err := validateHarnessModel(h, model); err != nil {
+		return err
+	}
+	return validateHarnessEffort(h, effort)
+}
+
+// validateHarnessModel refuses Copilot's automatic model choice, because the
+// recorded model would then not be the model that ran.
+func validateHarnessModel(h Harness, model string) error {
+	if h == HarnessCopilot && strings.EqualFold(strings.TrimSpace(model), "auto") {
+		return errors.New("must name a model for Copilot; auto lets Copilot choose a different model")
+	}
+	return nil
+}
+
+// validateHarnessEffort checks effort against the closed value set of h.
+func validateHarnessEffort(h Harness, effort string) error {
+	allowed, closed := harnessReasoningEfforts[h]
+	if effort == "" || !closed || slices.Contains(allowed, effort) {
+		return nil
+	}
+	return fmt.Errorf("must be %s for %s", joinAlternatives(allowed), harnessDisplayName(h))
+}
+
+// harnessDisplayName returns the product name used in operator messages.
+func harnessDisplayName(h Harness) string {
+	switch h {
+	case HarnessClaude:
+		return "Claude Code"
+	case HarnessCopilot:
+		return "Copilot"
+	default:
+		return string(h)
+	}
+}
+
+// joinAlternatives renders values as "a, b, or c".
+func joinAlternatives(values []string) string {
+	if len(values) < 2 {
+		return strings.Join(values, "")
+	}
+	return strings.Join(values[:len(values)-1], ", ") + ", or " + values[len(values)-1]
+}
+
+// HarnessOverrideTargets returns the harnesses a harness override may select.
+// An omitted override_harnesses list keeps the original Codex and Claude set.
+func (c RepositoryConfig) HarnessOverrideTargets() []Harness {
+	if c.OverrideHarnesses == nil {
+		return append([]Harness(nil), legacyHarnessOverrideTargets...)
+	}
+	return append([]Harness(nil), c.OverrideHarnesses...)
+}
+
+// AllowsHarnessOverrideTo reports whether the repository permits a harness
+// override and lists h as one of its targets.
+func (c RepositoryConfig) AllowsHarnessOverrideTo(h Harness) bool {
+	if !hasOverrideName(c.AllowedOverrides, OverrideHarness) {
+		return false
+	}
+	for _, target := range c.HarnessOverrideTargets() {
+		if target == h {
+			return true
+		}
+	}
+	return false
+}
 
 type OverrideName string
 
@@ -606,8 +712,8 @@ func ValidateRepository(config RepositoryConfig) error {
 		if !workflow.IsDeclaredRole(role) {
 			return policy("role_harness_defaults."+role, "role must be declared by the factory-owned workflow registry")
 		}
-		if harness != HarnessCodex && harness != HarnessClaude {
-			return validation("role_harness_defaults."+role, "must be codex or claude")
+		if !IsKnownHarness(harness) {
+			return validation("role_harness_defaults."+role, unknownHarnessProblem)
 		}
 	}
 	if len(config.ModelOptions) == 0 {
@@ -623,6 +729,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		for index, model := range models {
 			if strings.TrimSpace(model) == "" {
 				return validation(fmt.Sprintf("model_options.%s[%d]", role, index), "must not be empty")
+			}
+			if err := validateHarnessModel(config.RoleHarnessDefaults[role], model); err != nil {
+				return validation(fmt.Sprintf("model_options.%s[%d]", role, index), err.Error())
 			}
 		}
 	}
@@ -656,15 +765,8 @@ func ValidateRepository(config RepositoryConfig) error {
 				return validation(field, "must be unique")
 			}
 			seen[effort] = struct{}{}
-			// Claude Code accepts only low, medium, high, xhigh, or max.
-			// Validate Claude roles against these supported values.
-			if harness := config.RoleHarnessDefaults[role]; harness == HarnessClaude {
-				switch effort {
-				case "low", "medium", "high", "xhigh", "max":
-					// Supported value
-				default:
-					return validation(field, "must be low, medium, high, xhigh, or max for Claude Code")
-				}
+			if err := validateHarnessEffort(config.RoleHarnessDefaults[role], effort); err != nil {
+				return validation(field, err.Error())
 			}
 		}
 	}
@@ -705,6 +807,9 @@ func ValidateRepository(config RepositoryConfig) error {
 		return err
 	}
 	if err := validateOptionalOverrides(config.AllowedOverrides); err != nil {
+		return err
+	}
+	if err := validateOverrideHarnesses(config); err != nil {
 		return err
 	}
 	seenCaches := make(map[string]struct{}, len(config.Caches))
@@ -920,8 +1025,9 @@ func validateRegistration(prefix string, repository RepositoryRegistration) erro
 		return validation(prefix+".operational_data_path", "must be absolute")
 	}
 	for field, path := range map[string]string{
-		prefix + ".authentication.codex_auth_path":  repository.Authentication.CodexAuthPath,
-		prefix + ".authentication.claude_auth_path": repository.Authentication.ClaudeAuthPath,
+		prefix + ".authentication.codex_auth_path":   repository.Authentication.CodexAuthPath,
+		prefix + ".authentication.claude_auth_path":  repository.Authentication.ClaudeAuthPath,
+		prefix + ".authentication.copilot_auth_path": repository.Authentication.CopilotAuthPath,
 	} {
 		if path == "" {
 			continue
@@ -1071,6 +1177,42 @@ func validateOptionalOverrides(values []OverrideName) error {
 		seen[value] = struct{}{}
 	}
 	return nil
+}
+
+// validateOverrideHarnesses accepts an explicit override target list only
+// together with a harness override permission, so the list never sits unused.
+func validateOverrideHarnesses(config RepositoryConfig) error {
+	if config.OverrideHarnesses == nil {
+		return nil
+	}
+	if !hasOverrideName(config.AllowedOverrides, OverrideHarness) {
+		return validation("override_harnesses", "requires harness in allowed_overrides")
+	}
+	if len(config.OverrideHarnesses) == 0 {
+		return validation("override_harnesses", "must list at least one harness or be omitted")
+	}
+	seen := make(map[Harness]struct{}, len(config.OverrideHarnesses))
+	for index, target := range config.OverrideHarnesses {
+		field := fmt.Sprintf("override_harnesses[%d]", index)
+		if !IsKnownHarness(target) {
+			return validation(field, unknownHarnessProblem)
+		}
+		if _, exists := seen[target]; exists {
+			return validation(field, "must be unique")
+		}
+		seen[target] = struct{}{}
+	}
+	return nil
+}
+
+// hasOverrideName reports whether values contains wanted.
+func hasOverrideName(values []OverrideName, wanted OverrideName) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // validation creates an error describing an invalid configuration field and the reason it is invalid.

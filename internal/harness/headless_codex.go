@@ -36,7 +36,7 @@ func (c *CodexHeadless) StartHeadless(ctx context.Context, request HeadlessStart
 	if strings.TrimSpace(request.ResumeSessionID) != "" {
 		return HeadlessSession{}, errors.New("fresh Codex headless start cannot include a resume session")
 	}
-	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchFresh, "")
+	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchFresh, "", "")
 }
 
 // ResumeHeadless launches Codex exec resume for the exact persisted native
@@ -45,7 +45,7 @@ func (c *CodexHeadless) ResumeHeadless(ctx context.Context, request HeadlessStar
 	if strings.TrimSpace(request.ResumeSessionID) == "" {
 		return HeadlessSession{}, errors.New("Codex headless resume session id is required")
 	}
-	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchResume, request.ResumeSessionID)
+	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
 // codexHeadlessCommand translates one neutral request into the documented
@@ -75,7 +75,9 @@ func codexCommandOptions(command []string, model, reasoningEffort string) []stri
 // treats human-readable output as a native session identity.
 func threadStartedID(output string) string {
 	identity := ""
-	forEachHeadlessEvent(output, func(line string) bool {
+	// An unreadable line ends the scan before any identity was found, so a
+	// scan error leaves identity empty and needs no separate handling.
+	_ = forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
@@ -94,7 +96,7 @@ func threadStartedID(output string) string {
 // is carried by a documented failure event, never when it is standalone prose.
 func classifyHeadlessEvents(output string) *HeadlessFailure {
 	var failure *HeadlessFailure
-	forEachHeadlessEvent(output, func(line string) bool {
+	scanErr := forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type    string `json:"type"`
 			Code    string `json:"code"`
@@ -150,6 +152,10 @@ func classifyHeadlessEvents(output string) *HeadlessFailure {
 		}
 		return false
 	})
+	if scanErr != nil {
+		// Unread events could name any outcome, so none is inferred.
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
+	}
 	return failure
 }
 

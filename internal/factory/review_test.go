@@ -634,6 +634,89 @@ func TestConcurrentReviewBlockersBecomeOneRepairPacket(t *testing.T) {
 	}
 }
 
+// TestMixedHarnessReviewRoundRepairsInTheRecordedImplementationHarness
+// verifies a review round whose axes run on different harnesses launches each
+// reviewer read-only on its configured harness, and that the combined review
+// repair resumes the recorded implementation session in the harness that
+// created it.
+func TestMixedHarnessReviewRoundRepairsInTheRecordedImplementationHarness(t *testing.T) {
+	for _, test := range []struct{ specification, standards, implementation config.Harness }{
+		{specification: config.HarnessClaude, standards: config.HarnessCopilot, implementation: config.HarnessCodex},
+		{specification: config.HarnessCopilot, standards: config.HarnessCodex, implementation: config.HarnessCopilot},
+		{specification: config.HarnessCopilot, standards: config.HarnessCopilot, implementation: config.HarnessClaude},
+	} {
+		t.Run(string(test.specification)+"+"+string(test.standards)+" reviews "+string(test.implementation), func(t *testing.T) {
+			fixture := newReviewFixture(t)
+			run := *fixture.runStore.current
+			var packet factory.SpecificationPacket
+			if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+				t.Fatalf("decode review packet: %v", err)
+			}
+			packet.RepositoryConfig.RoleHarnessDefaults["spec_review"] = test.specification
+			packet.RepositoryConfig.RoleHarnessDefaults["standards_review"] = test.standards
+			packet.RepositoryConfig.RoleHarnessDefaults["implementation"] = test.implementation
+			packet.RepositoryConfig.ModelOptions["standards_review"] = []string{"gpt-5"}
+			packetData, err := json.Marshal(packet)
+			if err != nil {
+				t.Fatalf("encode review packet: %v", err)
+			}
+			run.SpecificationPacket = string(packetData)
+			if err := fixture.runStore.SaveRun(context.Background(), run); err != nil {
+				t.Fatalf("save mixed review packet: %v", err)
+			}
+			recorded := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+			fixture.runStore.invocations["inv-implementation"] = store.Invocation{
+				ID: "inv-implementation", RunID: run.ID, Harness: string(test.implementation), Role: "implementation",
+				Stage: store.StageImplementation, Model: "gpt-5", NativeSessionID: "implementation-session",
+				Status: store.InvocationStatusCompleted, CreatedAt: recorded, UpdatedAt: recorded,
+			}
+
+			specification, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: "spec_review", Stage: store.StageReview})
+			if err != nil {
+				t.Fatalf("start specification reviewer: %v", err)
+			}
+			standards, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{RunID: run.ID, Role: "standards_review", Stage: store.Stage("standards_review")})
+			if err != nil {
+				t.Fatalf("start standards reviewer: %v", err)
+			}
+			if specification.Invocation.Harness != string(test.specification) || standards.Invocation.Harness != string(test.standards) {
+				t.Fatalf("reviewer harnesses = %q/%q, want %s/%s", specification.Invocation.Harness, standards.Invocation.Harness, test.specification, test.standards)
+			}
+			if launched := fixture.harness.startHarnesses; len(launched) != 2 || launched[0] != test.specification || launched[1] != test.standards {
+				t.Fatalf("reviewer launches = %v, want %s then %s", launched, test.specification, test.standards)
+			}
+			for _, start := range fixture.worker.starts {
+				if !start.WorktreeReadOnly {
+					t.Fatalf("review worker start = %#v, want a read-only checkpoint mount", start)
+				}
+			}
+			for _, launch := range []factory.AgentLaunchResult{specification, standards} {
+				value := reviewReport(launch, []report.ReviewFinding{{
+					Location: "internal/factory/review.go:10", Claim: launch.Invocation.Role + " blocker", Evidence: "source=guidance:AGENTS.md;hunk=internal/factory/review.go:10;the acceptance path is incomplete",
+					Severity: report.ReviewSeverityBlocker, Category: report.ReviewCategoryCorrectness, SuggestedResolution: "complete the path", SuggestedOwner: "implementation",
+				}})
+				if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, value); err != nil {
+					t.Fatalf("write %s report: %v", launch.Invocation.Role, err)
+				}
+				if _, err := fixture.service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: run.ID, InvocationID: launch.Invocation.ID}); err != nil {
+					t.Fatalf("accept %s report: %v", launch.Invocation.Role, err)
+				}
+			}
+
+			current := fixture.runStore.current
+			if current.Stage != store.StageImplementation || current.ReviewRepairPacket == nil || current.ReviewRepairAttempts != 1 {
+				t.Fatalf("run = %#v, want one active review repair", current)
+			}
+			if len(fixture.harness.resumeHarnesses) != 1 || fixture.harness.resumeHarnesses[0] != test.implementation || fixture.harness.resumes[0].ResumeSessionID != "implementation-session" {
+				t.Fatalf("repair resumes = %v %#v, want the recorded %s implementation session", fixture.harness.resumeHarnesses, fixture.harness.resumes, test.implementation)
+			}
+			if len(fixture.harness.startHarnesses) != 2 {
+				t.Fatalf("fresh launches = %v, want no fresh implementation session", fixture.harness.startHarnesses)
+			}
+		})
+	}
+}
+
 // TestReviewRejectsAStaleCheckpointWithATypedFailure verifies a result cannot
 // silently attach to a newer immutable checkpoint.
 func TestReviewRejectsAStaleCheckpointWithATypedFailure(t *testing.T) {
@@ -847,7 +930,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
-		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
+		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json"), CopilotAuthPath: filepath.Join(root, "copilot-token")},
 	}}}
 	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

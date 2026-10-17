@@ -89,6 +89,34 @@ func TestDockerRuntimeChecksHarnessInsideTheHardenedProbe(t *testing.T) {
 	)
 }
 
+// TestDockerRuntimeChecksTheCopilotSkillContractInItsOwnRoot verifies the
+// Copilot skill probe reads the one personal skill root under the private
+// Copilot home, refuses the duplicate discovery root, requires that the
+// factory-managed settings do not disable a mandated skill, and keys evidence
+// to the pinned binary's version rather than the credential-reading launcher.
+func TestDockerRuntimeChecksTheCopilotSkillContractInItsOwnRoot(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if _, err := runtime.CheckSkillContract(context.Background(), worker.SkillContractRequest{
+		Image:   worker.ImageReference{Name: "ghcr.io/example/factory-worker", Digest: testWorkerDigest},
+		Harness: "copilot",
+		Skills:  []string{"implement"},
+	}); err != nil {
+		t.Fatalf("CheckSkillContract() error = %v", err)
+	}
+	line := findLogLine(t, readStubLog(t, logPath), " run ")
+	assertContainsAll(t, line,
+		"--network none", "--user 10001:10001",
+		"test -f /home/factory/.copilot/skills/implement/SKILL.md",
+		"test ! -e /home/factory/.agents/skills",
+		"disabledSkills", "/usr/local/share/factory-copilot/settings.json",
+		"copilot --version",
+	)
+	if strings.Contains(line, "factory-copilot --version") || strings.Contains(line, "/run/factory-auth") {
+		t.Fatalf("Copilot skill probe needs a credential: %q", line)
+	}
+}
+
 // TestDockerRuntimeChecksHarnessAuthenticationInsideThePinnedWorker verifies
 // credential input is streamed to a disposable network-isolated probe rather
 // than passed as a command argument or rendered in output.

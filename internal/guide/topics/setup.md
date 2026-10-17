@@ -14,7 +14,10 @@ The host needs:
 - a running Docker daemon whose server platform is `linux/arm64` or
   `linux/amd64`, and that uses the containerd image store;
 - the GitHub CLI, authenticated for the target repository;
-- Codex or Claude Code, installed and signed in.
+- Codex or Claude Code, installed and signed in. The onboarding session runs
+  one of them interactively on the host. GitHub Copilot CLI cannot run it,
+  because the factory runs Copilot only inside the worker with a dedicated
+  token.
 
 Check them before any other step. For a failed check, name the missing
 prerequisite and its supported remedy, such as installing Git, jq, Docker, or
@@ -140,8 +143,13 @@ factory doctor
 `factory register` infers the repository path, the GitHub owner and name from
 the `origin` remote, and the authorized user from the `gh` account. It never
 infers a credential path. The operator confirms every credential path. Omit
-the flag of a harness that has no credential file. Never read a credential
-file.
+the flag of a harness that has no credential file. When a role selects
+Copilot, add `--copilot-auth <copilot-token-path>`: a private file with one
+dedicated Copilot token, never the `gh` login. Never read a credential file.
+Copilot support is not released: a repository that can select it stays
+blocked in `factory doctor` until the operator records a live Copilot skill
+smoke with `HARNESSES=copilot COPILOT_TOKEN_PATH=<copilot-token-path>
+scripts/smoke-skills.sh`. That smoke is a paid call; it needs explicit scope.
 
 `factory bootstrap-labels` creates the six factory labels in the GitHub
 repository. `factory doctor` runs the complete startup diagnosis. Repeat the
@@ -180,7 +188,8 @@ issue claims, run branches, labels, and pull requests for its runs.
 ## Keep the setup valid
 
 - A changed toolchain, harness version, or worker skill needs a new worker
-  image, a new digest in `factory.yaml`, and a new skill smoke record.
+  image, a new digest in `factory.yaml`, and a new skill smoke record for
+  every harness the repository can select.
 - A new Factory release needs a worker image built from its own worker base
   image. Until then, `factory doctor` reports `worker.release.mismatch`.
 - A changed gate command needs a proof in the worker before the change.

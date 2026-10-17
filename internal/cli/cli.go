@@ -407,7 +407,7 @@ func runAuth(ctx context.Context, args []string, defaultConfigPath string, outpu
 	configPath := flags.String("config", defaultConfigPath, "host configuration path")
 	asJSON := flags.Bool("json", false, operationJSONUsage)
 	runID := flags.String("run-id", "", "active factory run identifier")
-	harnessName := flags.String("harness", "", "codex or claude; empty uses the invocation harness")
+	harnessName := flags.String("harness", "", "codex, claude, or copilot; must match the invocation harness; empty uses it")
 	resume := flags.Bool("resume", false, "resume the affected native session after refreshing credentials")
 	expectedInvocation := flags.String("expect-invocation", "", "refuse unless the run still recovers this invocation")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -506,6 +506,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 	reasoningEffort := flags.String("reasoning-effort", "", "validated reasoning-effort override")
 	codexAuthPath := flags.String("codex-auth", "", "explicit Codex auth.json source")
 	claudeAuthPath := flags.String("claude-auth", "", "explicit Claude credential source")
+	copilotAuthPath := flags.String("copilot-auth", "", "explicit Copilot token source; must be the registered one")
 	permittedPaths := stringList{}
 	flags.Var(&permittedPaths, "permitted-path", "repository-relative handoff path prefix; may be repeated")
 	if err := flags.Parse(args); err != nil {
@@ -524,6 +525,7 @@ func runAgent(ctx context.Context, args []string, defaultConfigPath string, outp
 		ReasoningEffort: *reasoningEffort,
 		CodexAuthPath:   *codexAuthPath,
 		ClaudeAuthPath:  *claudeAuthPath,
+		CopilotAuthPath: *copilotAuthPath,
 		PermittedPaths:  append([]string(nil), permittedPaths...),
 	})
 	if *asJSON {
@@ -734,6 +736,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	pollingBackoff := flags.String("poll-backoff", "5m", "transport backoff")
 	codexAuthPath := flags.String("codex-auth", "", "host Codex auth.json path")
 	claudeAuthPath := flags.String("claude-auth", "", "host Claude credential path")
+	copilotAuthPath := flags.String("copilot-auth", "", "host file with one dedicated Copilot CLI token (github_pat_, gho_, or ghu_); never the gh login")
 	repositoryConfigPath := flags.String("repository-config", "", "checked-in repository configuration path")
 	authorizedUsers := stringList{}
 	flags.Var(&authorizedUsers, "authorized-user", "authorized GitHub username; may be repeated; inferred from the authenticated gh account when omitted")
@@ -761,6 +764,7 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 		PollingBackoff:       *pollingBackoff,
 		CodexAuthPath:        *codexAuthPath,
 		ClaudeAuthPath:       *claudeAuthPath,
+		CopilotAuthPath:      *copilotAuthPath,
 		RepositoryConfigPath: *repositoryConfigPath,
 		WorkingDirectory:     workingDirectory,
 	})

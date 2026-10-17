@@ -229,16 +229,30 @@ func (r *DockerRuntime) CheckHarness(ctx context.Context, request HarnessCheckRe
 	if !validName(request.Name) {
 		return errors.New("harness executable name is unsafe")
 	}
-	command := "command -v " + request.Name + " >/dev/null 2>&1 && " + request.Name + " --version >/dev/null 2>&1"
 	if _, err := r.runDocker(ctx, []string{
 		"run", "--rm", "--pull=never", "--user", WorkerUser,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", "none",
 		"--entrypoint", "/bin/sh",
-		imageReference(request.Image.Name, request.Image.Digest), "-c", command,
+		imageReference(request.Image.Name, request.Image.Digest), "-c", harnessExecutableProbe(request.Name),
 	}); err != nil {
 		return redactCause(err, "harness executable is not usable in the worker image")
 	}
 	return nil
+}
+
+// CopilotVersionLine is the first `copilot --version` line of the Copilot
+// CLI release the compatibility record docs/spikes/copilot-cli-1.0.98 proved.
+const CopilotVersionLine = "GitHub Copilot CLI 1.0.98."
+
+// harnessExecutableProbe returns the in-image shell probe for one validated
+// harness executable name. The Copilot adapter depends on the observed
+// behavior of one CLI release, so the Copilot probe also requires that
+// release; another release is not usable.
+func harnessExecutableProbe(name string) string {
+	if name == "copilot" {
+		return `command -v copilot >/dev/null 2>&1 && test "$(copilot --version 2>/dev/null | head -n 1)" = "` + CopilotVersionLine + `"`
+	}
+	return "command -v " + name + " >/dev/null 2>&1 && " + name + " --version >/dev/null 2>&1"
 }
 
 // CheckHarnessAuthentication streams one explicit credential file into a
@@ -422,10 +436,17 @@ func harnessSkillRoot(name string) (string, error) {
 		return "/home/factory/.codex/skills", nil
 	case "claude":
 		return "/home/factory/.claude/skills", nil
+	case "copilot":
+		return "/home/factory/.copilot/skills", nil
 	default:
 		return "", fmt.Errorf("unsupported harness skill probe %q", name)
 	}
 }
+
+// copilotManagedSettings is the image-owned copy of the Copilot user settings
+// that factory-copilot installs into the private Copilot home before every
+// launch. Its disabledSkills list is Copilot's model-visibility switch.
+const copilotManagedSettings = "/usr/local/share/factory-copilot/settings.json"
 
 // skillContractProbe builds the in-worker shell probe asserting each skill is
 // present, self-named, unduplicated, and model-visible under both harness
@@ -441,6 +462,9 @@ func skillContractProbe(harness, root string, skills []string) (string, error) {
 		probe += "grep -q '^name: " + skill + "$' " + directory + "/SKILL.md\n"
 		probe += "! grep -q 'disable-model-invocation' " + directory + "/SKILL.md\n"
 		probe += "! grep -rq 'allow_implicit_invocation' " + directory + "/agents\n"
+		if harness == "copilot" {
+			probe += "jq -e --arg skill " + skill + " '(.disabledSkills // []) | index($skill) == null' " + copilotManagedSettings + " >/dev/null\n"
+		}
 	}
 	return probe + harness + " --version\n", nil
 }
