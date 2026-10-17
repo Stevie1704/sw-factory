@@ -804,7 +804,7 @@ func PlanLaunch(snapshot LaunchSnapshot, request AgentRequest) (LaunchPlan, erro
 	}
 	if resumeSource != nil {
 		if resumeSource.Harness != string(policy.Harness) {
-			return LaunchPlan{}, fmt.Errorf("test objection must resume the original %s harness, not %s", resumeSource.Harness, policy.Harness)
+			return LaunchPlan{}, fmt.Errorf("a resumed invocation must resume the original %s harness, not %s", resumeSource.Harness, policy.Harness)
 		}
 		if resumeSource.Model != "" {
 			policy.Model = resumeSource.Model
