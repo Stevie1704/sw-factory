@@ -25,6 +25,16 @@ const (
 	HeadlessLaunchResume HeadlessLaunchMode = "resume"
 )
 
+// HeadlessStartFailedMarker is the stderr line the worker helper records,
+// with exit status HeadlessStartFailedExitCode, when the requested command
+// cannot start at all, for example because the worker image has no such
+// executable. A command that started never produces this evidence.
+const HeadlessStartFailedMarker = "process start failed"
+
+// HeadlessStartFailedExitCode is the exit status recorded with
+// HeadlessStartFailedMarker.
+const HeadlessStartFailedExitCode = 127
+
 // HeadlessStatus is the worker-owned lifecycle projection for one detached
 // process. It contains no Docker name, host PID, or terminal identity.
 type HeadlessStatus string

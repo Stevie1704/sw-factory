@@ -223,6 +223,18 @@ cannot forge an out-of-memory failure.
 When the kernel exposes no `oom_kill` count, or the baseline could not be
 recorded, an out-of-memory kill stays an ordinary failed exit.
 
+When the helper cannot start the requested command, it records exit status
+127 and the stderr line `process start failed`. This happens, for example,
+when a repository selects Copilot on a worker image built before
+`factory-copilot` existed. The harness adapter reports an unexpected exit
+that names the missing executable. The coordinator does not resume it,
+because a Run keeps its frozen image and a resume would meet the same image.
+It pauses the run as `harness missing from worker image (<harness>)` with the
+action: rebuild the worker with `scripts/build-worker.sh`, re-pin
+`worker_build.digest` in `factory.yaml`, and cancel the Run with
+`/factory cancel`. `/factory resume` is refused for this pause. Only Runs
+claimed after the repin use the new image.
+
 A command that reaches the PID limit sees `fork` fail. The worker becomes
 usable again when the processes that hold its PIDs end.
 

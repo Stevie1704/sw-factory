@@ -1717,11 +1717,26 @@ func (l *invocationLifecycle) pauseForOutOfMemory(ctx context.Context, registrat
 	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, LifecycleReasonHarnessOutOfMemory, fmt.Sprintf("%s (%s): killed at the worker memory limit; raise worker_limits.memory in the host configuration, then resume", LifecycleReasonHarnessOutOfMemory, harnessName))
 }
 
+// pauseForHarnessMissing stops delegated workers and records a human pause
+// with the worker upgrade that installs the selected harness executable.
+func (l *invocationLifecycle) pauseForHarnessMissing(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string) (store.Run, error) {
+	return l.pauseRunWithReason(ctx, registration, runStore, run, store.StatusWaitingForHuman, LifecycleReasonHarnessMissing, fmt.Sprintf("%s (%s): %s", LifecycleReasonHarnessMissing, harnessName, workerUpgradeInstruction))
+}
+
+// workerUpgradeInstruction is the operator action after a launch on a worker
+// image that has no executable for the selected harness. A Run keeps the
+// image it froze at claim, so only Runs claimed after the repin can use it.
+const workerUpgradeInstruction = "rebuild the worker with scripts/build-worker.sh and re-pin worker_build.digest in factory.yaml; this Run keeps its frozen image, so cancel it with /factory cancel"
+
 // pauseForHarnessExit pauses after an unexpected harness exit. A memory-limit
-// kill names its cause; every other exit needs a manual native resume.
+// kill and a harness missing from the worker image name their cause; every
+// other exit needs a manual native resume.
 func (l *invocationLifecycle) pauseForHarnessExit(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, harnessName string, cause error) (store.Run, error) {
 	if harness.IsOutOfMemory(cause) {
 		return l.pauseForOutOfMemory(ctx, registration, runStore, run, harnessName)
+	}
+	if harness.IsHarnessMissing(cause) {
+		return l.pauseForHarnessMissing(ctx, registration, runStore, run, harnessName)
 	}
 	return l.pauseForManualRecovery(ctx, registration, runStore, run, harnessName)
 }
@@ -2015,8 +2030,8 @@ func (l *invocationLifecycle) reconcileActiveHarnessLiveness(ctx context.Context
 				_, pauseErr := l.pauseForAuthentication(ctx, registration, runStore, run, active.Harness)
 				return pauseErr
 			}
-			if harness.IsOutOfMemory(failure) {
-				_, pauseErr := l.pauseForOutOfMemory(ctx, registration, runStore, run, active.Harness)
+			if harness.IsOutOfMemory(failure) || harness.IsHarnessMissing(failure) {
+				_, pauseErr := l.pauseForHarnessExit(ctx, registration, runStore, run, active.Harness, failure)
 				return pauseErr
 			}
 		}

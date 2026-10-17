@@ -718,7 +718,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 					if diagnostics != "" {
 						_ = writeHarnessFailureDiagnostic(invocationRoot(run, active.ID), "headless session exit", failure, diagnostics, s.lifecycleModule().clock().UTC())
 					}
-					if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) || harness.IsOutOfMemory(failure) {
+					if harness.IsRateLimited(failure) || harness.IsAuthenticationExpired(failure) || harness.IsOutOfMemory(failure) || harness.IsHarnessMissing(failure) {
 						diagnosis.headlessFailure = failure
 						diagnosis.headlessFailureHarness = active.Harness
 						return
@@ -1163,8 +1163,8 @@ func (s *Service) reconcileInterruptedRunWithMode(ctx context.Context, registrat
 			}
 			return paused, diagnosis, RecoveryOutcomeWaitingForHuman, diagnosis.headlessFailure
 		}
-		if harness.IsOutOfMemory(diagnosis.headlessFailure) {
-			paused, pauseErr := s.lifecycleModule().pauseForOutOfMemory(ctx, registration, runStore, run, diagnosis.headlessFailureHarness)
+		if harness.IsOutOfMemory(diagnosis.headlessFailure) || harness.IsHarnessMissing(diagnosis.headlessFailure) {
+			paused, pauseErr := s.lifecycleModule().pauseForHarnessExit(ctx, registration, runStore, run, diagnosis.headlessFailureHarness, diagnosis.headlessFailure)
 			if pauseErr != nil {
 				return paused, diagnosis, RecoveryOutcomeWaitingForHuman, errors.Join(diagnosis.headlessFailure, pauseErr)
 			}

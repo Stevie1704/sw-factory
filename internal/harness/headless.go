@@ -378,6 +378,12 @@ func (h *headless) classifyInspection(inspection HeadlessInspection) *HeadlessFa
 	if inspection.Status == worker.HeadlessStatusExited && inspection.OutOfMemory {
 		return &HeadlessFailure{Cause: NewOutOfMemoryError(h.protocol.name), ExitCode: inspection.ExitCode}
 	}
+	// The worker helper records this evidence only when the command could not
+	// start, so harness output can never produce it.
+	if inspection.Status == worker.HeadlessStatusExited && inspection.ExitCode == worker.HeadlessStartFailedExitCode &&
+		strings.HasPrefix(inspection.Stderr, worker.HeadlessStartFailedMarker+"\n") {
+		return &HeadlessFailure{Cause: NewHarnessMissingError(h.protocol.name), ExitCode: inspection.ExitCode}
+	}
 	output := inspection.Stdout
 	if strings.TrimSpace(inspection.Stderr) != "" {
 		output += "\n" + inspection.Stderr

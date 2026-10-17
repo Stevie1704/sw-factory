@@ -178,9 +178,9 @@ func runProcess(arguments []string) error {
 	commandProcess.Stderr = stderrWriter
 	commandProcess.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := commandProcess.Start(); err != nil {
-		_, _ = stderr.WriteString("process start failed\n")
+		_, _ = stderr.WriteString(worker.HeadlessStartFailedMarker + "\n")
 		_ = writeState(*stateDir, stateStatus, string(statusExited))
-		_ = writeState(*stateDir, stateExitCode, "127")
+		_ = writeState(*stateDir, stateExitCode, strconv.Itoa(worker.HeadlessStartFailedExitCode))
 		return fmt.Errorf("start headless command: %w", err)
 	}
 	if err := writeState(*stateDir, statePID, strconv.Itoa(commandProcess.Process.Pid)); err != nil {

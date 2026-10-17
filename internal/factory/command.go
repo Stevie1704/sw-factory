@@ -413,6 +413,9 @@ func resumeAdmissionReason(run store.Run) string {
 		if strings.HasPrefix(reason, LifecycleReasonHarnessAuthenticationExpired) || strings.HasPrefix(reason, LifecycleReasonAutomaticHarnessRecoveryExhausted) || strings.HasPrefix(reason, LifecycleReasonHarnessOutOfMemory) || isCheckInfrastructurePause(run) {
 			return ""
 		}
+		if strings.HasPrefix(reason, LifecycleReasonHarnessMissing) {
+			return "resume cannot help: the Run's frozen worker image has no executable for the selected harness; upgrade the worker and use `/factory cancel`"
+		}
 		return "resume is only allowed for a recoverable authentication, native-session, out-of-memory, or check infrastructure pause, not the current human gate"
 	default:
 		return fmt.Sprintf("resume is only allowed while the run is paused, not status %q", run.Status)
