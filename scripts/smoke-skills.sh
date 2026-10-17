@@ -23,6 +23,10 @@ WORKER_IMAGE="${WORKER_IMAGE:-$(sed -n 's/^  image: \(.*\)$/\1/p' "$REPOSITORY_R
 WORKER_DIGEST="${WORKER_DIGEST:-$(sed -n 's/^  digest: \(.*\)$/\1/p' "$REPOSITORY_ROOT/factory.yaml")}"
 CODEX_AUTH_PATH="${CODEX_AUTH_PATH:-$HOME/.codex/auth.json}"
 CLAUDE_AUTH_PATH="${CLAUDE_AUTH_PATH:-$HOME/.claude/.credentials.json}"
+# Copilot authenticates only with a dedicated token file the operator names.
+# There is deliberately no default: the host gh login, GH_TOKEN, GITHUB_TOKEN,
+# and ~/.copilot are never a Copilot credential source (docs/configuration.md).
+COPILOT_TOKEN_PATH="${COPILOT_TOKEN_PATH:-}"
 HARNESSES="${HARNESSES:-codex claude}"
 WORKER_REFERENCE="$WORKER_IMAGE@$WORKER_DIGEST"
 
@@ -57,23 +61,40 @@ mandatory_skills() {
   echo "$skills"
 }
 
-# credential_path returns the host credential file one harness authenticates
-# with, and the in-worker file it is streamed to.
-credential_path() {
+# host_credential returns the host credential file one harness authenticates
+# with. It is empty for Copilot when no dedicated token file is named.
+host_credential() {
   case "$1" in
-    codex) echo "$CODEX_AUTH_PATH /home/factory/.codex/auth.json" ;;
-    claude) echo "$CLAUDE_AUTH_PATH /home/factory/.claude/.credentials.json" ;;
+    codex) echo "$CODEX_AUTH_PATH" ;;
+    claude) echo "$CLAUDE_AUTH_PATH" ;;
+    copilot) echo "$COPILOT_TOKEN_PATH" ;;
+    *) echo "unsupported harness $1" >&2; exit 1 ;;
+  esac
+}
+
+# worker_credential returns the in-worker file the host credential is streamed
+# to. For Copilot it is the projection path factory-copilot reads.
+worker_credential() {
+  case "$1" in
+    codex) echo "/home/factory/.codex/auth.json" ;;
+    claude) echo "/home/factory/.claude/.credentials.json" ;;
+    copilot) echo "/run/factory-auth/copilot-token" ;;
     *) echo "unsupported harness $1" >&2; exit 1 ;;
   esac
 }
 
 # harness_invocation returns the non-interactive command one harness answers a
-# single prompt with. The worker is the security boundary, so both harnesses
-# run without their redundant inner approval gates, exactly as a run does.
+# single prompt with; the prompt follows as the last argument. The worker is
+# the security boundary, so each harness runs without its redundant inner
+# approval gates, exactly as a run does. Copilot runs through the
+# factory-copilot launcher with the isolation options of the production
+# adapter (internal/harness/headless_copilot.go), but answers in plain text so
+# the reply can be matched against the skill sentinel.
 harness_invocation() {
   case "$1" in
     codex) echo "codex exec --skip-git-repo-check -s danger-full-access -c project_doc_max_bytes=0" ;;
     claude) echo "claude -p --dangerously-skip-permissions" ;;
+    copilot) echo "factory-copilot --silent --allow-all-tools --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN --prompt" ;;
     *) echo "unsupported harness $1" >&2; exit 1 ;;
   esac
 }
@@ -98,11 +119,17 @@ ask_harness() {
   harness_name="$1"
   smoke_prompt="$2"
   invocation="$(harness_invocation "$harness_name")"
-  set -- $(credential_path "$harness_name")
-  host_credential="$1"
-  worker_credential="$2"
+  host_credential="$(host_credential "$harness_name")"
+  worker_credential="$(worker_credential "$harness_name")"
+  # The image keeps the Copilot projection directory root-owned and read-only,
+  # as a run mounts the token there. The smoke gives it a private tmpfs the
+  # worker user can stream the token into.
+  set --
+  if [ "$harness_name" = copilot ]; then
+    set -- --tmpfs /run/factory-auth:uid=10001,gid=10001,mode=0700
+  fi
   "$DOCKER" run --rm -i --pull=never --user 10001:10001 \
-    --cap-drop ALL --security-opt no-new-privileges \
+    --cap-drop ALL --security-opt no-new-privileges "$@" \
     --env "SMOKE_PROMPT=$smoke_prompt" \
     --entrypoint /bin/sh "$WORKER_REFERENCE" -c "
       umask 077
@@ -153,9 +180,11 @@ unrecorded=""
 unloaded=""
 
 for harness_name in $HARNESSES; do
-  set -- $(credential_path "$harness_name")
-  if [ ! -f "$1" ]; then
-    echo "No $harness_name credential at $1; skipping its smoke." >&2
+  credential="$(host_credential "$harness_name")"
+  # A skipped harness records nothing, so a missing or empty credential can
+  # never become smoke evidence.
+  if [ -z "$credential" ] || [ ! -s "$credential" ]; then
+    echo "No $harness_name credential at ${credential:-<unset>}; skipping its smoke." >&2
     unrecorded="$unrecorded $harness_name"
     continue
   fi
