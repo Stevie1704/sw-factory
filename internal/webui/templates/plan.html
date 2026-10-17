@@ -94,7 +94,7 @@
 </div>
 {{- end}}
 {{if .Approved -}}
-<p>The current approval binds the publication below. Edit or regenerate the draft to review a new revision.</p>
+<p>The current approval binds the publication below.{{if .Actions.Edit}} Edit the draft to review a new revision.{{end}}</p>
 {{else if .Preview -}}
 {{template "publication" .Preview}}
 {{else -}}
@@ -134,7 +134,7 @@
 {{else if eq .Session.State "publishing"}}<p class="notice notice-alarm" role="alert">Publication stopped without a recorded result, for example because the coordinator stopped. Retry it to continue the same approved content, or cancel the session.</p>{{end}}
 {{if eq .Session.State "published"}}<p class="notice" role="status">Publication is complete. No implementation started.</p>{{end}}
 {{with .Progress -}}
-<p class="publication-counts" data-publication-counts>{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome</p>
+<p class="publication-counts" data-publication-counts>{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome{{if .NotRun}} · {{.NotRun}} not run{{end}}</p>
 <div class="scroll">
 <table class="ledger">
 <thead><tr><th scope="col">Operation</th><th scope="col">State</th><th scope="col">Tracker item</th><th scope="col">Detail</th></tr></thead>
@@ -142,7 +142,7 @@
 {{range .Operations -}}
 <tr data-operation="{{.ID}}" data-state="{{.State}}">
 <td>{{if eq .Kind "create_item"}}Create <code>{{.NodeID}}</code> {{.Title}}{{if .Intermediate}} <span class="badge">intermediate</span>{{end}}{{else}}Link <code>{{.FromNodeID}}</code> {{.RelationshipKind}} <code>{{.ToNodeID}}</code>{{end}}</td>
-<td>{{.State}}{{if gt .Attempts 0}} ({{.Attempts}} attempts){{end}}</td>
+<td>{{.Label}}{{if gt .Attempts 0}} ({{.Attempts}} attempts){{end}}</td>
 <td>{{if .URL}}<a href="{{.URL}}" rel="noreferrer noopener">{{.ExternalID}}</a>{{else}}{{.ExternalID}}{{end}}</td>
 <td>{{.Detail}}</td>
 </tr>
