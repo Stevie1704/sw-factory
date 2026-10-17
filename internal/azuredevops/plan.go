@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"unicode"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -22,9 +23,9 @@ var _ tracker.PlanPublisher = (*Client)(nil)
 const (
 	// maxTitleRunes is the System.Title limit.
 	maxTitleRunes = 255
-	// maxDescriptionBytes bounds a rendered description. The JSON patch of a
-	// create is one az command-line argument, and Linux limits one argument
-	// to 128 KiB, so the bound stays well below that.
+	// maxDescriptionBytes bounds a rendered description. The encoded JSON
+	// patch of the create must also fit one az argument
+	// (maxRequestBodyBytes), which validatePlanItem checks.
 	maxDescriptionBytes = 100_000
 	// maxTagRunes is the Azure DevOps tag length limit.
 	maxTagRunes = 400
@@ -155,13 +156,20 @@ func resolvePlan(mapping config.AzurePlanMapping, graph tracker.PlanGraph) (trac
 
 // intermediateNode returns the intermediate item of level below parent,
 // creating it on first use. Its identity is "<parent>--<type slug>"; a plan
-// node with the same identity is an invalid mapping.
+// node or an intermediate item of another level with the same identity is
+// an invalid mapping.
 func intermediateNode(mapping config.AzurePlanMapping, graph tracker.PlanGraph, nodes map[string]*planNode, intermediates map[string][]*planNode, parent *planNode, level int, above string) (*planNode, error) {
-	id := parent.item.NodeID + "--" + typeSlug(mapping.Levels[level].Type)
+	id := parent.item.NodeID + "--" + mapping.Levels[level].Slug()
 	for _, existing := range intermediates[parent.item.NodeID] {
-		if existing.item.NodeID == id {
-			return existing, nil
+		if existing.item.NodeID != id {
+			continue
 		}
+		if existing.level != level {
+			return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+				"node %s: the intermediate %s and %s items would share the identity %q", parent.item.NodeID,
+				mapping.Levels[existing.level].Type, mapping.Levels[level].Type, id)
+		}
+		return existing, nil
 	}
 	if _, taken := nodes[id]; taken || len(id) > 128 {
 		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
@@ -176,20 +184,6 @@ func intermediateNode(mapping config.AzurePlanMapping, graph tracker.PlanGraph, 
 	}
 	intermediates[parent.item.NodeID] = append(intermediates[parent.item.NodeID], node)
 	return node, nil
-}
-
-// typeSlug returns the lower-case identity form of a work-item type, for
-// example "user-story".
-func typeSlug(workItemType string) string {
-	var slug strings.Builder
-	for _, character := range strings.ToLower(workItemType) {
-		if character < 128 && (unicode.IsLetter(character) || unicode.IsDigit(character)) {
-			slug.WriteRune(character)
-		} else if !strings.HasSuffix(slug.String(), "-") {
-			slug.WriteByte('-')
-		}
-	}
-	return strings.Trim(slug.String(), "-")
 }
 
 // nodeRelationships returns the native parent link of node and its
@@ -286,6 +280,9 @@ func validatePlanItem(item tracker.RenderedPlanItem) error {
 			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: tag %q has ';' or ',' or exceeds %d characters", item.NodeID, tag, maxTagRunes)
 		}
 	}
+	if _, err := encodeRequestBody(createPatch(item)); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: %v; shorten the description", item.NodeID, err)
+	}
 	return nil
 }
 
@@ -370,12 +367,87 @@ func (c *Client) checkProcess(ctx context.Context, repository tracker.Repository
 	if err := c.checkBacklogOrder(ctx, repository, mapping); err != nil {
 		return err
 	}
+	definitions, err := c.fieldDefinitions(ctx, repository, mapping)
+	if err != nil {
+		return err
+	}
 	for _, level := range mapping.Levels {
-		if err := c.checkFields(ctx, repository, level); err != nil {
+		if err := c.checkFields(ctx, repository, level, definitions); err != nil {
 			return err
 		}
 	}
 	return c.checkLinkTypes(ctx, repository, relationships)
+}
+
+// fieldDefinition is the projection of one field of the project's field
+// list. Only this list carries the field type and the read-only flag; the
+// fields of a work-item type do not.
+type fieldDefinition struct {
+	ReferenceName string `json:"referenceName"`
+	Type          string `json:"type"`
+	ReadOnly      bool   `json:"readOnly"`
+}
+
+// fieldDefinitions reads the project's field list by lower-case reference
+// name. A mapping without configured fields needs no list.
+func (c *Client) fieldDefinitions(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping) (map[string]fieldDefinition, error) {
+	definitions := map[string]fieldDefinition{}
+	if !slices.ContainsFunc(mapping.Levels, func(level config.AzurePlanLevel) bool { return len(level.Fields) > 0 }) {
+		return definitions, nil
+	}
+	var response struct {
+		Value []fieldDefinition `json:"value"`
+	}
+	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, "wit/fields", nil, apiVersion)}, &response); err != nil {
+		return nil, fmt.Errorf("read the fields of %s: %w", repository.Project, classifyPlanError(err))
+	}
+	for _, definition := range response.Value {
+		definitions[strings.ToLower(definition.ReferenceName)] = definition
+	}
+	return definitions, nil
+}
+
+// maxStringFieldRunes is the length limit of an Azure DevOps string field.
+const maxStringFieldRunes = 255
+
+// guidPattern matches the canonical text form of a GUID.
+var guidPattern = regexp.MustCompile(`^\{?[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\}?$`)
+
+// checkFieldValue returns a typed invalid-mapping error when value cannot be
+// written to the configured field: the field is read-only, or value does not
+// parse as the field type. A tree path field (area or iteration path) is
+// exempt from the read-only flag, because Azure DevOps reports those paths as
+// read-only and still accepts them on create. A field type without a
+// syntax rule here, for example html or identity, is left to Azure DevOps.
+func checkFieldValue(workItemType, name, value string, definition fieldDefinition) error {
+	if definition.ReadOnly && definition.Type != "treePath" {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "field %q of %q is read-only; remove it from the fields of the level in azure_devops.planning", name, workItemType)
+	}
+	valid := true
+	switch definition.Type {
+	case "integer", "picklistInteger":
+		_, err := strconv.ParseInt(value, 10, 32)
+		valid = err == nil
+	case "double", "picklistDouble":
+		_, err := strconv.ParseFloat(value, 64)
+		valid = err == nil
+	case "boolean":
+		valid = strings.EqualFold(value, "true") || strings.EqualFold(value, "false")
+	case "dateTime":
+		_, err := time.Parse(time.RFC3339, value)
+		_, dateErr := time.Parse(time.DateOnly, value)
+		valid = err == nil || dateErr == nil
+	case "guid":
+		valid = guidPattern.MatchString(value)
+	case "string", "picklistString":
+		if utf8.RuneCountInString(value) > maxStringFieldRunes {
+			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "field %q of %q is a string field and accepts at most %d characters", name, workItemType, maxStringFieldRunes)
+		}
+	}
+	if !valid {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "field %q of %q is a %s field and does not accept %q", name, workItemType, definition.Type, value)
+	}
+	return nil
 }
 
 // checkBacklogOrder requires every mapped type on a backlog level and the
@@ -421,9 +493,10 @@ type workItemTypeField struct {
 var serverFields = []string{"System.AreaPath", "System.IterationPath", "System.State", "System.Reason", "System.TeamProject", "System.WorkItemType"}
 
 // checkFields requires that every configured field exists on the level's type
-// with an allowed value, that every always-required field without a default
-// gets a value, and that a configured state is a not-started state.
-func (c *Client) checkFields(ctx context.Context, repository tracker.Repository, level config.AzurePlanLevel) error {
+// with an allowed value that fits its field type and is not read-only, that
+// every always-required field without a default gets a value, and that a
+// configured state is a not-started state.
+func (c *Client) checkFields(ctx context.Context, repository tracker.Repository, level config.AzurePlanLevel, definitions map[string]fieldDefinition) error {
 	var response struct {
 		Value []workItemTypeField `json:"value"`
 	}
@@ -442,6 +515,11 @@ func (c *Client) checkFields(ctx context.Context, repository tracker.Repository,
 		}
 		if len(field.AllowedValues) > 0 && !slices.ContainsFunc(field.AllowedValues, func(allowed any) bool { return fmt.Sprint(allowed) == level.Fields[name] }) {
 			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "field %q of %q does not allow the value %q", name, level.Type, level.Fields[name])
+		}
+		if definition, ok := definitions[strings.ToLower(name)]; ok {
+			if err := checkFieldValue(level.Type, name, level.Fields[name], definition); err != nil {
+				return err
+			}
 		}
 		if strings.EqualFold(name, "System.State") {
 			if err := c.checkInitialState(ctx, repository, level.Type, level.Fields[name]); err != nil {

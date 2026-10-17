@@ -74,6 +74,10 @@ func TestValidateHostRejectsAnInvalidAzureDevOpsPlanMapping(t *testing.T) {
 		{name: "no kind", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Feature", Required: true}}}},
 		{name: "rendered title field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{"System.Title": "x"}}}}},
 		{name: "tags field", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{"system.tags": "agent-ready"}}}}},
+		{name: "types with the same identity slug", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
+			{Type: "Epic", Kinds: []string{"parent"}}, {Type: "Sub Feature"}, {Type: "Sub-Feature"}, {Type: "User Story", Kinds: []string{"task"}}}}},
+		{name: "type without an identity slug", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
+			{Type: "Epic", Kinds: []string{"parent"}}, {Type: "機能", Required: true}, {Type: "User Story", Kinds: []string{"task"}}}}},
 		{name: "empty field name", mapping: config.AzurePlanMapping{Levels: []config.AzurePlanLevel{{Type: "Epic", Kinds: []string{"parent"}, Fields: map[string]string{" ": "x"}}}}},
 	}
 	for _, tc := range tests {

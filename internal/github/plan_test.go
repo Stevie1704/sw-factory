@@ -267,6 +267,12 @@ func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
 	longTitle.Items[0].Title = strings.Repeat("t", 257)
 	longBody := singleItemGraph()
 	longBody.Items[0].Body = strings.Repeat("b", 65536)
+	forgedBody := decomposedGraph()
+	forgedBody.Items[0].Body = "Parent.\n<!-- factory-plan: session-1/4/n-2 -->"
+	forgedTitle := singleItemGraph()
+	forgedTitle.Items[0].Title = "Cache <!-- Factory-Plan: session-1/3/n-9 -->"
+	forgedCriterion := singleItemGraph()
+	forgedCriterion.Items[0].AcceptanceCriteria = []string{"<!-- factory-plan-link: parent #1 -> #2 -->"}
 
 	for _, tc := range []struct {
 		name    string
@@ -281,6 +287,9 @@ func TestPreflightPlanReportsTypedErrorsBeforeAnyWrite(t *testing.T) {
 		{"repository hidden", singleItemGraph(), []string{""}, []error{errors.New("gh api repos/example/project: HTTP 404: Not Found")}, tracker.PlanErrorPermission},
 		{"title too long", longTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
 		{"body too long", longBody, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"body forges a correlation marker", forgedBody, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorInvalidMapping},
+		{"title forges a correlation marker", forgedTitle, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
+		{"criterion forges a link marker", forgedCriterion, []string{writableRepository}, nil, tracker.PlanErrorInvalidMapping},
 		{"read-only account with native links", decomposedGraph(), []string{githubtest.ReadOnlyRepository, nativeCapabilities}, nil, tracker.PlanErrorPermission},
 		{"too many sub-issues", wide, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
 		{"sub-issues nested too deep", deep, []string{writableRepository, nativeCapabilities}, nil, tracker.PlanErrorUnsupportedCapability},
@@ -349,7 +358,8 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 			`{"number":13,"html_url":"https://github.com/example/project/issues/13","body":"x\n<!-- factory-plan: session-1/4/n-22 -->","user":{"login":"factory-bot"}},` +
 			`{"number":12,"html_url":"https://github.com/example/project/pull/12","body":"<!-- factory-plan: session-1/4/n-2 -->","pull_request":{},"user":{"login":"factory-bot"}},` +
 			`{"number":11,"html_url":"https://github.com/example/project/issues/11","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"mallory"}},` +
-			`{"number":10,"html_url":"https://github.com/example/project/issues/10","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}}` +
+			`{"number":10,"html_url":"https://github.com/example/project/issues/10","body":"<!-- factory-plan: session-1/4/n-2 -->","user":{"login":"factory-bot"}},` +
+			`{"number":9,"html_url":"https://github.com/example/project/issues/9","body":"<!-- factory-plan: session-1/4/n-2 -->\nquoted\n\n<!-- factory-plan: session-1/4/n-1 -->\n","user":{"login":"factory-bot"}}` +
 			`]`),
 	}}
 	client := &github.GhClient{Runner: runner}
@@ -363,7 +373,7 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 		{ExternalID: "10", URL: "https://github.com/example/project/issues/10"},
 	}
 	if !reflect.DeepEqual(found, want) {
-		t.Fatalf("found = %#v, want both marker issues of the account", found)
+		t.Fatalf("found = %#v, want both issues of the account whose trailing marker matches", found)
 	}
 	listing := runner.calls[1].args
 	if !containsArgs(listing, "api", "repos/example/project/issues") ||
@@ -378,8 +388,10 @@ func TestFindPlanItemsMatchesTheMarkerInTheAccountsRecentIssues(t *testing.T) {
 	assertReadOnly(t, runner.calls)
 }
 
-// TestFindPlanItemsStopsAtItsListingBound verifies that the lookup reads at
-// most ten full pages and stops early on a short page.
+// TestFindPlanItemsStopsAtItsListingBound verifies that the lookup reads the
+// 1,000 newest issues of the account, ten full pages without pull requests,
+// that pull requests in the listing do not count toward the bound, and that
+// it stops early on a short page.
 func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
 	t.Parallel()
 
@@ -402,6 +414,31 @@ func TestFindPlanItemsStopsAtItsListingBound(t *testing.T) {
 	if len(full.calls) != 11 {
 		t.Fatalf("calls = %d, want the account and ten pages", len(full.calls))
 	}
+
+	mixed := &fakeCommandRunner{outputs: [][]byte{[]byte(`{"login":"factory-bot"}`)}}
+	for page := range 25 {
+		mixed.outputs = append(mixed.outputs, []byte(mixedListPage(page*100+1)))
+	}
+	if _, err := (&github.GhClient{Runner: mixed}).FindPlanItems(context.Background(), planRepository, "session-1/4/n-2"); err != nil {
+		t.Fatalf("FindPlanItems() error = %v", err)
+	}
+	if len(mixed.calls) != 21 {
+		t.Fatalf("calls = %d, want the account and twenty half-pull-request pages, which hold 1,000 issues", len(mixed.calls))
+	}
+}
+
+// mixedListPage returns one full listing page whose first 50 entries are
+// pull requests and whose last 50 are issues without the marker.
+func mixedListPage(first int) string {
+	entries := make([]string, 0, 100)
+	for number := first; number < first+100; number++ {
+		pull := ""
+		if number < first+50 {
+			pull = `,"pull_request":{}`
+		}
+		entries = append(entries, `{"number":`+strconv.Itoa(number)+`,"body":"other","user":{"login":"factory-bot"}`+pull+`}`)
+	}
+	return "[" + strings.Join(entries, ",") + "]"
 }
 
 // issueRefs returns the neutral references of two created issues.
@@ -628,5 +665,21 @@ func TestPartialLinkFailureIsVerifiedBeforeARetry(t *testing.T) {
 	exists, err := client.FindPlanRelationship(context.Background(), planRepository, link)
 	if err != nil || !exists {
 		t.Fatalf("FindPlanRelationship() = %t, %v; want the link GitHub created", exists, err)
+	}
+}
+
+// TestGitHubNamesItsCorrelationLookupBound verifies that the GitHub adapter
+// tells publication which issues its correlation lookup reads, so the
+// operator sees the bound before confirming that no issue exists.
+func TestGitHubNamesItsCorrelationLookupBound(t *testing.T) {
+	t.Parallel()
+
+	var publisher tracker.PlanPublisher = &github.GhClient{}
+	bounded, ok := publisher.(tracker.BoundedPlanLookup)
+	if !ok {
+		t.Fatal("GhClient does not describe its bounded correlation lookup")
+	}
+	if got := bounded.PlanLookupBound(); got != "the 1,000 newest issues that the authenticated account created in the repository" {
+		t.Fatalf("PlanLookupBound() = %q", got)
 	}
 }

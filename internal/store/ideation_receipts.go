@@ -83,10 +83,22 @@ type PublicationReceipt struct {
 
 // RecordPublicationReceipt appends receipt for the session's current
 // approval. A stored receipt with the same ID and content is a replay.
-func (s *Store) RecordPublicationReceipt(ctx context.Context, write IdeationWrite, receipt PublicationReceipt) (IdeationSession, PublicationReceipt, error) {
+// settled lists ledger operations of that approval whose update the receipt
+// reports, for example an operator reconciliation. They are recorded in the
+// same transaction as RecordPublicationOperation records them, so a refused
+// receipt leaves the ledger unchanged and a retry repeats the whole write.
+func (s *Store) RecordPublicationReceipt(ctx context.Context, write IdeationWrite, receipt PublicationReceipt, settled ...PublicationOperation) (IdeationSession, PublicationReceipt, error) {
 	items, relationships, err := encodePublicationReceipt(receipt)
 	if err != nil {
 		return IdeationSession{}, PublicationReceipt{}, err
+	}
+	for _, operation := range settled {
+		if err := validatePublicationResult(operation); err != nil {
+			return IdeationSession{}, PublicationReceipt{}, err
+		}
+		if operation.SessionID != write.SessionID || operation.ApprovalID != receipt.ApprovalID {
+			return IdeationSession{}, PublicationReceipt{}, fmt.Errorf("publication operation %q does not belong to receipt %q", operation.ID, receipt.ID)
+		}
 	}
 	tx, session, err := s.beginIdeationWrite(ctx, write)
 	if err != nil {
@@ -111,6 +123,11 @@ func (s *Store) RecordPublicationReceipt(ctx context.Context, write IdeationWrit
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT plan_revision FROM ideation_approvals WHERE session_id = ? AND id = ?`, session.ID, receipt.ApprovalID).Scan(&receipt.PlanRevision); err != nil {
 		return IdeationSession{}, PublicationReceipt{}, fmt.Errorf("read published approval %q: %w", receipt.ApprovalID, err)
+	}
+	for _, operation := range settled {
+		if _, err := recordPublicationOperation(ctx, tx, operation); err != nil {
+			return IdeationSession{}, PublicationReceipt{}, err
+		}
 	}
 	receipt.SessionID = session.ID
 	receipt.RecordedAt = ideationWriteTime(write)

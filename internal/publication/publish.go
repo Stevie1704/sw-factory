@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -52,6 +53,9 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	if !ok {
 		return Result{}, fmt.Errorf("%w: session %q", ErrNotApproved, session.ID)
 	}
+	if ledger := approvalOperations(history.Operations, approval.ID); session.State == store.IdeationStateCancelled && lacksCancelledReceipt(history, approval.ID, ledger) {
+		return p.finish(ctx, session.ID, request.AttemptID, approval.ID, ledger, "the session was cancelled during publication")
+	}
 	if session.State != store.IdeationStateApproved && session.State != store.IdeationStatePublishing &&
 		session.State != store.IdeationStatePublicationIncomplete {
 		return Result{}, fmt.Errorf("%w: session %q is %s", ErrNotPublishable, session.ID, session.State)
@@ -61,7 +65,7 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 		return Result{}, err
 	}
 	if !approval.Binds(session.PlanRevision, fresh.Target, fresh.Payload, fresh.RelationshipMapping) {
-		return Result{}, fmt.Errorf("%w: approval %q of session %q; review and approve the current preview", ErrStaleApproval, approval.ID, session.ID)
+		return Result{}, fmt.Errorf("%w: approval %q of session %q; %s", ErrStaleApproval, approval.ID, session.ID, staleApprovalAction(session.State))
 	}
 	approved, err := decodeApproval(approval)
 	if err != nil {
@@ -89,6 +93,19 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	return result, errors.Join(runErr, err)
 }
 
+// staleApprovalAction names what the user can do about provider drift after
+// approval in state, limited to the actions the session lifecycle offers
+// there. An approved session can return to plan review through an edit and
+// then be approved again. Once publication started, the approved plan can
+// no longer change: only a restored tracker configuration lets a retry
+// continue, and cancellation keeps the created items.
+func staleApprovalAction(state store.IdeationState) string {
+	if state == store.IdeationStateApproved {
+		return "restore the tracker configuration and publish again, or edit the draft to return it to review and approve the new preview"
+	}
+	return "restore the tracker configuration and publish again, or cancel the session; created items stay in the tracker"
+}
+
 // finish records the receipt and lifecycle result of one attempt. It runs
 // without the request's cancellation, so an interrupted attempt still leaves
 // precise evidence.
@@ -99,12 +116,9 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	if session.State == store.IdeationStateCancelled {
-		return Result{Session: session, Operations: ledger}, fmt.Errorf("%w: session %q; created items stay in the tracker", ErrPublicationCancelled, session.ID)
+		return p.finishCancelled(ctx, session, attemptID, approvalID, ledger, halt)
 	}
 	receipt := receiptFromLedger(attemptID, approvalID, ledger)
-	if halt != "" {
-		receipt.Outcome = store.PublicationOutcomeIncomplete
-	}
 	event := workflow.SessionEventPublicationCompleted
 	if receipt.Outcome == store.PublicationOutcomeIncomplete {
 		event = workflow.SessionEventPublicationIncomplete
@@ -124,11 +138,92 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 	return Result{Session: session, Receipt: receipt, Operations: ledger}, nil
 }
 
+// finishCancelled records the incomplete receipt of an attempt that the
+// session's cancellation stopped. The receipt lists every item and
+// relationship that exists, and its detail names every operation whose
+// outcome is unknown, that made no change, or that never ran. The session
+// stays cancelled with its reason, and the result carries
+// ErrPublicationCancelled, because publication does not resume.
+func (p *Publisher) finishCancelled(ctx context.Context, session store.IdeationSession, attemptID, approvalID string, ledger []store.PublicationOperation, halt string) (Result, error) {
+	cancelled := fmt.Errorf("%w: session %q; created items stay in the tracker", ErrPublicationCancelled, session.ID)
+	if len(ledger) == 0 {
+		return Result{Session: session, Operations: ledger}, cancelled
+	}
+	receipt := receiptFromLedger(attemptID, approvalID, ledger)
+	receipt.Outcome = store.PublicationOutcomeIncomplete
+	if halt == "" {
+		halt = "the session was cancelled during publication"
+	}
+	receipt.Detail = bounded(halt + "; created items stay in the tracker; " + ledgerGaps(ledger))
+	write, err := p.Lifecycle.Write(session, workflow.SessionEventReconciled, session.StateReason, p.now())
+	if err != nil {
+		return Result{Session: session, Operations: ledger}, err
+	}
+	session, receipt, err = p.Store.RecordPublicationReceipt(ctx, write, receipt)
+	if err != nil {
+		return Result{Operations: ledger}, err
+	}
+	return Result{Session: session, Receipt: receipt, Operations: ledger}, cancelled
+}
+
+// lacksCancelledReceipt reports whether a cancelled session's ledger of
+// approvalID has evidence that no receipt records yet: the ledger is not
+// empty and no receipt of the approval lists exactly the items and
+// relationships that the ledger shows as created. A resumed attempt whose
+// receipt write failed after the cancellation then records it.
+func lacksCancelledReceipt(history store.IdeationHistory, approvalID string, ledger []store.PublicationOperation) bool {
+	if len(ledger) == 0 {
+		return false
+	}
+	current := receiptFromLedger("", approvalID, ledger)
+	for _, receipt := range history.Receipts {
+		if receipt.ApprovalID == approvalID && slices.Equal(receipt.Items, current.Items) && slices.Equal(receipt.Relationships, current.Relationships) {
+			return false
+		}
+	}
+	return true
+}
+
+// ledgerGaps names every operation of ledger that did not succeed, grouped
+// by what is known about it, for a receipt detail.
+func ledgerGaps(ledger []store.PublicationOperation) string {
+	groups := []struct {
+		label  string
+		states []store.PublicationOperationState
+		ids    []string
+	}{
+		{label: "unknown outcome", states: []store.PublicationOperationState{store.PublicationOperationAttempted, store.PublicationOperationAmbiguous}},
+		{label: "not applied", states: []store.PublicationOperationState{store.PublicationOperationFailed}},
+		{label: "not run", states: []store.PublicationOperationState{store.PublicationOperationPending}},
+	}
+	for _, operation := range ledger {
+		for index := range groups {
+			if slices.Contains(groups[index].states, operation.State) {
+				groups[index].ids = append(groups[index].ids, operation.ID)
+			}
+		}
+	}
+	parts := []string{}
+	for _, group := range groups {
+		if len(group.ids) > 0 {
+			parts = append(parts, group.label+": "+strings.Join(group.ids, ", "))
+		}
+	}
+	if len(parts) == 0 {
+		return "every operation succeeded"
+	}
+	return strings.Join(parts, "; ")
+}
+
 // receiptFromLedger returns the receipt id of approvalID that lists every
-// item and relationship that ledger shows as succeeded. Its outcome is
-// published only when every operation succeeded.
+// item and relationship that ledger shows as succeeded. The ledger alone
+// decides the outcome: it is published only when the ledger is not empty
+// and every operation succeeded, whatever stopped the attempt.
 func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperation) store.PublicationReceipt {
 	receipt := store.PublicationReceipt{ID: id, ApprovalID: approvalID, Outcome: store.PublicationOutcomePublished}
+	if len(ledger) == 0 {
+		receipt.Outcome = store.PublicationOutcomeIncomplete
+	}
 	for _, operation := range ledger {
 		if operation.State != store.PublicationOperationSucceeded {
 			receipt.Outcome = store.PublicationOutcomeIncomplete
@@ -147,10 +242,12 @@ func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperatio
 
 // Interrupt settles an attempt that ended without a receipt while the
 // session is publishing: a resumed attempt whose preflight failed, or one
-// that the coordinator started too often. It records an incomplete receipt
-// under the attempt ID with reason and moves the session to
+// that the coordinator started too often. The ledger decides the outcome.
+// When an operation did not succeed, it records an incomplete receipt under
+// the attempt ID with reason and moves the session to
 // publication_incomplete, where retry, reconciliation, and cancellation are
-// offered. A session in another state is returned unchanged.
+// offered. When every operation succeeded, it records the published receipt.
+// A session in another state is returned unchanged.
 func (p *Publisher) Interrupt(ctx context.Context, request Request, reason string) (store.IdeationSession, error) {
 	history, err := p.Store.IdeationHistory(ctx, request.SessionID)
 	if err != nil {
@@ -258,7 +355,7 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 		return e.halt(ctx, index, store.PublicationOperationAmbiguous, detail)
 	case operation.State == store.PublicationOperationAttempted || operation.State == store.PublicationOperationAmbiguous:
 		detail := fmt.Sprintf("an earlier create has an unknown outcome and no tracker item carries correlation %s; "+
-			"confirm that none exists or adopt the item through reconciliation", operation.Correlation)
+			"confirm that none exists or adopt the item through reconciliation%s", operation.Correlation, e.lookupBound())
 		return e.halt(ctx, index, store.PublicationOperationAmbiguous, detail)
 	}
 	if err := e.reserve(ctx, index); err != nil {
@@ -271,8 +368,20 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 	case tracker.WriteNotApplied(err):
 		return e.halt(ctx, index, store.PublicationOperationFailed, fmt.Sprintf("create made no change: %v", err))
 	default:
-		return e.halt(ctx, index, store.PublicationOperationAmbiguous, fmt.Sprintf("create outcome is unknown: %v; retry reconciles before it creates again", err))
+		return e.halt(ctx, index, store.PublicationOperationAmbiguous, fmt.Sprintf("create outcome is unknown: %v; retry reconciles before it creates again%s", err, e.lookupBound()))
 	}
+}
+
+// lookupBound returns the note that names the items a bounded correlation
+// lookup reads, or nothing for a lookup that reads the whole tracker. An
+// item outside the bound is not found, so the operator must check the
+// tracker before confirming that no item exists.
+func (e *execution) lookupBound() string {
+	bounded, ok := e.publisher.Tracker.(tracker.BoundedPlanLookup)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("; the lookup reads only %s, so check the tracker for an older item before you confirm that none exists", bounded.PlanLookupBound())
 }
 
 // createRelationship verifies and, when it is absent, creates the

@@ -19,11 +19,15 @@ import (
 // Forbidden are permission errors, and Bad Request and Not Found are invalid
 // mappings, for example a rule violation or an unknown type. A timeout is
 // ambiguous. Every other failure stays unclassified, so its outcome is
-// unknown. az rest reports a failed response as "<reason>(<body>)".
+// unknown. az rest reports a failed response as "<reason>(<body>)". A body
+// too large for one az argument is never sent, so it is an invalid mapping.
 func classifyPlanError(err error) error {
 	var timeout *hostcmd.TimeoutError
 	if errors.As(err, &timeout) {
 		return &tracker.PlanError{Kind: tracker.PlanErrorAmbiguous, Err: err}
+	}
+	if errors.Is(err, errRequestBodyTooLarge) {
+		return &tracker.PlanError{Kind: tracker.PlanErrorInvalidMapping, Err: err}
 	}
 	message := err.Error()
 	switch {
@@ -55,15 +59,7 @@ func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Reposito
 	if strings.TrimSpace(item.Type) == "" || !slices.Contains(item.Labels, correlationTag(item.Correlation)) {
 		return tracker.PlanItemRef{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: the item has no type or no correlation tag", item.NodeID)
 	}
-	patch := []patchOperation{
-		{Op: "add", Path: "/fields/System.Title", Value: item.Title},
-		{Op: "add", Path: "/fields/System.Description", Value: item.Body},
-		{Op: "add", Path: "/multilineFieldsFormat/System.Description", Value: "Markdown"},
-		{Op: "add", Path: "/fields/System.Tags", Value: joinTags(item.Labels)},
-	}
-	for _, name := range slices.Sorted(maps.Keys(item.Fields)) {
-		patch = append(patch, patchOperation{Op: "add", Path: "/fields/" + name, Value: item.Fields[name]})
-	}
+	patch := createPatch(item)
 	var response struct {
 		ID int `json:"id"`
 	}
@@ -75,6 +71,21 @@ func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Reposito
 		return tracker.PlanItemRef{}, fmt.Errorf("create %s for node %s: the response has no work item ID", item.Type, item.NodeID)
 	}
 	return workItemRef(repository, response.ID), nil
+}
+
+// createPatch returns the JSON patch that creates item: its title, Markdown
+// description, correlation tag, and configured fields.
+func createPatch(item tracker.RenderedPlanItem) []patchOperation {
+	patch := []patchOperation{
+		{Op: "add", Path: "/fields/System.Title", Value: item.Title},
+		{Op: "add", Path: "/fields/System.Description", Value: item.Body},
+		{Op: "add", Path: "/multilineFieldsFormat/System.Description", Value: "Markdown"},
+		{Op: "add", Path: "/fields/System.Tags", Value: joinTags(item.Labels)},
+	}
+	for _, name := range slices.Sorted(maps.Keys(item.Fields)) {
+		patch = append(patch, patchOperation{Op: "add", Path: "/fields/" + name, Value: item.Fields[name]})
+	}
+	return patch
 }
 
 // workItemRef returns the reference of one work item with its web URL.

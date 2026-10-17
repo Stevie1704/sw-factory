@@ -186,6 +186,19 @@ func (s *Store) RecordPublicationOperation(ctx context.Context, operation Public
 	if err := reserveWriteLock(ctx, tx, "ideation_sessions", operation.SessionID); err != nil {
 		return PublicationOperation{}, fmt.Errorf("reserve publication operation %q: %w", operation.ID, err)
 	}
+	stored, err := recordPublicationOperation(ctx, tx, operation)
+	if err != nil {
+		return PublicationOperation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return PublicationOperation{}, fmt.Errorf("commit publication operation %q: %w", operation.ID, err)
+	}
+	return stored, nil
+}
+
+// recordPublicationOperation applies one validated ledger update inside tx,
+// which already holds the session's write lock.
+func recordPublicationOperation(ctx context.Context, tx *sql.Tx, operation PublicationOperation) (PublicationOperation, error) {
 	stored, err := scanPublicationOperation(tx.QueryRowContext(ctx, `SELECT `+publicationOperationColumns+`
 		FROM ideation_publication_operations WHERE session_id = ? AND approval_id = ? AND id = ?`,
 		operation.SessionID, operation.ApprovalID, operation.ID))
@@ -211,9 +224,6 @@ func (s *Store) RecordPublicationOperation(ctx context.Context, operation Public
 		stored.State, stored.ExternalID, stored.URL, stored.Detail, stored.Attempts, formatIdeationTime(stored.UpdatedAt),
 		stored.SessionID, stored.ApprovalID, stored.ID); err != nil {
 		return PublicationOperation{}, fmt.Errorf("save publication operation %q: %w", operation.ID, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return PublicationOperation{}, fmt.Errorf("commit publication operation %q: %w", operation.ID, err)
 	}
 	return stored, nil
 }

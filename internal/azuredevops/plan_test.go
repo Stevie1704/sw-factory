@@ -179,6 +179,9 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 		change(mapping.Levels)
 		return &mapping
 	}
+	customField := func(field azuredevopstest.Field) func([]azuredevopstest.WorkItemType) {
+		return func(process []azuredevopstest.WorkItemType) { process[2].Fields = append(process[2].Fields, field) }
+	}
 	requireCustomField := func(process []azuredevopstest.WorkItemType) {
 		process[2].Fields = append(process[2].Fields, azuredevopstest.Field{ReferenceName: "Custom.Team", Name: "Team", AlwaysRequired: true})
 	}
@@ -194,6 +197,8 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 			{Type: "Epic", Kinds: []string{"task", "investigation"}}, {Type: "User Story", Kinds: []string{"parent"}}}}},
 		{name: "hierarchy against the backlog order", detail: "backlog levels of project", want: tracker.PlanErrorUnsupportedCapability, mapping: &config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
 			{Type: "User Story", Kinds: []string{"parent"}}, {Type: "Epic", Kinds: []string{"task", "investigation"}}}}},
+		{name: "intermediate identities collide", detail: "both name intermediate items", want: tracker.PlanErrorInvalidMapping, mapping: &config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
+			{Type: "Epic", Kinds: []string{"parent"}}, {Type: "Sub Feature", Required: true}, {Type: "Sub-Feature", Required: true}, {Type: "User Story", Kinds: []string{"task", "investigation"}}}}},
 		{name: "type on no backlog", detail: "on no backlog level", want: tracker.PlanErrorUnsupportedCapability, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Type = "Issue" })},
 		{name: "unmapped kind", detail: "maps to no work-item type", want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Kinds = []string{"investigation"} })},
 		{name: "default mapping on a Scrum project", detail: `"User Story" does not exist`, want: tracker.PlanErrorInvalidMapping, process: func(p []azuredevopstest.WorkItemType) { copy(p, azuredevopstest.ScrumProcess()) }},
@@ -203,6 +208,19 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 		{name: "value not allowed", detail: `does not allow the value "9"`, want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) {
 			l[2].Fields = map[string]string{"Microsoft.VSTS.Common.Priority": "9"}
 		})},
+		{name: "value of the wrong type", detail: `field "Custom.Size" of "User Story" is a double field`, want: tracker.PlanErrorInvalidMapping,
+			process: customField(azuredevopstest.Field{ReferenceName: "Custom.Size", Name: "Size", Type: "double"}),
+			mapping: levels(func(l []config.AzurePlanLevel) { l[2].Fields = map[string]string{"Custom.Size": "big"} })},
+		{name: "string value too long", detail: `field "Custom.Team" of "User Story" is a string field`, want: tracker.PlanErrorInvalidMapping,
+			process: customField(azuredevopstest.Field{ReferenceName: "Custom.Team", Name: "Team", Type: "string"}),
+			mapping: levels(func(l []config.AzurePlanLevel) {
+				l[2].Fields = map[string]string{"Custom.Team": strings.Repeat("t", 256)}
+			})},
+		{name: "read-only field", detail: `field "Custom.Created" of "User Story" is read-only`, want: tracker.PlanErrorInvalidMapping,
+			process: customField(azuredevopstest.Field{ReferenceName: "Custom.Created", Name: "Created", Type: "dateTime", ReadOnly: true}),
+			mapping: levels(func(l []config.AzurePlanLevel) {
+				l[2].Fields = map[string]string{"Custom.Created": "2026-10-01T00:00:00Z"}
+			})},
 		{name: "started state", detail: "InProgress category", want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Fields = map[string]string{"System.State": "Active"} })},
 		{name: "unknown state", detail: `has no state "Doing"`, want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[0].Fields = map[string]string{"System.State": "Doing"} })},
 		{name: "no work item edit permission", detail: "view and edit work items", want: tracker.PlanErrorPermission, setup: func(b *azuredevopstest.Boards) { b.Deny("83e28ad4-2d72-4ceb-97b0-c7726d5502c3", 48) }},
@@ -231,5 +249,30 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 				t.Fatalf("PreflightPlan() wrote %#v", writes)
 			}
 		})
+	}
+}
+
+// TestPreflightPlanAcceptsFieldValuesOfTheirFieldType verifies that
+// configured values that fit their field type pass preflight, and that an
+// area path, which the project's field list reports as read-only, can still
+// be set.
+func TestPreflightPlanAcceptsFieldValuesOfTheirFieldType(t *testing.T) {
+	t.Parallel()
+
+	process := azuredevopstest.AgileProcess()
+	process[2].Fields = append(process[2].Fields,
+		azuredevopstest.Field{ReferenceName: "Custom.Size", Name: "Size", Type: "double"},
+		azuredevopstest.Field{ReferenceName: "Custom.Due", Name: "Due", Type: "dateTime"},
+		azuredevopstest.Field{ReferenceName: "Custom.Flag", Name: "Flag", Type: "boolean"},
+		azuredevopstest.Field{ReferenceName: "Custom.Owner", Name: "Owner", Type: "guid"},
+	)
+	mapping := config.AgileAzurePlanMapping()
+	mapping.Levels[2].Fields = map[string]string{
+		"Custom.Size": "2.5", "Custom.Due": "2026-11-01T00:00:00Z", "Custom.Flag": "true",
+		"Custom.Owner": "8f2c6c1e-0b5d-4a8e-9a43-2d1f7f4b1c22", "System.AreaPath": "Factory Pilot\\Team A",
+	}
+	boards := azuredevopstest.NewBoards(t, process)
+	if _, err := planClient(boards, &mapping).PreflightPlan(t.Context(), repository, threeNodePlan()); err != nil {
+		t.Fatalf("PreflightPlan() error = %v", err)
 	}
 }

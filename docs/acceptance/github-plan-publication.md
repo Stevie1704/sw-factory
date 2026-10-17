@@ -11,7 +11,7 @@ credential.
 
 | Plan element | GitHub representation |
 | --- | --- |
-| Plan node | One issue. The title is the node title. The body contains the node body, the acceptance criteria as a task list, a `Traceability` section (session, plan revision, node, context revision, brief items), and the hidden marker `<!-- factory-plan: <session>/<plan revision>/<node> -->`. |
+| Plan node | One issue. The title is the node title. The body contains the node body, the acceptance criteria as a task list, a `Traceability` section (session, plan revision, node, context revision, brief items), and, as its last line, the hidden marker `<!-- factory-plan: <session>/<plan revision>/<node> -->`. |
 | Single-item plan | One issue, no relationships. |
 | Parent and children | The parent specification issue and one issue per child. No milestone is created; the parent is the grouping artifact. |
 | Parent edge, native | The child becomes a GitHub sub-issue of the parent (`POST /repos/{o}/{r}/issues/{parent}/sub_issues`). |
@@ -42,25 +42,35 @@ bytes.
    access, preflight returns a typed `permission` error before approval. It
    does not switch to the textual fallback, because the host offers the
    native relationship.
-4. Limits: a title longer than 256 characters or a body longer than 65,536
+4. Plan text: a node title, body, or acceptance criterion that contains
+   `<!-- factory-plan` is a typed `invalid_mapping` error. Only the factory
+   writes its markers, so plan text cannot make the correlation lookup or
+   the link verification match the wrong issue.
+5. Limits: a title longer than 256 characters or a body longer than 65,536
    characters is a typed `invalid_mapping` error. With native sub-issues, more
    than 100 sub-issues for one parent or more than eight nested levels is a
    typed `unsupported_capability` error.
 
-GitHub does not document a count limit for links. A rejected link at
-publication time is an HTTP 403 or 422, which the adapter reports as a typed
-no-change error.
+These are the limits that GitHub documents: at most 100 sub-issues per
+parent issue and eight levels of nested sub-issues ("Adding sub-issues" in
+the GitHub documentation). GitHub documents no count limit for blocking
+dependencies, so preflight checks none. A rejected link at publication time
+is an HTTP 403 or 422, which the adapter reports as a typed no-change error.
 
 ### Correlation and reconciliation
 
 `FindPlanItems` lists the issues that the authenticated account created
 (`GET /repos/{o}/{r}/issues?state=all&creator=<login>&sort=created&direction=desc`),
-at most 10 pages of 100, and matches the exact marker. It does not use the
-search index, because the index lags behind a just-created issue. Pull requests
-and issues by other accounts never match. An issue outside the 1,000 newest
-issues of the account is not found. The publication ledger never creates an
-item again after an unknown outcome without an operator decision, so the
-bound cannot cause a blind duplicate.
+in pages of 100, and matches the exact marker on the last nonblank line of
+the body. It does not use the search index, because the index lags behind a
+just-created issue. Pull requests and issues by other accounts never match.
+The lookup reads the 1,000 newest issues of the account; pull requests in the
+listing do not count toward that bound. An issue outside the bound is not
+found. The publication ledger never creates an item again after an unknown
+outcome without an operator decision. Before that decision, the ledger detail
+of the ambiguous create names the bound ("the lookup reads only the 1,000
+newest issues that the authenticated account created in the repository"), so
+the operator checks older issues before confirming that none exists.
 
 `FindPlanRelationship` reads the parent's sub-issues, the dependent's
 blockers, or the comments of the sub-issue or dependent issue by the

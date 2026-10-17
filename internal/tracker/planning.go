@@ -48,6 +48,17 @@ type PlanPublisher interface {
 	FindPlanRelationship(context.Context, Repository, PlanRelationship) (bool, error)
 }
 
+// BoundedPlanLookup is an optional PlanPublisher capability. An adapter whose
+// FindPlanItems reads only part of the tracker implements it, so that
+// publication tells the operator which items an empty lookup covered before
+// the operator confirms that no item exists.
+type BoundedPlanLookup interface {
+	// PlanLookupBound describes the items that FindPlanItems reads, for
+	// example "the 1,000 newest issues that the authenticated account
+	// created".
+	PlanLookupBound() string
+}
+
 // PlanGraph is the provider-neutral input of PreflightPlan: one approved or
 // reviewable plan revision. It carries plan content and traceability
 // identities only, never conversation turns.

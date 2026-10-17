@@ -378,12 +378,17 @@ type:
 
 - **Required levels.** When a parent link skips a `required` level, the
   preview adds one intermediate item of that type per parent, so the approval
-  binds it. A child on the same or a higher level than its parent fails the
-  preview; the factory never rewrites the hierarchy after approval.
+  binds it. Its identity is `<parent>--<type slug>`, where the slug keeps the
+  ASCII letters and digits of the type and joins the rest with `-` (for
+  example `n-1--feature`). Two types of one mapping with the same slug, or a
+  type without an ASCII letter or digit, fail validation. A child on the same
+  or a higher level than its parent fails the preview; the factory never
+  rewrites the hierarchy after approval.
 - **Preview checks.** Before approval, the preview checks that every mapped
   type exists, is enabled, and is on a backlog level in the configured order;
   that every always-required field without a default has a value in `fields`;
-  that every configured value is allowed; and that a configured
+  that every configured value is allowed, fits its field type, and does not
+  set a read-only field; and that a configured
   `System.State` is a not-started (Proposed) state. `System.Title`,
   `System.Description`, and `System.Tags` are rendered by the factory and
   cannot be configured.

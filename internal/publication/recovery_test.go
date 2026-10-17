@@ -23,11 +23,13 @@ var errStoreCrashed = errors.New("store crashed")
 // fails too, as if the coordinator process died at that point.
 type faultyStoreForTest struct {
 	*store.Store
-	failOn  func(store.PublicationOperation) bool
-	crash   bool
-	mu      sync.Mutex
-	crashed bool
-	fired   bool
+	failOn func(store.PublicationOperation) bool
+	crash  bool
+	// failReceipts counts the receipt writes that fail before one passes.
+	failReceipts int
+	mu           sync.Mutex
+	crashed      bool
+	fired        bool
 }
 
 // down reports whether the simulated process is dead.
@@ -81,12 +83,22 @@ func (f *faultyStoreForTest) TransitionIdeationSession(ctx context.Context, writ
 	return f.Store.TransitionIdeationSession(ctx, write)
 }
 
-// RecordPublicationReceipt fails after a crash.
-func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write store.IdeationWrite, receipt store.PublicationReceipt) (store.IdeationSession, store.PublicationReceipt, error) {
+// RecordPublicationReceipt fails after a crash, and fails the first
+// failReceipts receipt writes without persisting them.
+func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write store.IdeationWrite, receipt store.PublicationReceipt, settled ...store.PublicationOperation) (store.IdeationSession, store.PublicationReceipt, error) {
 	if err := f.down(); err != nil {
 		return store.IdeationSession{}, store.PublicationReceipt{}, err
 	}
-	return f.Store.RecordPublicationReceipt(ctx, write, receipt)
+	f.mu.Lock()
+	fail := f.failReceipts > 0
+	if fail {
+		f.failReceipts--
+	}
+	f.mu.Unlock()
+	if fail {
+		return store.IdeationSession{}, store.PublicationReceipt{}, errors.New("injected receipt write failure")
+	}
+	return f.Store.RecordPublicationReceipt(ctx, write, receipt, settled...)
 }
 
 // StartPublicationLedger fails after a crash.
@@ -418,11 +430,62 @@ func TestCancellationStopsFutureWorkWithoutDeletingItems(t *testing.T) {
 		if got := h.operation("item/n-1"); got.State != store.PublicationOperationSucceeded || got.ExternalID != h.fake.Items()[0].Ref.ExternalID {
 			t.Fatalf("item/n-1 = %#v, want its identity kept", got)
 		}
+		recorded := h.receipt("attempt-1")
+		if recorded.Outcome != store.PublicationOutcomeIncomplete || len(recorded.Items) != 1 || recorded.Items[0].NodeID != "n-1" ||
+			recorded.Items[0].ExternalID != h.fake.Items()[0].Ref.ExternalID || result.Receipt.ID != "attempt-1" {
+			t.Fatalf("receipt = %#v, result receipt = %#v; want an incomplete receipt that lists the created n-1", recorded, result.Receipt)
+		}
+		for _, want := range []string{"cancelled", "not run: item/n-2, item/n-3, link/parent/n-3/n-1, link/depends_on/n-3/n-2, link/parent/n-2/n-1"} {
+			if !strings.Contains(recorded.Detail, want) {
+				t.Fatalf("receipt detail = %q, want %q", recorded.Detail, want)
+			}
+		}
 		if _, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); !errors.Is(err, publication.ErrNotPublishable) {
 			t.Fatalf("Publish() after cancel error = %v, want ErrNotPublishable", err)
 		}
 		h.assertInertTracker()
 	})
+
+	t.Run("cancelled attempt records its receipt on resume", func(t *testing.T) {
+		t.Parallel()
+		h := newApprovedHarness(t)
+		faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+		cancelling := &afterFirstCreateForTest{PlanTracker: h.fake}
+		cancelling.hook = func() {
+			if _, err := h.store.TransitionIdeationSession(t.Context(), h.write(h.session(), workflow.SessionEventCancelled)); err != nil {
+				t.Errorf("cancel session: %v", err)
+			}
+		}
+		if _, err := h.publisherWith(faulty, cancelling).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err == nil {
+			t.Fatal("Publish() hid the receipt failure")
+		}
+		resumed, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"})
+		if !errors.Is(err, publication.ErrPublicationCancelled) {
+			t.Fatalf("resumed Publish() error = %v, want ErrPublicationCancelled", err)
+		}
+		if resumed.Receipt.ID != "attempt-1" || len(resumed.Receipt.Items) != 1 || h.fake.Writes() != 1 {
+			t.Fatalf("resumed receipt = %#v with %d writes; want the n-1 receipt and no new write", resumed.Receipt, h.fake.Writes())
+		}
+		if state := h.session().State; state != store.IdeationStateCancelled {
+			t.Fatalf("session state = %s, want cancelled", state)
+		}
+	})
+}
+
+// receipt returns the recorded receipt with id.
+func (h *harness) receipt(id string) store.PublicationReceipt {
+	h.t.Helper()
+	history, err := h.store.IdeationHistory(h.t.Context(), h.sessionID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, receipt := range history.Receipts {
+		if receipt.ID == id {
+			return receipt
+		}
+	}
+	h.t.Fatalf("receipts = %#v, want %q", history.Receipts, id)
+	return store.PublicationReceipt{}
 }
 
 // TestCancelledSessionReconcilesAnAmbiguousCreate verifies that a session
@@ -495,6 +558,26 @@ func TestCancelledSessionReconcilesAnAmbiguousCreate(t *testing.T) {
 		}
 	})
 
+	t.Run("failed receipt write leaves the operation for a retry", func(t *testing.T) {
+		t.Parallel()
+		h := cancelAfterAmbiguousCreate(t, trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
+		faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+		request := publication.Reconciliation{SessionID: h.sessionID, OperationID: "item/n-2", ReceiptID: "reconcile-1"}
+		if _, err := h.publisherWith(faulty, h.fake).Reconcile(t.Context(), request); err == nil {
+			t.Fatal("Reconcile() hid the receipt failure")
+		}
+		if got := h.operation("item/n-2"); got.State != store.PublicationOperationAmbiguous {
+			t.Fatalf("item/n-2 after the failed receipt = %#v, want it still ambiguous", got)
+		}
+		resolved, err := h.publisher().Reconcile(t.Context(), request)
+		if err != nil || resolved.State != store.PublicationOperationFailed {
+			t.Fatalf("retried Reconcile() = %#v, %v; want not applied", resolved, err)
+		}
+		if recorded := receipt(t, h, "reconcile-1"); !strings.Contains(recorded.Detail, "item/n-2") {
+			t.Fatalf("receipt = %#v, want the reconciled operation named", recorded)
+		}
+	})
+
 	t.Run("confirm absent records not applied", func(t *testing.T) {
 		t.Parallel()
 		h := cancelAfterAmbiguousCreate(t, trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
@@ -518,4 +601,62 @@ func TestCancelledSessionReconcilesAnAmbiguousCreate(t *testing.T) {
 			t.Fatalf("second Reconcile() error = %v, want refused for a settled operation", err)
 		}
 	})
+}
+
+// TestInterruptDerivesTheOutcomeFromTheLedger verifies that an attempt
+// whose every operation succeeded but whose receipt write failed settles as
+// published, not incomplete, when the coordinator interrupts it.
+func TestInterruptDerivesTheOutcomeFromTheLedger(t *testing.T) {
+	t.Parallel()
+
+	h := newApprovedHarness(t)
+	faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+	if _, err := h.publisherWith(faulty, h.fake).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err == nil {
+		t.Fatal("Publish() hid the receipt failure")
+	}
+	if state := h.session().State; state != store.IdeationStatePublishing {
+		t.Fatalf("session state = %s, want publishing", state)
+	}
+	session, err := h.publisher().Interrupt(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}, "the receipt write failed")
+	if err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	recorded := h.receipt("attempt-1")
+	if session.State != store.IdeationStatePublished || recorded.Outcome != store.PublicationOutcomePublished || len(recorded.Items) != 3 || len(recorded.Relationships) != 3 {
+		t.Fatalf("session = %s, receipt = %#v; want published with three items and three links", session.State, recorded)
+	}
+}
+
+// boundedLookupForTest is a tracker whose correlation lookup reads only
+// part of the tracker.
+type boundedLookupForTest struct {
+	*trackertest.PlanTracker
+}
+
+// PlanLookupBound describes the scripted lookup window.
+func (boundedLookupForTest) PlanLookupBound() string {
+	return "the 1,000 newest items"
+}
+
+// TestAmbiguousCreateNamesTheLookupBoundBeforeConfirmation verifies that an
+// unknown create outcome with no match tells the operator which items the
+// lookup read, so that the operator checks older items before confirming
+// that none exists.
+func TestAmbiguousCreateNamesTheLookupBoundBeforeConfirmation(t *testing.T) {
+	t.Parallel()
+
+	h := newApprovedHarness(t)
+	h.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: context.DeadlineExceeded})
+	if _, err := h.publisherWith(h.store, boundedLookupForTest{h.fake}).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.operation("item/n-2"); !strings.Contains(got.Detail, "the lookup reads only the 1,000 newest items") {
+		t.Fatalf("item/n-2 after the timeout = %#v, want the lookup bound named", got)
+	}
+	if _, err := h.publisherWith(h.store, boundedLookupForTest{h.fake}).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.operation("item/n-2"); got.State != store.PublicationOperationAmbiguous || !strings.Contains(got.Detail, "the lookup reads only the 1,000 newest items") {
+		t.Fatalf("item/n-2 = %#v, want the lookup bound named before confirmation", got)
+	}
 }

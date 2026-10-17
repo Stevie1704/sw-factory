@@ -59,6 +59,7 @@ func (m AzurePlanMapping) Validate() error {
 		return errors.New("must list at least one level")
 	}
 	types := map[string]bool{}
+	slugs := map[string]string{}
 	kinds := map[string]bool{}
 	for index, level := range m.Levels {
 		if err := level.validate(); err != nil {
@@ -69,6 +70,14 @@ func (m AzurePlanMapping) Validate() error {
 			return fmt.Errorf("levels[%d]: type %q repeats", index, level.Type)
 		}
 		types[key] = true
+		slug := level.Slug()
+		if slug == "" {
+			return fmt.Errorf("levels[%d]: type %q needs at least one ASCII letter or digit, which names its intermediate items", index, level.Type)
+		}
+		if other, taken := slugs[slug]; taken {
+			return fmt.Errorf("levels[%d]: type %q and type %q both name intermediate items %q", index, level.Type, other, "<parent>--"+slug)
+		}
+		slugs[slug] = level.Type
 		for _, kind := range level.Kinds {
 			if kinds[kind] {
 				return fmt.Errorf("levels[%d]: kind %q is mapped twice", index, kind)
@@ -80,6 +89,22 @@ func (m AzurePlanMapping) Validate() error {
 		return errors.New("must map at least one plan kind")
 	}
 	return nil
+}
+
+// Slug returns the lower-case identity form of the level's type, for
+// example "user-story" for "User Story". An intermediate item of the level
+// has the identity "<parent>--<slug>", so Validate requires every slug of a
+// mapping to be nonempty and unique.
+func (l AzurePlanLevel) Slug() string {
+	var slug strings.Builder
+	for _, character := range strings.ToLower(l.Type) {
+		if character < 128 && (unicode.IsLetter(character) || unicode.IsDigit(character)) {
+			slug.WriteRune(character)
+		} else if !strings.HasSuffix(slug.String(), "-") {
+			slug.WriteByte('-')
+		}
+	}
+	return strings.Trim(slug.String(), "-")
 }
 
 // validate checks one level.
