@@ -613,14 +613,14 @@ func (r *DockerRuntime) SeedCopilotCredentials(ctx context.Context, request Cred
 	return r.seedCredentialFile(ctx, request, harnessCredential{
 		Harness:        "copilot",
 		CredentialFile: CopilotCredentialFile,
-		Validate:       validateCopilotToken,
+		Validate:       ValidateCopilotToken,
 	})
 }
 
-// validateCopilotToken accepts exactly one printable token without whitespace,
+// ValidateCopilotToken accepts exactly one printable token without whitespace,
 // optionally followed by one line ending, because the launcher exports the
 // first line unchanged as COPILOT_GITHUB_TOKEN.
-func validateCopilotToken(data []byte) error {
+func ValidateCopilotToken(data []byte) error {
 	token := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
 	if token == "" {
 		return errors.New("must hold one token, not an empty line")

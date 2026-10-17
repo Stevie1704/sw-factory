@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -127,12 +128,18 @@ func StartupChecks(request StartupRequest) []doctor.Check {
 		credentialCheck(request, NameCodex, request.Authentication.CodexAuthPath),
 		credentialCheck(request, NameClaude, request.Authentication.ClaudeAuthPath),
 	)
+	if canSelect(request.Policy, NameCopilot) {
+		checks = append(checks, copilotCredentialCheck(request))
+	}
 	return checks
 }
 
-// selectedHarnesses returns both built-in harnesses plus any extra name in the
-// policy, in deterministic order. The worker image is checked for both
-// supported adapters even when a repository currently selects only one.
+// selectedHarnesses returns Codex and Claude plus every other harness the
+// policy can select through a role default or an override target, in
+// deterministic order. The worker image is checked for Codex and Claude even
+// when a repository selects only one. A harness added later is probed only
+// when the repository can select it, so an image built before it keeps
+// passing for a repository that does not use it.
 func selectedHarnesses(policy *config.RepositoryConfig) []string {
 	seen := map[string]struct{}{NameClaude: {}, NameCodex: {}}
 	if policy == nil {
@@ -142,6 +149,11 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 		name := strings.TrimSpace(string(selected))
 		if name != "" {
 			seen[name] = struct{}{}
+		}
+	}
+	if slices.Contains(policy.AllowedOverrides, config.OverrideHarness) {
+		for _, target := range policy.HarnessOverrideTargets() {
+			seen[string(target)] = struct{}{}
 		}
 	}
 	selected := make([]string, 0, len(seen))
@@ -156,16 +168,25 @@ func selectedHarnesses(policy *config.RepositoryConfig) []string {
 // the current policy. An unavailable policy remains fail-closed because the
 // coordinator cannot safely determine which harnesses the repository permits.
 func RequiresSkillSmoke(policy *config.RepositoryConfig, harnessName string) bool {
+	return policy == nil || canSelect(policy, harnessName)
+}
+
+// canSelect reports whether a role default names harnessName or a harness
+// override may select it. A nil policy selects nothing.
+func canSelect(policy *config.RepositoryConfig, harnessName string) bool {
 	if policy == nil {
-		return true
+		return false
+	}
+	return selectedByRoleDefault(policy, harnessName) || policy.AllowsHarnessOverrideTo(config.Harness(harnessName))
+}
+
+// selectedByRoleDefault reports whether a role default names harnessName.
+func selectedByRoleDefault(policy *config.RepositoryConfig, harnessName string) bool {
+	if policy == nil {
+		return false
 	}
 	for _, selected := range policy.RoleHarnessDefaults {
 		if strings.TrimSpace(string(selected)) == harnessName {
-			return true
-		}
-	}
-	for _, override := range policy.AllowedOverrides {
-		if override == config.OverrideHarness {
 			return true
 		}
 	}
@@ -181,6 +202,8 @@ var (
 	executableUnusable           = doctor.Condition{Code: "harness.executable.unusable", Origin: doctor.OriginRepository, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	authenticationSourceMissing  = doctor.Condition{Code: "harness.authentication.source_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	authenticationSourceUnsafe   = doctor.Condition{Code: "harness.authentication.source_unsafe", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	authenticationUnsupported    = doctor.Condition{Code: "harness.authentication.source_unsupported", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	entitlementUnverified        = doctor.Condition{Code: "harness.authentication.entitlement_unverified", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
 	authenticationAdapterMissing = doctor.AdapterMissing("harness.authentication.adapter_missing")
 	authenticationRejected       = doctor.Condition{Code: "harness.authentication.rejected", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	skillsAdapterMissing         = doctor.AdapterMissing("harness.skills.adapter_missing")
@@ -233,7 +256,7 @@ func executableCheck(request StartupRequest, name string) doctor.Check {
 			return doctor.Skipped("harness.executable.not_checked", name+" worker executable", worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
 		if err := checker.CheckHarness(ctx, worker.HarnessCheckRequest{Image: image, Name: name}); err != nil {
-			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness").WithFacts(harnessFact(name))
+			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness; an image built before the factory supported "+name+" does not contain it, so rebuild it with the current scripts/build-worker.sh and pin the new digest in worker_build.digest").WithFacts(harnessFact(name))
 		}
 		return doctor.Success("harness.executable.ready", name+" worker executable").WithFacts(harnessFact(name))
 	}
@@ -252,8 +275,7 @@ func credentialCheck(request StartupRequest, name, path string) doctor.Check {
 			// action names the two things that actually produce one.
 			return doctor.Warning(authenticationSourceMissing, name+" authentication", "no host credential file is configured", "configure a private credential file, or keep the credential this harness already persisted in its worker role volume").WithFacts(harnessFact(name))
 		}
-		info, err := os.Lstat(path)
-		if !filepath.IsAbs(path) || strings.ContainsAny(path, "\x00\r\n") || err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 || info.Size() == 0 {
+		if !privateCredentialFile(path) {
 			return doctor.Failure(authenticationSourceUnsafe, name+" authentication", "the configured host credential source is unavailable or unsafe", "provide a non-empty regular credential file readable only by its owner").WithFacts(harnessFact(name))
 		}
 		if checker == nil {
@@ -267,6 +289,57 @@ func credentialCheck(request StartupRequest, name, path string) doctor.Check {
 		}
 		return doctor.Success("harness.authentication.ready", name+" authentication").WithFacts(harnessFact(name))
 	}
+}
+
+// copilotCredentialCheck diagnoses the registered Copilot token source on the
+// host. Copilot keeps no login in its role volume, so the registered source is
+// the only managed credential: a missing source blocks a repository whose role
+// defaults select Copilot and warns for one that reaches it only by override.
+// A usable source still ends in a warning, because a worker probe runs without
+// network access and so cannot establish the Copilot entitlement. The check
+// never reads the token into a result.
+func copilotCredentialCheck(request StartupRequest) doctor.Check {
+	path := request.Authentication.CopilotAuthPath
+	selected := selectedByRoleDefault(request.Policy, NameCopilot)
+	return func(context.Context) doctor.Result {
+		name := NameCopilot + " authentication"
+		if strings.TrimSpace(path) == "" {
+			problem := "no host Copilot token file is registered, and Copilot keeps no credential of its own in the worker role volume"
+			action := "register a private file with one dedicated Copilot token using `factory register --update --copilot-auth <path>`"
+			if selected {
+				return doctor.Failure(authenticationSourceMissing, name, problem, action).WithFacts(harnessFact(NameCopilot))
+			}
+			return doctor.Warning(authenticationSourceMissing, name, problem, action).WithFacts(harnessFact(NameCopilot))
+		}
+		data, err := readPrivateCredentialFile(path)
+		if err != nil {
+			return doctor.Failure(authenticationSourceUnsafe, name, "the configured host credential source is unavailable or unsafe", "provide a non-empty regular credential file readable only by its owner").WithFacts(harnessFact(NameCopilot))
+		}
+		if worker.ValidateCopilotToken(data) != nil {
+			return doctor.Failure(authenticationUnsupported, name, "the configured file does not hold exactly one supported Copilot token", "store one fine-grained github_pat_ token (or a gho_ or ghu_ token) on one line; classic ghp_ tokens and gh logins are not supported").WithFacts(harnessFact(NameCopilot))
+		}
+		return doctor.Warning(entitlementUnverified, name, "the Copilot token source is present and well formed, but an offline diagnosis cannot establish the Copilot entitlement (a Copilot seat, an organization policy that allows Copilot CLI, and the Copilot Requests permission on the token)", "confirm the entitlement with a live probe; a rejected token pauses the run for `factory auth refresh`").WithFacts(harnessFact(NameCopilot))
+	}
+}
+
+// privateCredentialFile reports whether path names one absolute, non-empty,
+// owner-only regular file that is not a symbolic link.
+func privateCredentialFile(path string) bool {
+	info, err := os.Lstat(path)
+	return filepath.IsAbs(path) && !strings.ContainsAny(path, "\x00\r\n") && err == nil && info.Mode()&os.ModeSymlink == 0 && info.Mode().IsRegular() && info.Mode().Perm()&0o077 == 0 && info.Mode().Perm()&0o400 != 0 && info.Size() != 0
+}
+
+// readPrivateCredentialFile reads one private credential file. Errors never
+// contain the file content.
+func readPrivateCredentialFile(path string) ([]byte, error) {
+	if !privateCredentialFile(path) {
+		return nil, errors.New("credential source is unavailable or unsafe")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, errors.New("credential source is unreadable")
+	}
+	return data, nil
 }
 
 // skillContractCheck verifies one harness advertises every role-mandated skill
