@@ -337,16 +337,10 @@ func credentialProjectionHarness(err error) string {
 // credentialHarnessLabel bounds the adapter identity included in recovery
 // guidance so malformed persisted data cannot become an output channel.
 func credentialHarnessLabel(harnessName string) string {
-	switch config.Harness(harnessName) {
-	case config.HarnessCodex:
-		return string(config.HarnessCodex)
-	case config.HarnessClaude:
-		return string(config.HarnessClaude)
-	case config.HarnessCopilot:
-		return string(config.HarnessCopilot)
-	default:
-		return "harness"
+	if config.IsKnownHarness(config.Harness(harnessName)) {
+		return harnessName
 	}
+	return "harness"
 }
 
 // harnessFailureDiagnosticName is the invocation-local file that records what a
