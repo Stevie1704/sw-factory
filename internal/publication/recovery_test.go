@@ -23,8 +23,8 @@ var errStoreCrashed = errors.New("store crashed")
 // fails too, as if the coordinator process died at that point.
 type faultyStoreForTest struct {
 	*store.Store
-	failOn  func(store.PublicationOperation) bool
-	crash   bool
+	failOn func(store.PublicationOperation) bool
+	crash  bool
 	// failReceipts counts the receipt writes that fail before one passes.
 	failReceipts int
 	mu           sync.Mutex
