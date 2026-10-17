@@ -198,6 +198,9 @@ the first test or implementation invocation when its
 read-only recovery diagnosis finds that every checked projection agrees and
 the operational store contains no invocation history. This is a completed
 claim or test handoff awaiting its first invocation, not an interrupted run.
+A run at `implementation/active` whose latest implementation invocation is
+completed is also healthy after a restart: report acceptance committed that
+state, and progression continues with the implementation checkpoint.
 
 The exception applies only to first-agent startup. A persisted active invocation
 with a complete native-session identity is resumed once against its persisted
