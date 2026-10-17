@@ -137,6 +137,15 @@ trusts `/work`. Whether a live run honors every suppression is release blocker
 RB-7. Removing the role volumes removes Copilot sessions; cleanup and reset
 never remove the shared credential volume.
 
+The skill smoke (`HARNESSES=copilot COPILOT_TOKEN_PATH=<token file>
+scripts/smoke-skills.sh`) starts the same launcher in a disposable worker.
+It streams the token on standard input into a private tmpfs at
+`/run/factory-auth`, because the image keeps that directory root-owned for
+the read-only projection of a run. Copilot support is not released: no live
+run, probe, or smoke has been recorded. The open release blockers are in
+[Copilot CLI release evidence](acceptance/copilot.md), and the operator steps
+are in [GitHub Copilot CLI](configuration.md#github-copilot-cli).
+
 The coordinator prepares `/git` from the repository's objects, refs, and
 worktree state. Git configuration, remote definitions, hooks, submodules, and
 host-specific worktree indirection are omitted, so repository history and diff

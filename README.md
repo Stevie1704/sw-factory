@@ -28,8 +28,12 @@ and [worker runtime](docs/worker-runtime.md) guides.
 
 You need a checkout of this repository, Git, a Go toolchain, Docker with a
 working daemon, and the GitHub CLI authenticated for the repository. You also
-need at least one supported headless harness—Codex or Claude Code—and the
-corresponding host authentication source when that harness requires one.
+need at least one supported headless harness—Codex, Claude Code, or the GitHub
+Copilot CLI—and the corresponding host authentication source when that harness
+requires one. Copilot needs a dedicated token file and company-provided CLI
+access, and it is not released yet: see [GitHub Copilot
+CLI](docs/configuration.md#github-copilot-cli) and [Copilot CLI release
+evidence](docs/acceptance/copilot.md).
 
 The registered repository must contain a valid
 [factory.yaml](factory.yaml). Before using an issue, run the complete startup
@@ -168,6 +172,8 @@ Each operational contract has one owner:
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Ideation sessions for users: configuration, flow, approval scope, recovery, and retention | [From an idea to a reviewed backlog](docs/ideation.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
+| GitHub Copilot CLI operator setup, credentials, smoke evidence, and failure actions | [GitHub Copilot CLI](docs/configuration.md#github-copilot-cli) |
+| Release evidence and open live blockers of the Copilot CLI harness | [Copilot CLI release evidence](docs/acceptance/copilot.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
 | Approved Go toolchain, vulnerability scans, suppressions, and the Worker rebuild, publish, and repin procedure | [Build toolchain and vulnerability scanning](docs/supply-chain.md) |
 | Terms, invariants, ownership, and lifecycle model | [Domain glossary](GLOSSARY.md) |

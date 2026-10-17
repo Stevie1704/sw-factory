@@ -326,8 +326,8 @@ ship in the worker base image.
 setup` its setup topic. Read both before Step 1.
 
 The harness that runs this session needs no check. The worker image carries
-both harnesses, and `factory doctor` checks them inside the image, not on the
-host. When a check fails, name the missing prerequisite and a concrete
+the worker harnesses, and `factory doctor` checks them inside the image, not on
+the host. When a check fails, name the missing prerequisite and a concrete
 supported remedy: install the missing tool, start Docker, enable its containerd
 image store, or complete `gh auth login`, as appropriate. Perform explicitly
 authorized installations within environment permissions. Name interactive
@@ -363,8 +363,8 @@ instead of relying on a profile.
 The factory base image `<FACTORY_BASE_IMAGE>` is the base image of the
 installed release, pinned by digest. The release built it from
 `worker/base.Dockerfile` of the same source revision, for `linux/arm64` and
-`linux/amd64`. It carries the pinned Codex and Claude Code releases,
-`factory-report`, `factory-worker-headless`, Git, the `factory` user with uid
+`linux/amd64`. It carries the pinned Codex, Claude Code, and GitHub Copilot CLI
+releases, the Copilot launcher `factory-copilot`, `factory-report`, `factory-worker-headless`, Git, the `factory` user with uid
 `10001`, and the stable worker paths. It is built on `node:22-bookworm-slim`,
 so `node` and `npm` are already on the fixed `PATH`; no other language runtime
 is. Its label `io.github.stevie1704.sw-factory.release` names the release, and
@@ -402,10 +402,11 @@ ARG FACTORY_BASE_IMAGE=<FACTORY_BASE_IMAGE>
 
 FROM ${FACTORY_BASE_IMAGE}
 
-# Both harnesses read a skill set from their own role home. Baking the set pins
+# Each harness reads a skill set from its own role home. Baking the set pins
 # the agent-visible instructions to this image digest.
 COPY --chown=factory:factory skills /home/factory/.codex/skills
 COPY --chown=factory:factory skills /home/factory/.claude/skills
+COPY --chown=factory:factory skills /home/factory/.copilot/skills
 
 USER factory
 ~~~
@@ -850,7 +851,10 @@ from the `origin` remote, and the authorized user from the authenticated `gh`
 account. The authentication paths are never inferred. Replace each credential
 placeholder with a credential file that the operator confirmed. Omit the option
 when that harness has no host-side file, for example a Claude Code credential
-in the macOS login Keychain. See [Quick start](configuration.md#quick-start)
+in the macOS login Keychain. When a role selects Copilot, also pass
+`--copilot-auth <COPILOT_TOKEN_PATH>`: a private file with one dedicated
+Copilot token that the operator created, never the `gh` login (see [GitHub
+Copilot CLI](configuration.md#github-copilot-cli)). See [Quick start](configuration.md#quick-start)
 for the explicit fallback flags and the `--update` command for an existing
 registration.
 
@@ -884,12 +888,13 @@ harness in the image once per mandated skill, and records the result keyed by
 the digest and the harness version. Startup diagnosis reads that record instead
 of repeating the paid call, and a new digest invalidates it.
 
-The diagnosis checks both shipped harnesses whatever the repository declares in
-`role_harness_defaults`, because the worker image must keep both skill
-contracts valid. Recorded smoke evidence is blocking only for harnesses named
-by `role_harness_defaults`, or for both supported harnesses when
-`allowed_overrides` contains `harness`; an unselected harness with no record is
-reported as an advisory finding. A single-harness repository can therefore
+The diagnosis checks the Codex and Claude Code skill contracts whatever the
+repository declares in `role_harness_defaults`, because the worker image must
+keep both valid. It checks Copilot only when the repository can select it.
+Recorded smoke evidence is blocking only for harnesses named by
+`role_harness_defaults`, or for each override target when `allowed_overrides`
+contains `harness`; an unselected harness with no record is reported as an
+advisory finding. A single-harness repository can therefore
 smoke only its selected harness by setting `HARNESSES` before running the
 script. When only one credential exists, the smoke reports any harness it was
 asked to prove without a credential and exits nonzero, while startup blocks
@@ -904,6 +909,22 @@ file after the smoke. The commands are in [worker
 skills](../worker/SKILLS.md), also at `<FACTORY_RESOURCES>/worker/SKILLS.md`.
 The session scope must cover this source and export; ask if it does not.
 The agent does not read the exported file.
+
+Copilot has no default credential path. When a role can select Copilot, the
+operator names the dedicated token file, and the smoke never falls back to a
+`gh` login, `GH_TOKEN`, `GITHUB_TOKEN`, or `~/.copilot`:
+
+~~~sh
+HARNESSES=copilot COPILOT_TOKEN_PATH=<COPILOT_TOKEN_PATH> \
+EVIDENCE_FILE="<TARGET_REPO_PATH>/worker/skill-smoke.json" \
+WORKER_IMAGE=<IMAGE_NAME> WORKER_DIGEST=<DIGEST> \
+  "<FACTORY_RESOURCES>/scripts/smoke-skills.sh"
+~~~
+
+A missing token, a rejected token, a disabled CLI policy, an unavailable
+model, and a reply without the skill text record nothing and exit non-zero.
+Copilot support is not released yet; see [Copilot CLI release
+evidence](https://github.com/Stevie1704/sw-factory/blob/main/docs/acceptance/copilot.md) before you select it.
 
 The smoke records every skill that loaded, also when another skill fails, and
 shows what the harness answered for a skill that did not load. To retry, set
@@ -922,7 +943,7 @@ ready diagnosis with `<FACTORY_COMMAND> onboard record --plan "<PLAN>" doctor
 `factory doctor` runs the startup diagnosis, the pre-claim report that decides
 whether a run may start. It reports configuration, GitHub authentication
 and permissions, the factory labels, the checkout's remote and worktree support,
-Docker, the pinned worker image, the release of the worker image, both harness
+Docker, the pinned worker image, the release of the worker image, the harness
 executables, harness capabilities,
 the headless worker helper, harness authentication, and SQLite. It runs every
 check even after a failure, so a configuration finding is visible alongside the

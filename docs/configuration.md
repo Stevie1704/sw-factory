@@ -700,6 +700,178 @@ startup diagnosis, and the required skill smoke evidence. A run claimed before
 the field existed keeps the `codex` and `claude` targets. See
 [ADR 0027](adr/0027-harness-overrides-name-their-targets.md).
 
+## GitHub Copilot CLI
+
+This section is the operator guide for the `copilot` harness. **Release
+status: Copilot support is not released.** No live Copilot run has been
+recorded. The open release blockers and the evidence for each acceptance
+criterion are in [Copilot CLI release evidence](acceptance/copilot.md), and
+the decision is [ADR 0028](adr/0028-copilot-cli-joins-the-headless-seam-behind-live-evidence.md).
+Until an operator records a live skill smoke (below), `factory doctor` blocks
+every repository that can select Copilot.
+
+### Harness, model, and subscription
+
+These are three separate things:
+
+| Term | What it is | Where it is set |
+| --- | --- | --- |
+| Harness | The program that runs a role: `codex`, `claude`, or `copilot` (the standalone GitHub Copilot CLI) | `role_harness_defaults` and `override_harnesses` |
+| Model | The model the harness asks for, such as a Copilot model ID passed with `--model` | `model_options` of the role |
+| Subscription | The Copilot seat and plan of the account that owns the token. It decides which models and how many requests the account can use. | The organization's Copilot administration |
+
+A model name from Codex or Claude Code is not a Copilot model ID. A Copilot
+seat that works in an editor is not proof of CLI access: the organization must
+also allow Copilot CLI and the selected model. The factory checks neither
+offline; `factory doctor` reports a usable token as the warning
+`harness.authentication.entitlement_unverified`.
+
+### Out of scope
+
+The factory runs only the pinned standalone CLI inside the worker. These are
+not part of the integration: VS Code or other editor sessions and the Agent
+Host, GUI automation, personal Copilot plugins, settings, and `~/.copilot`
+state, Copilot cloud-agent delegation, remote session publishing and control,
+BYOK model providers, and the Copilot SDK.
+
+### Company enablement
+
+Ask the organization administrator for these, for the account that will own
+the token:
+
+1. A Copilot seat granted by an organization or enterprise.
+2. The Copilot CLI policy enabled in at least one organization that grants
+   the seat.
+3. Each model that a role names enabled by the model policy. If the policy
+   names a `fallback` model, Copilot can use it in place of a disabled one;
+   the factory cannot detect this yet (RB-3), so keep the role's model
+   enabled.
+
+### Dedicated credential
+
+Use a dedicated token, never your own `gh` login:
+
+1. Create a fine-grained personal access token (`github_pat_`) owned by the
+   dedicated personal account. Give it the account permission **Copilot
+   Requests** and no repository permission. Set an expiry date. A `gho_` or
+   `ghu_` token also works; a classic `ghp_` token does not.
+2. Write the token, and nothing else, on one line of a private file:
+   `chmod 600 <token file>`. Keep it outside every repository.
+3. Register it: `factory register --copilot-auth <token file>` for a new
+   registration, or `factory register --update --copilot-auth <token file>`
+   to add or replace it. The other credential sources stay unchanged.
+
+The factory copies the file into its managed credential volume; the worker
+launcher gives it only to the Copilot process. It never uses `gh`,
+`GH_TOKEN`, `GITHUB_TOKEN`, Keychain, or `~/.copilot`. The token does not
+authorize tracker or code-host changes; those use the coordinator's GitHub or
+Azure DevOps credentials. A role with shell access can read its own token, so
+keep the token's permission narrow. That the narrow permission is enough, and
+that it cannot write a repository, is release blocker RB-4.
+
+### Copilot-only and mixed configuration
+
+A role default that names `copilot` selects it. Every Copilot role must
+declare an exact model (`auto` is refused) and its effort values
+(`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`):
+
+```yaml
+# Excerpt: the other roles keep their own declarations.
+role_harness_defaults:
+  test: codex
+  implementation: copilot
+  spec_review: claude
+model_options:
+  implementation: [<copilot model id>]
+reasoning_effort_options:
+  implementation: [medium, high]
+```
+
+A Copilot-only repository names `copilot` for every role. To let an override
+reach Copilot, add it to `override_harnesses` (see [Harness override
+targets](#harness-override-targets)).
+
+### Worker image, smoke evidence, and doctor
+
+1. Build the worker image from a base image that has the pinned CLI
+   (`scripts/build-worker.sh` or `make worker-build`) and record the digest in
+   `factory.yaml`.
+2. Record the live skill smoke for that digest. It is a paid call; run it only
+   with the operator's approval:
+
+   ```sh
+   HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh
+   ```
+
+   The smoke runs `factory-copilot` in the pinned image with the production
+   isolation options and records the result keyed by the image digest and
+   the CLI version line. It records nothing and exits non-zero when
+   `COPILOT_TOKEN_PATH` is unset, empty, or missing, when the call fails (for
+   example a rejected token, a disabled CLI policy, or an unavailable model),
+   or when the reply does not quote the skill. It never reads a host GitHub
+   credential.
+3. Run `factory doctor` until it prints `doctor: ready`. The Copilot rows are
+   in [Worker image build and digest pinning](#worker-image-build-and-digest-pinning).
+
+`make check` never runs the smoke or the live probes.
+
+### Upgrades and existing runs
+
+- A new worker digest or a new CLI version invalidates the smoke record.
+  Rebuild, record the digest, run the smoke for every selectable harness,
+  then run `factory doctor`.
+- Change `COPILOT_VERSION` only after the new release has a compatibility
+  proof like spike 0003; the adapter depends on the observed CLI behavior.
+- An image built before Copilot support stays valid for Codex and Claude
+  Code. Selecting Copilot with it fails with `harness.executable.unusable`,
+  whose action names the rebuild.
+- A run keeps the policy frozen at its claim. A run claimed before
+  `override_harnesses` existed keeps the Codex and Claude Code override
+  targets. A native session never moves to another harness.
+
+### Refresh, recovery, cancellation, and cleanup
+
+- **Expired or rejected token**: the run pauses for an operator. Replace the
+  token in the registered file (or register a new file with `factory
+  register --update --copilot-auth`), then run `factory auth refresh
+  --harness copilot --run-id <run> --resume`. It continues the recorded
+  Copilot session; it never starts a new one or uses another harness.
+- **Recovery**: restart, worker recreation, and repair continue the recorded
+  session with `--resume=<UUID>`, at most once automatically. A missing
+  session pauses for a person.
+- **Cancellation**: `/factory cancel` stops the Copilot process; a report it
+  writes afterwards is ignored.
+- **Cleanup**: `factory cleanup` and `factory reset` remove role volumes,
+  which hold the Copilot session state. They never remove the credential
+  volume or the registered token file.
+
+### Failure actions
+
+The factory keeps Copilot output out of status comments and diagnostics.
+Never paste the token or a raw transcript into an issue.
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `harness.authentication.source_missing`, `source_unsafe`, or `source_unsupported` | No registered token file, a file that other users can read, or a token without a `github_pat_`, `gho_`, or `ghu_` prefix | Fix the file as described above and register it again. |
+| Run paused for authentication | The worker found no token, or the CLI could not validate it (expired, revoked, or no network) | Renew the token, then `factory auth refresh --harness copilot --run-id <run> --resume`. |
+| Run paused after an unexpected exit; the smoke reports a failed call | Organization policy disables the CLI, the model is not enabled, or a rate limit. The CLI does not yet give a typed signal for these (RB-5). | Check the CLI and model policy with the administrator and the account's request quota. Fix the cause, then take the action that `factory status` names for the paused run. Do not retry in a loop. |
+| `harness_selection_unsupported` | The role pairs Copilot with `auto` or an effort the CLI does not accept | Name an exact model and a supported effort. |
+| `harness.executable.unusable` | The pinned image has no `copilot` | Rebuild the worker image and record the new digest. |
+| `harness.skills.evidence_stale` or `evidence_missing` | No live smoke for the pinned digest and CLI version | Run the smoke above. |
+| Native session mismatch, or no identity after launch | The identity evidence is provisional (RB-1), or a session was changed outside the factory | Do not edit the role volume or the store. Report the run with `factory guide reporting`. |
+
+### Known limits
+
+- Repository instruction files (`AGENTS.md`, `CLAUDE.md`,
+  `.github/copilot-instructions.md`, `.github/instructions/`) are found by
+  the CLI. Every launch passes `--no-custom-instructions`; whether a run
+  honors it is RB-7. Until then, treat these files as passive guidance that
+  can reach the model. They cannot run code, and the frozen role prompt,
+  role permissions, and report acceptance stay authoritative.
+- Copilot inference uses GitHub's service, and the CLI sends product
+  telemetry that can be turned off only with BYOK (out of scope). Whether to
+  accept this is an open operator decision (RB-8).
+
 ## Factory-owned role, prompt, and stage registry
 
 Roles, invocation stages, prompt versions, default permitted paths, active
@@ -897,7 +1069,7 @@ verify the pinned skill roots, exact prompt delivery, report production,
 cancellation, fresh coordinator-process inspection, and native resume.
 
 The worker image also carries the curated skill set from `worker/skills`, which
-it installs into both harness role homes. The digest recorded here therefore
+it installs into each harness role home. The digest recorded here therefore
 pins the skills a role agent sees, exactly as it pins the harness versions. See
 `worker/SKILLS.md` for the set and its curation rule, and ADR 0006 for the
 boundary. Changing a skill needs a rebuild and a new digest.

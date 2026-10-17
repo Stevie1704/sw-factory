@@ -100,7 +100,17 @@ middle one costs a model call.
    that exists only in that skill's body. It records the result in
    `worker/skill-smoke.json`, keyed by image digest and harness version. It
    needs a host credential for each harness it smokes and skips any harness
-   without one. Set `HARNESSES` to smoke a subset.
+   without one. Set `HARNESSES` to smoke a subset. `HARNESSES` defaults to
+   `codex claude`; Copilot is smoked only when named, and only with the
+   dedicated token file in `COPILOT_TOKEN_PATH`, which has no default:
+
+   ```sh
+   HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh
+   ```
+
+   The Copilot call runs through `factory-copilot` with the production
+   isolation options. The token reaches the worker only on standard input
+   and a private tmpfs at `/run/factory-auth`, never a Docker argument.
 
 3. Startup diagnosis, deterministic and offline:
 
@@ -113,8 +123,9 @@ middle one costs a model call.
    result for that exact digest and harness version. It never makes a model
    call of its own. The image contract is checked for every shipped harness,
    while missing smoke evidence blocks only for harnesses selected by
-   `role_harness_defaults`, or for both supported harnesses when
-   `allowed_overrides` contains `harness`. An unselected harness is reported
+   `role_harness_defaults`, or for each override target when
+   `allowed_overrides` contains `harness`. Copilot is checked only when the
+   repository can select it. An unselected harness is reported
    as advisory until the repository can select it.
 
 The smoke exits non-zero when any harness it was asked to prove produced no
@@ -135,12 +146,16 @@ the startup diagnosis.
 pinned digest, so the startup diagnosis passes both `worker skill contract`
 checks.
 
-There is no `copilot` record. The smoke does not drive Copilot yet, and a
-live Copilot call needs the dedicated credential that release blocker RB-7 in
-`docs/spikes/0003-copilot-cli-protocol.md` still waits for. Offline,
-`scripts/verify-headless-worker.sh` runs `factory-copilot skill list` with the
-pinned CLI and requires every curated skill in the listing and no planted
-project skill. A listing is not activation evidence.
+There is no `copilot` record, and none may be written without a live run. The
+smoke can drive Copilot, but no dedicated Copilot credential was available,
+so no live call has happened (release blocker RB-7 in
+[Copilot CLI release evidence](../docs/acceptance/copilot.md)). A repository
+that can select Copilot therefore fails `factory doctor` with
+`harness.skills.evidence_stale` until an operator runs the Copilot smoke for
+its pinned image. Offline, `scripts/verify-headless-worker.sh` runs
+`factory-copilot skill list` with the pinned CLI and requires every curated
+skill in the listing and no planted project skill. A listing is not
+activation evidence.
 
 macOS keeps the Claude Code credential in the login Keychain rather than in a
 file. Usually the smoke finds no file at the default `CLAUDE_AUTH_PATH` and

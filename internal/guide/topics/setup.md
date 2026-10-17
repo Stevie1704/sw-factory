@@ -143,6 +143,10 @@ infers a credential path. The operator confirms every credential path. Omit
 the flag of a harness that has no credential file. When a role selects
 Copilot, add `--copilot-auth <copilot-token-path>`: a private file with one
 dedicated Copilot token, never the `gh` login. Never read a credential file.
+Copilot support is not released: a repository that can select it stays
+blocked in `factory doctor` until the operator records a live Copilot skill
+smoke with `HARNESSES=copilot COPILOT_TOKEN_PATH=<copilot-token-path>
+scripts/smoke-skills.sh`. That smoke is a paid call; it needs explicit scope.
 
 `factory bootstrap-labels` creates the six factory labels in the GitHub
 repository. `factory doctor` runs the complete startup diagnosis. Repeat the
@@ -181,7 +185,8 @@ issue claims, run branches, labels, and pull requests for its runs.
 ## Keep the setup valid
 
 - A changed toolchain, harness version, or worker skill needs a new worker
-  image, a new digest in `factory.yaml`, and a new skill smoke record.
+  image, a new digest in `factory.yaml`, and a new skill smoke record for
+  every harness the repository can select.
 - A new Factory release needs a worker image built from its own worker base
   image. Until then, `factory doctor` reports `worker.release.mismatch`.
 - A changed gate command needs a proof in the worker before the change.

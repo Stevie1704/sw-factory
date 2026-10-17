@@ -419,7 +419,11 @@ report; `factory guide reporting` describes the separate publication action.
 | Unknown | The evidence does not identify the cause | Nobody yet; report what you observed and that the cause is unknown |
 
 A failed gate or a review finding is not a Factory defect. An expired
-credential is not a Factory defect. Do not report a cause that you did not
+credential is not a Factory defect. For Copilot, a rejected token, a disabled
+organization CLI policy, an unavailable model, and a rate limit are
+environment failures. Copilot does not report them in a typed form yet, so a
+run can pause after an unexpected exit; ask the operator to check the token,
+the CLI and model policy, and the request quota. Do not report a cause that you did not
 observe.
 
 ## Supported recovery actions
