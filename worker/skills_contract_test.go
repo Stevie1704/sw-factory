@@ -129,8 +129,9 @@ func readSkill(t *testing.T, path string) string {
 // harnessSkillRoots maps each harness shipped in the worker image to the role
 // home directory that harness reads the worker skill set from.
 var harnessSkillRoots = map[string]string{
-	"claude": "/home/factory/.claude/skills",
-	"codex":  "/home/factory/.codex/skills",
+	"claude":  "/home/factory/.claude/skills",
+	"codex":   "/home/factory/.codex/skills",
+	"copilot": "/home/factory/.copilot/skills",
 }
 
 // Each harness has its own switch that withholds a shipped skill from the

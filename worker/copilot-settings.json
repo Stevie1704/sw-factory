@@ -1,0 +1,10 @@
+{
+  "ignoredSkillsLocations": ["/work"],
+  "disableAllHooks": true,
+  "remoteExport": false,
+  "autoUpdate": false,
+  "memory": false,
+  "continueOnAutoMode": false,
+  "trustedFolders": [],
+  "disabledSkills": ["customize-cloud-agent", "github-pr-media"]
+}

@@ -20,3 +20,5 @@ auth.json
 **/auth.json
 *.key
 *.pem
+**/.copilot
+**/.copilot/**
