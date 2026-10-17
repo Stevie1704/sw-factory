@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -157,13 +156,20 @@ func resolvePlan(mapping config.AzurePlanMapping, graph tracker.PlanGraph) (trac
 
 // intermediateNode returns the intermediate item of level below parent,
 // creating it on first use. Its identity is "<parent>--<type slug>"; a plan
-// node with the same identity is an invalid mapping.
+// node or an intermediate item of another level with the same identity is
+// an invalid mapping.
 func intermediateNode(mapping config.AzurePlanMapping, graph tracker.PlanGraph, nodes map[string]*planNode, intermediates map[string][]*planNode, parent *planNode, level int, above string) (*planNode, error) {
-	id := parent.item.NodeID + "--" + typeSlug(mapping.Levels[level].Type)
+	id := parent.item.NodeID + "--" + mapping.Levels[level].Slug()
 	for _, existing := range intermediates[parent.item.NodeID] {
-		if existing.item.NodeID == id {
-			return existing, nil
+		if existing.item.NodeID != id {
+			continue
 		}
+		if existing.level != level {
+			return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+				"node %s: the intermediate %s and %s items would share the identity %q", parent.item.NodeID,
+				mapping.Levels[existing.level].Type, mapping.Levels[level].Type, id)
+		}
+		return existing, nil
 	}
 	if _, taken := nodes[id]; taken || len(id) > 128 {
 		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
@@ -178,20 +184,6 @@ func intermediateNode(mapping config.AzurePlanMapping, graph tracker.PlanGraph, 
 	}
 	intermediates[parent.item.NodeID] = append(intermediates[parent.item.NodeID], node)
 	return node, nil
-}
-
-// typeSlug returns the lower-case identity form of a work-item type, for
-// example "user-story".
-func typeSlug(workItemType string) string {
-	var slug strings.Builder
-	for _, character := range strings.ToLower(workItemType) {
-		if character < 128 && (unicode.IsLetter(character) || unicode.IsDigit(character)) {
-			slug.WriteRune(character)
-		} else if !strings.HasSuffix(slug.String(), "-") {
-			slug.WriteByte('-')
-		}
-	}
-	return strings.Trim(slug.String(), "-")
 }
 
 // nodeRelationships returns the native parent link of node and its

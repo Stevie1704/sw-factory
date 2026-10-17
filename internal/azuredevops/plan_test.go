@@ -197,6 +197,8 @@ func TestPreflightPlanRejectsMappingsTheProjectCannotTake(t *testing.T) {
 			{Type: "Epic", Kinds: []string{"task", "investigation"}}, {Type: "User Story", Kinds: []string{"parent"}}}}},
 		{name: "hierarchy against the backlog order", detail: "backlog levels of project", want: tracker.PlanErrorUnsupportedCapability, mapping: &config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
 			{Type: "User Story", Kinds: []string{"parent"}}, {Type: "Epic", Kinds: []string{"task", "investigation"}}}}},
+		{name: "intermediate identities collide", detail: "both name intermediate items", want: tracker.PlanErrorInvalidMapping, mapping: &config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
+			{Type: "Epic", Kinds: []string{"parent"}}, {Type: "Sub Feature", Required: true}, {Type: "Sub-Feature", Required: true}, {Type: "User Story", Kinds: []string{"task", "investigation"}}}}},
 		{name: "type on no backlog", detail: "on no backlog level", want: tracker.PlanErrorUnsupportedCapability, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Type = "Issue" })},
 		{name: "unmapped kind", detail: "maps to no work-item type", want: tracker.PlanErrorInvalidMapping, mapping: levels(func(l []config.AzurePlanLevel) { l[2].Kinds = []string{"investigation"} })},
 		{name: "default mapping on a Scrum project", detail: `"User Story" does not exist`, want: tracker.PlanErrorInvalidMapping, process: func(p []azuredevopstest.WorkItemType) { copy(p, azuredevopstest.ScrumProcess()) }},
