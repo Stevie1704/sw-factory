@@ -134,6 +134,10 @@ with the bounded resume allowance and never as an endless retry.
 - `internal/factory:TestCancelledCopilotRunStopsItsProcessAndRefusesALateReport`
 - `internal/effect:TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss`
 - `internal/effect:TestResultAcceptanceReplayDoesNotRepeatFinalization`
+- `internal/factory:TestLaunchPausesAHarnessMissingFromTheWorkerImageForAnUpgrade`
+  and `internal/factory:TestLivenessPausesAHarnessMissingFromTheWorkerImageForAnUpgrade`:
+  Copilot selected on an older worker image pauses with the upgrade action and
+  does not spend the automatic resume.
 
 ### 6. Forged, stale, duplicate, missing, or invalid reports cannot advance
 
@@ -144,12 +148,19 @@ a real launch reach a report.
 - `internal/factory:TestCopilotReportAcceptanceAdmitsOnlyTheExactInvocationReport`
 - `internal/harness:TestCopilotHeadlessNeverTreatsCLISuccessAsCompletion`
 - `internal/harness:TestCopilotHeadlessFailsClosedOnUnusableIdentityEvidence`
+- `internal/harness:TestCopilotHeadlessRefusesAFreshStartThatIgnoresTheAssignedSession`
 
 ### 7. No bypass through executable configuration, built-in GitHub tools, or cloud and session export
 
-Offline status: met for the launch options, the managed settings, and the
-launcher. Live: blocked by RB-7 and RB-6. RB-8 is an open operator decision.
+Offline status: the configuration is tested offline: the launch options, the
+managed settings, and the launcher. These tests prove what the factory passes
+to the CLI, not that the CLI honors it. Live proof that a launch loads no
+executable configuration or GitHub tools and exports nothing is release
+blocker RB-7 (and RB-6 for enterprise policy). RB-8 is an open operator
+decision.
 
+- `.:TestCopilotLiveProbesRunThroughTheProductionLauncher` keeps the RB-7
+  live probes on the production launcher and its managed settings.
 - `worker:TestCopilotManagedSettingsSuppressUnapprovedBehavior`
 - `worker:TestCopilotLauncherRestoresTheManagedConfigurationBeforeEveryLaunch`
 - `worker:TestBaseImageInstallsTheCopilotLauncherAndManagedSettings`
@@ -198,7 +209,7 @@ in the README table describe Copilot. `make check` passes.
 | Smoke tooling selects Copilot, checks skill content, keys by digest and CLI version | Met offline (criterion 9 tests). No record exists, because no live run happened. |
 | Disposable live invocation with a valid report and a continuation after restart | **Blocked**: not run (RB-1, RB-2). |
 | Missing credentials, disabled access, unavailable models, and skipped probes never pass; live tests stay out of `make check` | Met offline. The smoke and the live probes run only on an explicit operator call. |
-| Production launch suppresses executable configuration and GitHub tools and keeps curated skills; passive discovery recorded | Configuration met offline (criterion 7); live confirmation blocked by RB-7. The passive limitation is recorded above. |
+| Production launch suppresses executable configuration and GitHub tools and keeps curated skills; passive discovery recorded | Configuration tested offline (criterion 7). That the CLI honors it is not proved: **blocked** by RB-7. The passive limitation is recorded above. |
 | Operator documentation | Met: [operator guide](../configuration.md#github-copilot-cli). |
 | Model, harness, and subscription distinction; out-of-scope items | Met: same guide. |
 | README and canonical documents; changed decisions | Met: README, configuration, installation, agent runtime, worker runtime, worker skills, repository initialization, guide topics, [ADR 0028](../adr/0028-copilot-cli-joins-the-headless-seam-behind-live-evidence.md). |
