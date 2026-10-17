@@ -94,6 +94,32 @@
       "verified_at": "2026-10-16T20:56:15Z"
     },
     {
+      "image_digest": "sha256:9eed486a9464c184005f13c9368a97daf159a03c59d217e1bd370d34a76e7f63",
+      "harness": "claude",
+      "harness_version": "2.1.232 (Claude Code)",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T11:31:46Z"
+    },
+    {
+      "image_digest": "sha256:9eed486a9464c184005f13c9368a97daf159a03c59d217e1bd370d34a76e7f63",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "grilling",
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-10-17T10:14:26Z"
+    },
+    {
       "image_digest": "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2",
       "harness": "claude",
       "harness_version": "2.1.232 (Claude Code)",
