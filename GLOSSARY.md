@@ -295,7 +295,7 @@ workflow controller and not the operational store.
 _Avoid_: Onboarding checklist, onboarding state machine
 
 **Worker skill set**:
-The curated craft skills the worker image installs into both role homes, pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
+The curated craft skills the worker image installs into the skill root of each harness in the role home (`.codex/skills`, `.claude/skills`, and `.copilot/skills`), pinned by the worker image digest and scoped per role by the embedded role prompts. A skill a role prompt mandates by name must also stay out of each harness's hidden-skill metadata, because a harness that withholds a skill from its model-visible catalog leaves that role unable to follow its own instructions.
 _Avoid_: Personal skill, installed skill
 
 **Worker skill smoke evidence**:
