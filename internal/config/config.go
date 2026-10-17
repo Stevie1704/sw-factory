@@ -338,6 +338,10 @@ var harnessReasoningEfforts = map[Harness][]string{
 	HarnessCopilot: {"none", "minimal", "low", "medium", "high", "xhigh", "max"},
 }
 
+// unknownHarnessProblem is the validation problem for a harness name that
+// IsKnownHarness refuses.
+const unknownHarnessProblem = "must be codex, claude, or copilot"
+
 // IsKnownHarness reports whether the factory ships an adapter named h.
 func IsKnownHarness(h Harness) bool {
 	return h == HarnessCodex || h == HarnessClaude || h == HarnessCopilot
@@ -709,7 +713,7 @@ func ValidateRepository(config RepositoryConfig) error {
 			return policy("role_harness_defaults."+role, "role must be declared by the factory-owned workflow registry")
 		}
 		if !IsKnownHarness(harness) {
-			return validation("role_harness_defaults."+role, "must be codex, claude, or copilot")
+			return validation("role_harness_defaults."+role, unknownHarnessProblem)
 		}
 	}
 	if len(config.ModelOptions) == 0 {
@@ -1191,7 +1195,7 @@ func validateOverrideHarnesses(config RepositoryConfig) error {
 	for index, target := range config.OverrideHarnesses {
 		field := fmt.Sprintf("override_harnesses[%d]", index)
 		if !IsKnownHarness(target) {
-			return validation(field, "must be codex, claude, or copilot")
+			return validation(field, unknownHarnessProblem)
 		}
 		if _, exists := seen[target]; exists {
 			return validation(field, "must be unique")

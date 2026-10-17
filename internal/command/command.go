@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
 )
 
 // Kind identifies a command understood by the coordinator.
@@ -286,7 +288,7 @@ func parseHarness(arguments []string) (Harness, *ParseError) {
 		value = configured
 	}
 	harness := Harness(value)
-	if harness != HarnessCodex && harness != HarnessClaude && harness != HarnessCopilot {
+	if !config.IsKnownHarness(config.Harness(harness)) {
 		return "", &ParseError{Code: ParseErrorUnsupportedHarness, Problem: fmt.Sprintf("harness %q is not supported", value)}
 	}
 	return harness, nil
