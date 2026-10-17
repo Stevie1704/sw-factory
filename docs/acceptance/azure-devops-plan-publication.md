@@ -28,7 +28,10 @@ same plan against an unchanged project renders the same bytes.
 
 1. Local checks: every plan kind is mapped, every parent is on a higher level
    than its child, required intermediate items are added, and every title,
-   description, and tag fits Azure DevOps.
+   description, and tag fits Azure DevOps. The encoded create request of each
+   item must also fit one `az rest --body` argument (at most 131,071 bytes,
+   the Linux per-argument limit); a larger item is a typed `invalid_mapping`
+   error before approval.
 2. Permissions: View and Edit work items in the root area, and Create tag
    definition in the project.
 3. Process: the mapped types exist and are enabled

@@ -23,9 +23,9 @@ var _ tracker.PlanPublisher = (*Client)(nil)
 const (
 	// maxTitleRunes is the System.Title limit.
 	maxTitleRunes = 255
-	// maxDescriptionBytes bounds a rendered description. The JSON patch of a
-	// create is one az command-line argument, and Linux limits one argument
-	// to 128 KiB, so the bound stays well below that.
+	// maxDescriptionBytes bounds a rendered description. The encoded JSON
+	// patch of the create must also fit one az argument
+	// (maxRequestBodyBytes), which validatePlanItem checks.
 	maxDescriptionBytes = 100_000
 	// maxTagRunes is the Azure DevOps tag length limit.
 	maxTagRunes = 400
@@ -279,6 +279,9 @@ func validatePlanItem(item tracker.RenderedPlanItem) error {
 		if strings.ContainsAny(tag, ";,") || utf8.RuneCountInString(tag) > maxTagRunes {
 			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: tag %q has ';' or ',' or exceeds %d characters", item.NodeID, tag, maxTagRunes)
 		}
+	}
+	if _, err := encodeRequestBody(createPatch(item)); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: %v; shorten the description", item.NodeID, err)
 	}
 	return nil
 }
