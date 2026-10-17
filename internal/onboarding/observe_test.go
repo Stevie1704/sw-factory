@@ -15,7 +15,7 @@ import (
 )
 
 // fixtureDigest is the worker digest of the fixture factory.yaml.
-const fixtureDigest = "sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54"
+const fixtureDigest = "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2"
 
 // fakeImages answers every image check with err and records the reference.
 type fakeImages struct {

@@ -20,7 +20,7 @@ import (
 )
 
 // planDigest is the worker digest of the Factory's own factory.yaml.
-const planDigest = "sha256:44de7b30d96aa23a2db2e38a75e1431e32ede7b6446694d9d782681aeeddce54"
+const planDigest = "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2"
 
 // presentImages reports every pinned image as present.
 type presentImages struct{}
