@@ -191,3 +191,32 @@ func TestValidateRequiresTheSessionPayloadOfEachRole(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanReportOverTheTransportLimitIsRefusedWithAnActionableError verifies
+// that a planning report whose fields each stay inside their limits but whose
+// encoded size exceeds MaxReportBytes passes field validation and is refused
+// by the write with the size, the limit, and what to shorten.
+func TestPlanReportOverTheTransportLimitIsRefusedWithAnActionableError(t *testing.T) {
+	t.Parallel()
+
+	value := planningReport()
+	value.PlanDraft.Nodes = nil
+	for index := range 25 {
+		value.PlanDraft.Nodes = append(value.PlanDraft.Nodes, report.PlanNode{
+			ID: "task-" + string(rune('a'+index)), Kind: "task", Title: "Task", Body: strings.Repeat("é", 8000),
+			AcceptanceCriteria: []string{"The task is done."},
+		})
+	}
+	if err := report.Validate(value, sessionContext(value)); err != nil {
+		t.Fatalf("Validate() error = %v, want every field inside its limit", err)
+	}
+	_, err := report.WriteAtomicForInvocation(filepath.Join(t.TempDir(), "results"), value.InvocationID, value)
+	if err == nil {
+		t.Fatal("WriteAtomicForInvocation() accepted a report over the transport limit")
+	}
+	for _, want := range []string{"262144-byte", "bytes", "shorten", "plan item bodies"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("WriteAtomicForInvocation() error = %q, want it to name %q", err, want)
+		}
+	}
+}

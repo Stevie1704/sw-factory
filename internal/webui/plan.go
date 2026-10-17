@@ -130,12 +130,16 @@ type publicationProgress struct {
 	Created int
 	// Linked counts succeeded relationship creates.
 	Linked int
-	// Pending counts operations that have not run or not finished.
+	// Pending counts operations that have not run yet, or that run now.
 	Pending int
 	// Failed counts operations that made no change.
 	Failed int
-	// Ambiguous counts operations with an unknown outcome.
+	// Ambiguous counts operations with an unknown outcome: an ambiguous one,
+	// and an attempted one that no running publication will finish.
 	Ambiguous int
+	// NotRun counts operations of a cancelled session that never ran. They
+	// will not run.
+	NotRun int
 }
 
 // operationView is one ledger row.
@@ -148,6 +152,8 @@ type operationView struct {
 	Intermediate bool
 	// Reconcilable reports an item create that needs an operator decision.
 	Reconcilable bool
+	// Label is the state as the page names it.
+	Label string
 }
 
 // planActions are the commands the page offers.
@@ -225,7 +231,8 @@ func newPlanPage(activity factory.SessionActivity) planPage {
 		model.Preview, model.PreviewRefusal = currentPreview(activity.Commands, model.Plan)
 	}
 	model.Approval, model.Approved = currentApproval(history)
-	model.Progress = newProgress(history)
+	inFlight := len(model.Pending) > 0 && history.Session.State == store.IdeationStatePublishing
+	model.Progress = newProgress(history, inFlight)
 	model.Actions = newPlanActions(model)
 	return model
 }
@@ -371,8 +378,10 @@ func currentApproval(history store.IdeationHistory) (*store.PlanApproval, *publi
 
 // newProgress returns the ledger of the current approval, or of the newest
 // approval with a ledger when no approval is current, for example after a
-// cancellation. It returns nil when nothing was published.
-func newProgress(history store.IdeationHistory) *publicationProgress {
+// cancellation. It returns nil when nothing was published. inFlight reports
+// that a publication command runs now, so an attempted operation is still in
+// progress and not yet an unknown outcome.
+func newProgress(history store.IdeationHistory, inFlight bool) *publicationProgress {
 	approvalID := history.Session.ApprovalID
 	if !slices.ContainsFunc(history.Operations, func(operation store.PublicationOperation) bool { return operation.ApprovalID == approvalID }) {
 		if count := len(history.Operations); count > 0 {
@@ -395,7 +404,7 @@ func newProgress(history store.IdeationHistory) *publicationProgress {
 			view.Reconcilable = reconcilableState(history.Session, approvalID) &&
 				(operation.State == store.PublicationOperationAmbiguous || operation.State == store.PublicationOperationAttempted)
 		}
-		progress.count(operation)
+		view.Label = progress.count(operation, inFlight, history.Session.State == store.IdeationStateCancelled)
 		progress.Operations = append(progress.Operations, view)
 	}
 	for _, receipt := range history.Receipts {
@@ -409,22 +418,34 @@ func newProgress(history store.IdeationHistory) *publicationProgress {
 	return progress
 }
 
-// count adds operation to the progress counters.
-func (progress *publicationProgress) count(operation store.PublicationOperation) {
-	switch operation.State {
-	case store.PublicationOperationSucceeded:
+// count adds operation to the progress counters and returns the label of its
+// state. An attempted operation outside a running publication has an unknown
+// outcome, and a pending operation of a cancelled session will not run.
+func (progress *publicationProgress) count(operation store.PublicationOperation, inFlight, cancelled bool) string {
+	switch {
+	case operation.State == store.PublicationOperationSucceeded:
 		if operation.Kind == store.PublicationOperationCreateItem {
 			progress.Created++
 		} else {
 			progress.Linked++
 		}
-	case store.PublicationOperationFailed:
+	case operation.State == store.PublicationOperationFailed:
 		progress.Failed++
-	case store.PublicationOperationAmbiguous:
+	case operation.State == store.PublicationOperationAmbiguous:
 		progress.Ambiguous++
+	case operation.State == store.PublicationOperationAttempted && inFlight:
+		progress.Pending++
+		return "in progress"
+	case operation.State == store.PublicationOperationAttempted:
+		progress.Ambiguous++
+		return "unknown outcome"
+	case cancelled:
+		progress.NotRun++
+		return "not run"
 	default:
 		progress.Pending++
 	}
+	return string(operation.State)
 }
 
 // approvedItems returns the rendered item titles of one approval by node and
@@ -481,7 +502,7 @@ func newPlanActions(model planPage) planActions {
 		Edit:       current && allows(workflow.SessionEventEdited),
 		Regenerate: hasPlan && allows(workflow.SessionEventRoleStarted),
 		Preview:    reviewable && !busy,
-		Approve:    reviewable && !busy && model.Preview != nil,
+		Approve:    reviewable && !busy && model.Preview != nil && model.PreviewRefusal == nil,
 		Publish:    !busy && model.Approval != nil && allows(workflow.SessionEventPublicationStarted),
 		Retry:      state == store.IdeationStatePublicationIncomplete || state == store.IdeationStatePublishing,
 		Cancel: allows(workflow.SessionEventCancelled) &&

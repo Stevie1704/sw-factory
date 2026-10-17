@@ -108,10 +108,6 @@ func TestSessionRoleResultIsAcceptedOncePerTrigger(t *testing.T) {
 	if _, _, err := opened.StartSessionInvocation(t.Context(), ideationWrite(accepted, store.IdeationStateRoleActive), sessionInvocationForTest("sinv-2", "turn-1")); !errors.Is(err, store.ErrSessionTriggerConsumed) {
 		t.Fatalf("StartSessionInvocation(consumed trigger) error = %v, want ErrSessionTriggerConsumed", err)
 	}
-	resumable, err := opened.ResumableSessionInvocation(t.Context(), "session-1", "ideation")
-	if err != nil || resumable != nil {
-		t.Fatalf("ResumableSessionInvocation() = %#v, %v; want none without a native session", resumable, err)
-	}
 }
 
 // TestSessionRoleResultFromAnOldRevisionOrCancelledInvocationIsRejected

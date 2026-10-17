@@ -48,6 +48,10 @@ type sessionWorkerForTest struct {
 	processes map[string]worker.HeadlessInspection
 	// onLaunch optionally replaces the process state a launch produces.
 	onLaunch func(worker.HeadlessRequest) (worker.HeadlessInspection, bool)
+	// startErr is returned by every worker start.
+	startErr error
+	// seedErr is returned by every credential projection.
+	seedErr error
 }
 
 // Start records one worker start.
@@ -55,7 +59,17 @@ func (w *sessionWorkerForTest) Start(_ context.Context, request worker.StartRequ
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.starts = append(w.starts, request)
-	return nil
+	return w.startErr
+}
+
+// SeedCodexCredentials projects a Codex credential, or fails with seedErr.
+func (w *sessionWorkerForTest) SeedCodexCredentials(context.Context, worker.CredentialSeedRequest) error {
+	return w.seedErr
+}
+
+// SeedClaudeCredentials projects a Claude credential, or fails with seedErr.
+func (w *sessionWorkerForTest) SeedClaudeCredentials(context.Context, worker.CredentialSeedRequest) error {
+	return w.seedErr
 }
 
 // Resume implements the base worker seam.
@@ -156,6 +170,14 @@ func nativeEventsForTest(nativeSessionID string) string {
 		`{"type":"system","subtype":"init","session_id":"` + nativeSessionID + `"}` + "\n"
 }
 
+// rateLimitEventsForTest returns the machine events both adapters classify
+// as a capacity limit.
+func rateLimitEventsForTest() string {
+	return `{"type":"error","code":"rate_limit"}` + "\n" +
+		`{"type":"system","subtype":"api_retry","error":"rate_limit"}` + "\n" +
+		`{"type":"result","subtype":"error_during_execution","is_error":true}` + "\n"
+}
+
 // authenticationFailureEventsForTest returns the machine events both adapters
 // classify as expired authentication.
 func authenticationFailureEventsForTest() string {
@@ -210,6 +232,8 @@ type sessionFixture struct {
 	policy    config.RepositoryConfig
 	ids       int
 	validator func([]store.PlanNode) error
+	// authentication names the host credential sources of the registration.
+	authentication config.AuthenticationConfig
 }
 
 // newSessionFixture creates a session "session-1" with one user turn
@@ -261,7 +285,7 @@ func (f *sessionFixture) roles() *factory.SessionRoles {
 		Harnesses:    harness.NewHeadlessAdapters(f.worker),
 		Workers:      f.worker,
 		Snapshots:    f.snapshots,
-		Registration: config.RepositoryRegistration{Path: f.repo},
+		Registration: config.RepositoryRegistration{Path: f.repo, Authentication: f.authentication},
 		Policy:       f.policy,
 		Now:          func() time.Time { return time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC) },
 		NewInvocationID: func() (string, error) {
@@ -429,6 +453,34 @@ func TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses(t *testing.T) {
 	}
 }
 
+// TestSessionRolesPinTheNewImageOfTheNextTurn verifies that a worker image
+// digest change between two turns pins the new digest on the next
+// invocation and asks the worker runtime to recreate the session role worker
+// from it, so the turn does not fail on the image of the first turn.
+func TestSessionRolesPinTheNewImageOfTheNextTurn(t *testing.T) {
+	fixture := newSessionFixture(t, config.HarnessClaude)
+	first, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.report(first, ideationResultForTest())
+	if err := fixture.roles().Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+	fixture.policy.WorkerBuild.Digest = newDigest
+	fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
+	second, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+	if err != nil {
+		t.Fatalf("StartIdeationTurn(new digest) error = %v", err)
+	}
+	start := fixture.worker.starts[1]
+	if second.ImageDigest != newDigest || start.ImageDigest != newDigest || !start.ReplaceImage || start.WorkerID != fixture.worker.starts[0].WorkerID {
+		t.Fatalf("second invocation = %#v, worker start = %#v; want the new digest pinned on the same role worker with ReplaceImage", second, start)
+	}
+}
+
 // TestSessionRolesAcceptAtMostOneResultPerUserTurn verifies that a second
 // launch for an answered turn is refused, and that a role result from a
 // cancelled invocation or an old revision changes nothing.
@@ -492,12 +544,72 @@ func TestSessionRolesAcceptAtMostOneResultPerUserTurn(t *testing.T) {
 }
 
 // TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession verifies that an
-// expired credential, a process that exits without a report, and a resume
-// that reveals another native session become visible typed failures that
-// return the session to the user, with both harness adapters.
+// expired credential, a capacity limit, a credential that cannot be
+// projected, a worker that cannot start, a process that exits without a
+// report, and a resume that reveals another native session become visible
+// typed failures that return the session to the user, and that a session
+// that moved on closes its role, with both harness adapters.
 func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 	for _, harnessName := range sessionHarnesses {
-		t.Run(string(harnessName)+"/credentials", func(t *testing.T) {
+		t.Run(string(harnessName)+"/rate limited", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: rateLimitEventsForTest()}, true
+			}
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if !harness.IsRateLimited(err) {
+				t.Fatalf("StartIdeationTurn() error = %v, want a capacity limit", err)
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureRateLimited)
+		})
+		t.Run(string(harnessName)+"/credentials unavailable", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.authentication = config.AuthenticationConfig{CodexAuthPath: "/host/codex/auth.json", ClaudeAuthPath: "/host/claude/credentials.json"}
+			fixture.worker.seedErr = errors.New("credential file is unreadable")
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with an unprojectable credential succeeded")
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureCredentials)
+			if len(fixture.worker.launches) != 0 {
+				t.Fatalf("launches = %d, want no harness launch without a credential", len(fixture.worker.launches))
+			}
+		})
+		t.Run(string(harnessName)+"/launch failed", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.worker.startErr = errors.New("docker daemon unavailable")
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with a failing worker succeeded")
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureLaunch)
+		})
+		t.Run(string(harnessName)+"/session moved", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			roles := fixture.roles()
+			invocation, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventNoBuild, "not worth it", time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.store.TransitionIdeationSession(t.Context(), write); err != nil {
+				t.Fatal(err)
+			}
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			ended := fixture.invocation(invocation.ID)
+			if ended.Status != store.SessionInvocationCancelled || ended.FailureKind != factory.SessionFailureSessionMoved || fixture.session().State != store.IdeationStateNoBuild {
+				t.Fatalf("invocation = %#v, session = %#v; want the role closed as session_moved and the session left as no_build", ended, fixture.session())
+			}
+			if len(fixture.worker.cancelled) != 1 {
+				t.Fatalf("cancelled processes = %v, want the moved role process cancelled", fixture.worker.cancelled)
+			}
+		})
+		t.Run(string(harnessName)+"/expired authentication", func(t *testing.T) {
 			fixture := newSessionFixture(t, harnessName)
 			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
 				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: authenticationFailureEventsForTest()}, true
@@ -582,7 +694,7 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 			}
 
 			fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
-			adopted := persistInterruptedLaunch(t, fixture, "sinv-adopt", "turn-2")
+			adopted := persistInterruptedLaunch(t, fixture, "sinv-adopt", "turn-2", "")
 			fixture.worker.processes["sinv-adopt"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(freshNativeSessionForTest)}
 			if err := fixture.roles().Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
@@ -594,7 +706,7 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2")
+			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2", "")
 			if err := fixture.roles().Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -603,9 +715,122 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 	}
 }
 
+// acceptFirstTurnForTest launches and accepts the ideation role for turn-1
+// and adds the user turn turn-2, so the next launch resumes the native
+// session of the returned invocation.
+func acceptFirstTurnForTest(t *testing.T, fixture *sessionFixture) store.SessionInvocation {
+	t.Helper()
+	first, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.report(first, ideationResultForTest())
+	if err := fixture.roles().Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
+	return fixture.invocation(first.ID)
+}
+
+// TestSessionRolesVerifyAResumedLaunchAfterRestart verifies that a resumed
+// launch records the native session only after the harness revealed it, and
+// that a coordinator restart during such a launch adopts the requested
+// native session, refuses another one as a mismatch, records a missing
+// process as an interrupted launch, and types a resume that ended without a
+// native session as lost.
+func TestSessionRolesVerifyAResumedLaunchAfterRestart(t *testing.T) {
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			first := acceptFirstTurnForTest(t, fixture)
+			var persisted store.SessionInvocation
+			fixture.worker.onLaunch = func(request worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				persisted, _ = fixture.store.SessionInvocation(t.Context(), request.InvocationID)
+				return worker.HeadlessInspection{}, false
+			}
+			resumed, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResumedFrom != first.ID || persisted.NativeSessionID != "" || resumed.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("persisted before launch = %#v, after = %#v; want the native session recorded only after the harness revealed it", persisted, resumed)
+			}
+			fixture.worker.onLaunch = nil
+			if err := fixture.roles().CancelRole(t.Context(), "session-1", "test"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.restart()
+
+			adopted := persistInterruptedLaunch(t, fixture, "sinv-same", "turn-2", first.ID)
+			fixture.worker.processes["sinv-same"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(first.NativeSessionID)}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := fixture.invocation(adopted.ID); got.Status != store.SessionInvocationActive || got.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("resumed launch = %#v, want the requested native session adopted", got)
+			}
+			if err := fixture.roles().CancelRole(t.Context(), "session-1", "test"); err != nil {
+				t.Fatal(err)
+			}
+
+			forked := persistInterruptedLaunch(t, fixture, "sinv-fork", "turn-2", first.ID)
+			fixture.worker.processes["sinv-fork"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(forkedNativeSessionForTest)}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, forked.ID, factory.SessionFailureNativeSessionMismatch)
+
+			gone := persistInterruptedLaunch(t, fixture, "sinv-gone", "turn-2", first.ID)
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, gone.ID, factory.SessionFailureLaunchInterrupted)
+
+			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2", first.ID)
+			fixture.worker.processes["sinv-lost"] = worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, lost.ID, factory.SessionFailureNativeSessionLost)
+		})
+	}
+}
+
+// TestSessionRolesStartFreshAfterALostNativeSession verifies that a resume
+// that ends before the harness reveals the native session, as after a lost
+// role volume, is typed as a lost native session, and that the next launch
+// of the turn starts a fresh native session instead of failing again.
+func TestSessionRolesStartFreshAfterALostNativeSession(t *testing.T) {
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			acceptFirstTurnForTest(t, fixture)
+			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1}, true
+			}
+			failed, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with a lost native session succeeded")
+			}
+			assertReleased(t, fixture, failed.ID, factory.SessionFailureNativeSessionLost)
+
+			fixture.worker.onLaunch = nil
+			fresh, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatalf("StartIdeationTurn() after a lost native session error = %v", err)
+			}
+			launch := fixture.worker.launches[len(fixture.worker.launches)-1]
+			if fresh.ResumedFrom != "" || launch.Mode != worker.HeadlessLaunchFresh || fresh.NativeSessionID == "" {
+				t.Fatalf("next invocation = %#v, launch mode %q; want a fresh native session", fresh, launch.Mode)
+			}
+		})
+	}
+}
+
 // persistInterruptedLaunch records an active invocation as a coordinator does
-// just before it crashes, without a native session.
-func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger string) store.SessionInvocation {
+// just before it crashes, without a native session. A non-empty resumedFrom
+// marks a resume of that invocation's native session.
+func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger, resumedFrom string) store.SessionInvocation {
 	t.Helper()
 	identity, _ := prompt.SessionContentIdentity(workflow.RoleIdeation)
 	write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventRoleStarted, "", time.Time{})
@@ -619,7 +844,7 @@ func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger
 	_, invocation, err := fixture.store.StartSessionInvocation(t.Context(), write, store.SessionInvocation{
 		ID: id, Role: workflow.RoleIdeation, TriggerID: trigger, ContextRevision: sessionContextRevisionForTest,
 		Harness: string(fixture.harness), Model: "model-i", PromptVersion: identity.Version, PromptSHA256: identity.SHA256,
-		ImageDigest: sessionImageDigestForTest, WorkerID: "session-1-ideation", ResultDirectory: resultDirectory,
+		ImageDigest: sessionImageDigestForTest, WorkerID: "session-1-ideation", ResultDirectory: resultDirectory, ResumedFrom: resumedFrom,
 	})
 	if err != nil {
 		t.Fatal(err)

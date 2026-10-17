@@ -605,7 +605,8 @@ func TestCancelledPublicationOffersReconciliationOnly(t *testing.T) {
 	}
 
 	page := ui.page(t)
-	assertContains(t, page, `data-reconcile="item/n-3"`, `data-session-command="reconcile"`, "The session stays cancelled")
+	assertContains(t, page, `data-reconcile="item/n-3"`, `data-session-command="reconcile"`, "The session stays cancelled",
+		"2 items created · 0 relationships created · 0 pending · 0 failed · 1 unknown outcome · 3 not run", "<td>not run</td>")
 	for _, unwanted := range []string{`data-session-command="publish"`, `data-session-command="cancel"`} {
 		if strings.Contains(page, unwanted) {
 			t.Fatalf("cancelled page offers %s", unwanted)

@@ -65,6 +65,12 @@ func (failingSessionStore) CloseSessionInvocation(context.Context, store.Session
 	return store.SessionInvocation{}, errSessionStoreBusy
 }
 
+// SessionInvocations resolves the ambiguity of the embedded seams; the tests
+// never reach it.
+func (failingSessionStore) SessionInvocations(context.Context, string) ([]store.SessionInvocation, error) {
+	return nil, errSessionStoreBusy
+}
+
 // TestSessionSupervisionFailuresAreRetryEventsWithAReasonAndAnAttempt verifies
 // that a failing session-role reconciliation and a failing session-command
 // pass never stop the coordinator, and that each is reported as a retry

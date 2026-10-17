@@ -33,11 +33,13 @@
       return "UI server unreachable: send again to retry the same request";
     }
     var text = answer.outcome || answer.state || "unknown";
-    return answer.detail ? text + ": " + answer.detail : text;
+    text = answer.detail ? text + ": " + answer.detail : text;
+    return commands.isFinal(answer) ? text : text + "; send again to retry the same request";
   }
 
-  // requestID returns the request ID that form keeps for one step until an
-  // answer arrives, so a resend after a lost answer repeats the request.
+  // requestID returns the request ID that form keeps for one step until a
+  // final answer arrives, so a resend after a lost or an ambiguous answer
+  // repeats the request.
   function requestID(form, step) {
     var key = "request" + step;
     if (!form.dataset[key]) {
@@ -108,9 +110,10 @@
       window.location.href = "/sessions/" + encodeURIComponent(sessionID);
     }).catch(function (answer) {
       setStatus(form, describe(answer));
-      if (commands.isAnswer(answer)) {
-        // The server answered, so a resend is a new request. A transport
-        // failure keeps every ID, so a resend replays the same requests.
+      if (commands.isFinal(answer)) {
+        // The answer is final, so a resend is a new request. A transport
+        // failure or an answer that is not final keeps every ID, so a resend
+        // replays the same requests.
         delete form.dataset.requestTurn;
         if (!form.dataset.createdRevision) {
           delete form.dataset.requestCreate;
@@ -158,7 +161,9 @@
       request_id: requestID(form, "Brief"), session_id: form.dataset.sessionId, kind: "edit_brief",
       expected_revision: Number(form.dataset.expectedRevision), payload: { brief: briefOf(form) }
     }).then(function (answer) {
-      delete form.dataset.requestBrief;
+      if (commands.isFinal(answer)) {
+        delete form.dataset.requestBrief;
+      }
       finish(form, answer);
     }, function () {
       setStatus(form, "UI server unreachable: send again to retry the same request");

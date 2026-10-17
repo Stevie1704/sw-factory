@@ -64,9 +64,11 @@ const (
 	// SessionEventCancelled records cancellation. Cancellation during
 	// publication stops future work; it never deletes tracker items.
 	SessionEventCancelled SessionEvent = "cancelled"
-	// SessionEventReconciled records the receipt of an operator
-	// reconciliation of an ambiguous create after cancellation. The session
-	// stays cancelled, so no further publication write is possible.
+	// SessionEventReconciled records a receipt on a cancelled session: the
+	// incomplete receipt of a publication that the cancellation stopped, or
+	// the receipt of an operator reconciliation of an ambiguous create after
+	// cancellation. The session stays cancelled, so no further publication
+	// write is possible.
 	SessionEventReconciled SessionEvent = "reconciled"
 )
 

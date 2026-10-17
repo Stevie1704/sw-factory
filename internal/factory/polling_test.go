@@ -206,6 +206,40 @@ func TestStartWritesASupervisorHeartbeat(t *testing.T) {
 	}
 }
 
+// TestStartExpiresTheSupervisorHeartbeatOnCleanStop verifies that a clean
+// coordinator stop leaves an observable heartbeat that is already expired, so
+// the UI reports the coordinator unavailable at once instead of accepting
+// commands until the last renewal runs out.
+func TestStartExpiresTheSupervisorHeartbeatOnCleanStop(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runStore := &pollingHeartbeatRunStore{fakeRunStore: &fakeRunStore{}}
+	var cancel context.CancelFunc
+	lease := &pollingLease{onRenew: func(tracker.Lease) {
+		if cancel != nil {
+			cancel()
+		}
+	}}
+	service := newPollingService(root, &fakeGitHub{}, &pollingIssueReader{}, lease, runStore, &fakeWorktree{}, nil)
+	ctx, stop := context.WithCancel(context.Background())
+	cancel = stop
+
+	if err := service.Start(ctx); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if len(runStore.heartbeats) < 2 {
+		t.Fatalf("heartbeats = %#v, want the start heartbeat and a stop heartbeat", runStore.heartbeats)
+	}
+	first, last := runStore.heartbeats[0], runStore.heartbeats[len(runStore.heartbeats)-1]
+	if last.Coordinator != first.Coordinator || last.PID != first.PID || !last.StartedAt.Equal(first.StartedAt) {
+		t.Fatalf("stop heartbeat = %#v, want the identity of the running coordinator %#v", last, first)
+	}
+	if last.Live(last.RenewedAt) || last.ExpiresAt.After(last.RenewedAt) {
+		t.Fatalf("stop heartbeat = %#v, want it expired at the stop", last)
+	}
+}
+
 // TestStartSurvivesAHeartbeatWriteFailure verifies a diagnostic write failure
 // is observable as a retry event without taking down the coordinator loop.
 func TestStartSurvivesAHeartbeatWriteFailure(t *testing.T) {

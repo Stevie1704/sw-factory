@@ -1319,9 +1319,11 @@ Session commands (ADR 0021, ADR 0024):
   HTTP 409 `request_reused`. A stale revision gets HTTP 409 `conflict` with
   the expected and the current revision; reload the session and decide again.
 - When the supervisor heartbeat is missing or expired, a new command gets HTTP
-  503 with the outcome `unavailable` and nothing is stored. The UI never
-  starts a second writer. Run `factory start` and submit again. Read-only
-  pages and session reads keep working.
+  503 with the outcome `unavailable` and nothing is stored. A clean
+  coordinator stop records a heartbeat that expires at once, so this answer
+  starts at the stop. The UI never starts a second writer. Run
+  `factory start` and submit again. Read-only pages and session reads keep
+  working.
 - `submit_turn` starts the ideation role for the accepted turn; its optional
   `corrects` names the earlier user answer it changes. `hand_off` names the
   brief revision the page showed and lists every unresolved question of it in
@@ -1329,10 +1331,16 @@ Session commands (ADR 0021, ADR 0024):
   `investigation_needed` needs at least one unresolved question in the brief
   and creates no backlog item. `hand_off` and `regenerate_draft` start
   planning; a role that cannot start
-  is named in the outcome detail. `edit_draft` passes plan validation before
+  is named in the outcome detail. A busy store at the role start keeps the
+  command pending for the next pass. A command whose role started before the
+  coordinator stopped returns its applied outcome when it resumes; it starts
+  no second role. `edit_draft` passes plan validation before
   the coordinator saves it.
 - `approve` names the digests of a preview that `preview_plan` rendered,
-  because only the coordinator talks to the tracker. Publication needs a
+  because only the coordinator talks to the tracker. When the approval is
+  recorded but publication does not start, for example because the tracker
+  refused its preflight, the outcome is `applied` and names the cause; the
+  session stays approved, and the page offers publish instead of approve. Publication needs a
   tracker adapter with plan publication; otherwise the command is
   `unsupported`. Publication never adds `agent-ready` and never starts a run.
 - `GET /api/sessions` lists the sessions of the registered repository, and

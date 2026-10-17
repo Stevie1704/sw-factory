@@ -50,6 +50,11 @@ const (
 	// SessionFailureSessionMoved means the session left the pinned revision
 	// while the role was in flight.
 	SessionFailureSessionMoved = "session_moved"
+	// SessionFailureNativeSessionLost means a resume of the recorded native
+	// session ended before the harness revealed it, for example after its
+	// role volume was removed. The next launch of the role starts a fresh
+	// native session with the full packet.
+	SessionFailureNativeSessionLost = "native_session_lost"
 )
 
 // sessionPacketVersion is the schema version of the frozen session packet.
@@ -80,7 +85,7 @@ type SessionRoleStore interface {
 	ActiveSessionInvocations(context.Context) ([]store.SessionInvocation, error)
 	UnreleasedSessionInvocations(context.Context) ([]store.SessionInvocation, error)
 	MarkSessionInvocationResourcesReleased(context.Context, string, time.Time) (store.SessionInvocation, error)
-	ResumableSessionInvocation(context.Context, string, string) (*store.SessionInvocation, error)
+	SessionInvocations(context.Context, string) ([]store.SessionInvocation, error)
 	AcceptSessionRoleResult(context.Context, store.IdeationWrite, store.SessionRoleResult) (store.IdeationSession, store.SessionInvocation, error)
 	ReleaseSessionInvocation(context.Context, store.IdeationWrite, store.SessionInvocationEnd) (store.IdeationSession, store.SessionInvocation, error)
 	CloseSessionInvocation(context.Context, store.SessionInvocationEnd) (store.SessionInvocation, error)
@@ -160,10 +165,32 @@ func (r *SessionRoles) StartIdeationTurn(ctx context.Context, sessionID, turnID 
 		brief := history.Briefs[len(history.Briefs)-1].Brief
 		launch.brief = &brief
 	}
-	if launch.resume, err = r.deps.Store.ResumableSessionInvocation(ctx, sessionID, definition.Name); err != nil {
+	if launch.resume, err = r.resumableInvocation(ctx, sessionID, definition.Name); err != nil {
 		return store.SessionInvocation{}, err
 	}
 	return r.launch(ctx, launch)
+}
+
+// resumableInvocation returns the newest accepted invocation of role whose
+// native session a new turn continues, or nil. A newer invocation of role
+// that lost its native session ends the search, so the next turn starts a
+// fresh native session instead of resuming the lost one again.
+func (r *SessionRoles) resumableInvocation(ctx context.Context, sessionID, role string) (*store.SessionInvocation, error) {
+	invocations, err := r.deps.Store.SessionInvocations(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for index := len(invocations) - 1; index >= 0; index-- {
+		invocation := invocations[index]
+		switch {
+		case invocation.Role != role:
+		case invocation.Status == store.SessionInvocationFailed && invocation.FailureKind == SessionFailureNativeSessionLost:
+			return nil, nil
+		case invocation.Status == store.SessionInvocationAccepted && invocation.NativeSessionID != "":
+			return &invocation, nil
+		}
+	}
+	return nil, nil
 }
 
 // StartPlanning launches the planning role for the current brief revision.
@@ -236,9 +263,12 @@ func (r *SessionRoles) launch(ctx context.Context, launch sessionLaunch) (store.
 		ImageDigest: r.deps.Policy.WorkerBuild.Digest, CredentialStoreID: credentialStoreID,
 		WorkerID: sessionWorkerID(session.ID, role), SnapshotPath: snapshot.Worktree,
 	}
+	resumeSessionID := ""
 	if launch.resume != nil {
+		// The native session is recorded only after the harness revealed it,
+		// so a restart during the launch verifies the resume.
 		invocation.ResumedFrom = launch.resume.ID
-		invocation.NativeSessionID = launch.resume.NativeSessionID
+		resumeSessionID = launch.resume.NativeSessionID
 	}
 	root := filepath.Join(filepath.Dir(snapshot.Worktree), ".factory-sessions", session.ID, id)
 	invocation.InvocationDirectory = filepath.Join(root, "packet")
@@ -264,18 +294,21 @@ func (r *SessionRoles) launch(ctx context.Context, launch sessionLaunch) (store.
 		_ = r.deps.Snapshots.RemoveContextSnapshot(context.WithoutCancel(ctx), r.deps.Registration.Path, snapshot)
 		return store.SessionInvocation{}, err
 	}
-	nativeSessionID, err := r.startProcess(ctx, invocation, adapter, promptText, seed)
+	nativeSessionID, err := r.startProcess(ctx, invocation, adapter, promptText, seed, resumeSessionID)
 	if err != nil {
 		classified := harness.ClassifyError(err, invocation.Harness)
-		ended, releaseErr := r.release(ctx, invocation, store.SessionInvocationFailed, sessionFailureKind(err), fmt.Sprintf("%s role could not start: %v", role, classified))
+		ended, releaseErr := r.release(ctx, invocation, store.SessionInvocationFailed, invocationFailureKind(invocation, err), fmt.Sprintf("%s role could not start: %v", role, classified))
 		return ended, errors.Join(classified, releaseErr)
 	}
 	return r.deps.Store.RecordSessionInvocationNativeSession(ctx, invocation.ID, nativeSessionID)
 }
 
 // startProcess starts the read-only worker, projects the harness credential,
-// and starts or resumes the native session.
-func (r *SessionRoles) startProcess(ctx context.Context, invocation store.SessionInvocation, adapter harness.HeadlessRuntime, promptText string, seed func(context.Context, string, string) error) (string, error) {
+// and starts or resumes the native session. Each invocation pins the image
+// again, so the session role worker is recreated from a changed image; its
+// role volume, which holds the native session, stays. A non-empty
+// resumeSessionID resumes that native session.
+func (r *SessionRoles) startProcess(ctx context.Context, invocation store.SessionInvocation, adapter harness.HeadlessRuntime, promptText string, seed func(context.Context, string, string) error, resumeSessionID string) (string, error) {
 	owner := sessionWorkerOwner(invocation.SessionID)
 	gitMetadata, err := prepareGitMetadataProjection(invocation.ID, r.deps.Registration.Path, invocation.SnapshotPath)
 	if err != nil {
@@ -286,7 +319,7 @@ func (r *SessionRoles) startProcess(ctx context.Context, invocation store.Sessio
 		GitMetadataPath: gitMetadata, Image: invocation.Image, ImageDigest: invocation.ImageDigest,
 		InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory,
 		CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role,
-		Limits: config.EffectiveWorkerLimits(r.deps.Registration.WorkerLimits),
+		Limits: config.EffectiveWorkerLimits(r.deps.Registration.WorkerLimits), ReplaceImage: true,
 	}); err != nil {
 		return "", fmt.Errorf("start session worker: %w", err)
 	}
@@ -302,8 +335,8 @@ func (r *SessionRoles) startProcess(ctx context.Context, invocation store.Sessio
 		Model: invocation.Model, ReasoningEffort: invocation.ReasoningEffort,
 	}
 	var session harness.HeadlessSession
-	if invocation.ResumedFrom != "" {
-		request.ResumeSessionID = invocation.NativeSessionID
+	if resumeSessionID != "" {
+		request.ResumeSessionID = resumeSessionID
 		session, err = adapter.ResumeHeadless(ctx, request)
 	} else {
 		session, err = adapter.StartHeadless(ctx, request)
@@ -314,9 +347,10 @@ func (r *SessionRoles) startProcess(ctx context.Context, invocation store.Sessio
 	return session.NativeSessionID, nil
 }
 
-// CancelRole cancels the active role invocation of a session and returns the
-// session to the user with reason. Its report, if one arrives later, is
-// ignored.
+// CancelRole cancels the active role invocation of a session with reason and
+// stops its process. A session that is still role_active returns to the
+// user; a session the user already moved on, for example by a cancel, keeps
+// its state. A report that arrives later is ignored.
 func (r *SessionRoles) CancelRole(ctx context.Context, sessionID, reason string) error {
 	active, err := r.deps.Store.ActiveSessionInvocations(ctx)
 	if err != nil {
@@ -423,12 +457,13 @@ func (r *SessionRoles) reconcileInvocation(ctx context.Context, invocation store
 		}
 	}
 	classified := harness.ClassifyError(cause, invocation.Harness)
-	_, err = r.release(ctx, invocation, store.SessionInvocationFailed, sessionFailureKind(cause), fmt.Sprintf("%s role stopped without a report: %v", invocation.Role, classified))
+	_, err = r.release(ctx, invocation, store.SessionInvocationFailed, invocationFailureKind(invocation, cause), fmt.Sprintf("%s role stopped without a report: %v", invocation.Role, classified))
 	return err
 }
 
 // adoptNativeSession records the native session of a process that a stopped
-// coordinator launched but did not record.
+// coordinator launched but did not record. A resumed launch must reveal the
+// native session it resumed; another one ends the invocation as a mismatch.
 func (r *SessionRoles) adoptNativeSession(ctx context.Context, adapter harness.HeadlessRuntime, invocation store.SessionInvocation) error {
 	inspector, ok := adapter.(harness.NativeSessionInspector)
 	if !ok {
@@ -440,6 +475,18 @@ func (r *SessionRoles) adoptNativeSession(ctx context.Context, adapter harness.H
 	if err != nil || nativeSessionID == "" {
 		// The process has not revealed its identity yet; observe it again.
 		return nil
+	}
+	if invocation.ResumedFrom != "" {
+		resumed, err := r.deps.Store.SessionInvocation(ctx, invocation.ResumedFrom)
+		if err != nil {
+			return err
+		}
+		if resumed.NativeSessionID != nativeSessionID {
+			cause := harness.NewNativeSessionMismatchError(invocation.Harness)
+			_, err := r.release(ctx, invocation, store.SessionInvocationFailed, SessionFailureNativeSessionMismatch,
+				fmt.Sprintf("%s role resume revealed another native session: %v", invocation.Role, harness.ClassifyError(cause, invocation.Harness)))
+			return err
+		}
 	}
 	_, err = r.deps.Store.RecordSessionInvocationNativeSession(ctx, invocation.ID, nativeSessionID)
 	return err
@@ -644,10 +691,14 @@ func reportWritten(invocation store.SessionInvocation) bool {
 }
 
 // sessionFailureKind maps a launch or process error to the recorded failure
-// kind. It reads only typed errors, never native output.
+// kind. It reads only typed errors, never native output. A credential
+// projection error unwraps to expired authentication for run recovery, so
+// it is matched first.
 func sessionFailureKind(err error) string {
 	var projection *credentialProjectionError
 	switch {
+	case errors.As(err, &projection):
+		return SessionFailureCredentials
 	case harness.IsNativeSessionMismatch(err):
 		return SessionFailureNativeSessionMismatch
 	case harness.IsAuthenticationExpired(err):
@@ -658,11 +709,20 @@ func sessionFailureKind(err error) string {
 		return SessionFailureUnexpectedExit
 	case errors.Is(err, context.Canceled):
 		return SessionFailureCancelled
-	case errors.As(err, &projection):
-		return SessionFailureCredentials
 	default:
 		return SessionFailureLaunch
 	}
+}
+
+// invocationFailureKind returns the failure kind of err for invocation. A
+// resume that exited before the harness revealed a native session lost that
+// session, so the next launch starts a fresh one.
+func invocationFailureKind(invocation store.SessionInvocation, err error) string {
+	kind := sessionFailureKind(err)
+	if kind == SessionFailureUnexpectedExit && invocation.ResumedFrom != "" && invocation.NativeSessionID == "" {
+		return SessionFailureNativeSessionLost
+	}
+	return kind
 }
 
 // sessionWorkerOwner returns the worker owner key of a session. Worker

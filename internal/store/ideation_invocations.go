@@ -356,19 +356,6 @@ func (s *Store) SessionInvocations(ctx context.Context, sessionID string) ([]Ses
 	return s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations WHERE session_id = ? ORDER BY created_at, id`, sessionID)
 }
 
-// ResumableSessionInvocation returns the newest accepted invocation of role in
-// the session that has a native session, or nil. A later turn of the same
-// role continues that native session.
-func (s *Store) ResumableSessionInvocation(ctx context.Context, sessionID, role string) (*SessionInvocation, error) {
-	invocations, err := s.querySessionInvocations(ctx, `SELECT `+sessionInvocationColumns+` FROM ideation_invocations
-		WHERE session_id = ? AND role = ? AND status = 'accepted' AND native_session_id != ''
-		ORDER BY created_at DESC, id DESC LIMIT 1`, sessionID, role)
-	if err != nil || len(invocations) == 0 {
-		return nil, err
-	}
-	return &invocations[0], nil
-}
-
 // AcceptSessionRoleResult applies one validated role result in a single
 // transaction: it appends the role turn, the brief revision, and the plan
 // revision, marks the invocation accepted, and commits write. It succeeds only

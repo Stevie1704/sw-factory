@@ -97,6 +97,33 @@ func TestSupervisorHeartbeatRoundTripsAndExpires(t *testing.T) {
 	}
 }
 
+// TestSupervisorHeartbeatRecordsAStoppedCoordinator verifies that a clean
+// coordinator stop can record a heartbeat that expires at its renewal: the
+// coordinator stays observable and is not live, while an expiry before the
+// renewal is still refused.
+func TestSupervisorHeartbeatRecordsAStoppedCoordinator(t *testing.T) {
+	t.Parallel()
+
+	opened, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "data", "factory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = opened.Close() }()
+	stoppedAt := time.Date(2026, 9, 17, 10, 5, 0, 0, time.UTC)
+	stopped := store.SupervisorHeartbeat{Coordinator: "host-a", PID: 1234, StartedAt: stoppedAt.Add(-time.Hour), RenewedAt: stoppedAt, ExpiresAt: stoppedAt}
+	if err := opened.SaveSupervisorHeartbeat(t.Context(), stopped); err != nil {
+		t.Fatalf("SaveSupervisorHeartbeat(stopped) error = %v", err)
+	}
+	got, err := opened.ReadSupervisorHeartbeat(t.Context())
+	if err != nil || got == nil || got.Coordinator != "host-a" || got.Live(stoppedAt) {
+		t.Fatalf("heartbeat = %#v, %v; want the stopped coordinator, not live", got, err)
+	}
+	stopped.ExpiresAt = stoppedAt.Add(-time.Second)
+	if err := opened.SaveSupervisorHeartbeat(t.Context(), stopped); err == nil {
+		t.Fatal("SaveSupervisorHeartbeat() accepted an expiry before the renewal")
+	}
+}
+
 // TestSchema40MigrationCreatesSupervisorHeartbeat verifies older operational
 // stores gain the heartbeat singleton during the normal migration path.
 func TestSchema40MigrationCreatesSupervisorHeartbeat(t *testing.T) {

@@ -598,7 +598,10 @@ and structured reports as run roles, with these differences:
   and the session revision the invocation serves. A session report leaves
   `run_id` empty. Worker resources are named from the owner key
   `session-<id>`; the worker of one role is `session-<id>-<role>`, and its role
-  volume keeps the native session between turns.
+  volume keeps the native session between turns. Each invocation pins the
+  worker image again. When the pinned digest changed since the last turn, the
+  coordinator recreates the role worker from the new image and keeps the role
+  volume; a run keeps its frozen image.
 - **Context.** Each invocation fetches the target branch and mounts a detached
   checkout of the fetched commit read-only at `/work`. That commit is the
   recorded context revision. The user's checkout is never mounted.
@@ -621,6 +624,14 @@ and structured reports as run roles, with these differences:
   ignored. It then finishes the process, stops the worker, and removes the
   snapshot, so a session that waits for the user holds no active work. The
   next user turn resumes the recorded native session on the same harness.
+  A resumed launch records the native session only after the harness
+  revealed the one it asked for. After a coordinator restart, the supervisor
+  makes the same check before it adopts a running process; another native
+  session ends the invocation as `native_session_mismatch`, and a missing
+  process as `launch_interrupted`. A resume that ends before the harness
+  reveals a native session, for example after the role volume was removed,
+  ends as `native_session_lost`; the next launch of that role starts a fresh
+  native session with the full packet.
 - **Plan validation.** Before the coordinator accepts a planning draft, it
   checks the graph with factory-owned rules (`internal/plangraph`) on top of
   the store's identity and reference checks. Each item is a `task`, an
@@ -629,7 +640,10 @@ and structured reports as run roles, with these differences:
   parent has children. Dependencies and parent relationships together must not
   form a cycle, because a parent is done only after its children. A plan has at
   most 25 items, and an item has at most 12 acceptance criteria and 10
-  dependencies. A draft that breaks a rule ends the invocation as
+  dependencies. The whole report must also fit the 256 KiB report limit:
+  items at their text limits can exceed it, and `factory-report` then refuses
+  the report with its encoded size and asks the role to shorten the longest
+  texts. A draft that breaks a rule ends the invocation as
   `plan_rejected`; the session reason lists every problem and what to change,
   and an earlier draft stays under review. The coordinator never truncates a
   draft. Planning craft, such as when to decompose, stays in the versioned
@@ -644,7 +658,10 @@ and structured reports as run roles, with these differences:
   resume that reveals another native session, credential projection failures,
   interrupted launches, and rejected reports end the invocation with a
   recorded failure kind and return the session to the user with a reason. The
-  user resubmits the same turn after the cause is fixed.
+  user resubmits the same turn after the cause is fixed. A cancel or a
+  no-build decision while a role is active stops that role at once: the
+  invocation ends as `cancelled` with the user's reason, and the session
+  keeps the state the user chose.
 
 ## Safety boundary
 

@@ -100,6 +100,9 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 	if err != nil {
 		return Outcome{}, err
 	}
+	if started, ok, err := startedRole(ctx, env, command, ideationStarted); err != nil || ok {
+		return started, err
+	}
 	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
 	if err != nil {
 		return Outcome{}, err
@@ -126,9 +129,11 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 	if env.Roles == nil {
 		return Applied(session, "turn accepted"), nil
 	}
-	detail := "turn accepted; the ideation role started"
+	detail := ideationStarted
 	if err := env.Roles.StartIdeation(ctx, session.ID, command.RequestID); err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || store.IsTransient(err) {
+			// The turn is stored and the command stays pending, so the next
+			// pass starts the role for it.
 			return Outcome{}, err
 		}
 		detail = "turn accepted; the ideation role did not start: " + err.Error()
@@ -137,6 +142,35 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 		session = current
 	}
 	return Applied(session, detail), nil
+}
+
+// Details of the applied outcome of a command that started a session role.
+const (
+	// ideationStarted is the detail of a turn that started the ideation role.
+	ideationStarted = "turn accepted; the ideation role started"
+	// planningStarted is the detail of a command that started planning.
+	planningStarted = "the planning role started"
+)
+
+// startedRole returns the applied outcome of a resumed command whose role
+// already started. The role start commits the invocation and the session
+// revision in one write, and the command outcome follows in another, so a
+// coordinator that stops between them leaves a command that a revision check
+// would report as a conflict. A first attempt reports false without a read.
+func startedRole(ctx context.Context, env Env, command store.IdeationCommand, detail string) (Outcome, bool, error) {
+	if command.Attempts <= 1 || env.Roles == nil {
+		return Outcome{}, false, nil
+	}
+	invocations, err := env.Store.SessionInvocations(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	for _, invocation := range invocations {
+		if invocation.TriggerID == command.RequestID {
+			return Outcome{Code: store.IdeationCommandApplied, SessionRevision: invocation.SessionRevision, Detail: detail}, true, nil
+		}
+	}
+	return Outcome{}, false, nil
 }
 
 // hasTurn reports whether history holds the turn id.
@@ -177,6 +211,9 @@ func handOff(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 	payload, err := payloadOf[HandOffPayload](command)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if started, ok, err := startedRole(ctx, env, command, planningStarted); err != nil || ok {
+		return started, err
 	}
 	brief, session, err := currentBrief(ctx, env, command, payload.BriefRevision)
 	if err != nil {
@@ -244,11 +281,14 @@ func investigationNeeded(ctx context.Context, env Env, command store.IdeationCom
 }
 
 // regenerateDraft checks that the displayed plan revision is current and that
-// the lifecycle allows a role start. This build has no planning role.
+// the lifecycle allows a role start. It then starts planning.
 func regenerateDraft(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[PlanRevisionPayload](command)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if started, ok, err := startedRole(ctx, env, command, planningStarted); err != nil || ok {
+		return started, err
 	}
 	session, err := CurrentSession(ctx, env, command)
 	if err != nil {
@@ -272,7 +312,7 @@ func startPlanning(ctx context.Context, env Env, session store.IdeationSession, 
 	if current, err := env.Store.IdeationSession(ctx, session.ID); err == nil {
 		session = current
 	}
-	return Applied(session, "the planning role started"), nil
+	return Applied(session, planningStarted), nil
 }
 
 // roleUnavailable reports that no session role can start, after it checked
@@ -335,7 +375,8 @@ func Transition(event workflow.SessionEvent) Handler {
 }
 
 // transitionBy returns a handler that records the event eventOf chooses for
-// the current session, with the payload reason.
+// the current session, with the payload reason. A transition out of
+// role_active, such as a cancel, then stops the active role.
 func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Handler {
 	return func(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 		payload, err := payloadOf[ReasonPayload](command)
@@ -346,6 +387,7 @@ func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Han
 		if err != nil {
 			return Outcome{}, err
 		}
+		roleActive := session.State == store.IdeationStateRoleActive
 		write, err := CommandWrite(env, session, command, eventOf(session), payload.Reason)
 		if err != nil {
 			return Outcome{}, err
@@ -353,8 +395,26 @@ func transitionBy(eventOf func(store.IdeationSession) workflow.SessionEvent) Han
 		if session, err = env.Store.TransitionIdeationSession(ctx, write); err != nil {
 			return Outcome{}, err
 		}
-		return Applied(session, "session is "+string(session.State)), nil
+		detail := "session is " + string(session.State)
+		if roleActive && env.Roles != nil {
+			detail += stopRole(ctx, env, session, payload.Reason)
+		}
+		return Applied(session, detail), nil
 	}
+}
+
+// stopRole cancels the role that was active when the user moved session on,
+// and returns a note for the outcome detail. The transition is already
+// recorded, so a failed cancel does not change the outcome: the supervisor
+// closes the invocation on its next pass because the session moved.
+func stopRole(ctx context.Context, env Env, session store.IdeationSession, reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		reason = "the user moved the session to " + string(session.State)
+	}
+	if err := env.Roles.CancelRole(ctx, session.ID, reason); err != nil {
+		return "; the active role was not stopped yet (" + err.Error() + "), the supervisor stops it on its next pass"
+	}
+	return "; the active role was cancelled"
 }
 
 // resumeEvent chooses where a parked session resumes. A session parked with
@@ -439,7 +499,9 @@ func previewPlan(ctx context.Context, env Env, command store.IdeationCommand) (O
 // approve records an approval that binds the previewed publication, with the
 // request ID as approval ID, and then publishes it. A changed rendering is
 // refused before any tracker write. A resumed command whose approval exists
-// continues with publication.
+// continues with publication. When the approval is recorded but publication
+// does not start, the approval stands: the outcome is applied and names why
+// publication did not start.
 func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -461,7 +523,27 @@ func approve(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 			return Outcome{}, err
 		}
 	}
-	return publishAttempt(ctx, env, command)
+	outcome, err := publishAttempt(ctx, env, command)
+	if err == nil || ctx.Err() != nil || store.IsTransient(err) {
+		return outcome, err
+	}
+	return approvedWithoutPublication(ctx, env, command, err)
+}
+
+// approvedWithoutPublication returns the applied outcome of an approval whose
+// publication did not start, with the cause and the next actions. A session
+// that left approved, for example because publication started, keeps cause
+// as the error, so the dispatcher settles the publication attempt.
+func approvedWithoutPublication(ctx context.Context, env Env, command store.IdeationCommand, cause error) (Outcome, error) {
+	session, err := env.Store.IdeationSession(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, errors.Join(cause, err)
+	}
+	if session.State != store.IdeationStateApproved || session.ApprovalID != command.RequestID {
+		return Outcome{}, cause
+	}
+	return Applied(session, "plan approved, but publication did not start: "+cause.Error()+
+		"; fix the cause and publish the approved plan, or edit the draft to review a new revision"), nil
 }
 
 // recordApproval checks plan validation and the preview digests against a

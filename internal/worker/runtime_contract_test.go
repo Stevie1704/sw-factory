@@ -218,6 +218,50 @@ func TestDockerRuntimeResumesThePinnedWorker(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeRecreatesAWorkerForANewImageOnlyWhenAsked verifies that a
+// run worker keeps its frozen image, while a worker started with ReplaceImage
+// is recreated from the requested image and keeps its role volume.
+func TestDockerRuntimeRecreatesAWorkerForANewImageOnlyWhenAsked(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	request := worker.StartRequest{
+		RunID:            "session-contract-image",
+		WorkerID:         "session-contract-image-ideation",
+		WorktreePath:     makeDirectory(t, "snapshot"),
+		WorktreeReadOnly: true,
+		GitMetadataPath:  makeDirectory(t, "git-metadata"),
+		Role:             "ideation",
+		Image:            "ghcr.io/example/factory-worker",
+		ImageDigest:      testWorkerDigest,
+	}
+	if err := runtime.Start(context.Background(), request); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	newer := request
+	newer.ImageDigest = "sha256:" + strings.Repeat("f", 64)
+	if err := runtime.Start(context.Background(), newer); err == nil || !strings.Contains(err.Error(), "frozen image") {
+		t.Fatalf("Start(new digest) error = %v, want the frozen-image refusal", err)
+	}
+
+	newer.ReplaceImage = true
+	if err := runtime.Start(context.Background(), newer); err != nil {
+		t.Fatalf("Start(new digest, ReplaceImage) error = %v", err)
+	}
+	lines := readStubLog(t, logPath)
+	if countLogLines(lines, " rm ") != 1 || countLogLines(lines, " run ") != 2 {
+		t.Fatalf("Docker calls = %#v, want the old worker removed and one new run", lines)
+	}
+	var runs []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "run ") {
+			runs = append(runs, line)
+		}
+	}
+	volume := testRoleVolumeName(request.WorkerID, request.Role)
+	assertContainsAll(t, runs[1], "@"+newer.ImageDigest, "src="+volume+",dst=/home/factory")
+	assertContainsAll(t, runs[0], "src="+volume+",dst=/home/factory")
+}
+
 // TestDockerRuntimeCleansRunResourcesWithoutCredentialStorage verifies that
 // destructive worker cleanup targets only the container and role-home volumes.
 func TestDockerRuntimeCleansRunResourcesWithoutCredentialStorage(t *testing.T) {
