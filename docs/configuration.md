@@ -1533,7 +1533,7 @@ still needed to retry remaining work.
 Reset retains the source checkout, its tracked files, `factory.yaml`, and
 ordinary local branches; the installed `factory`, `factory-report`, and
 `factory-worker-headless` binaries; Docker worker images; repository-declared
-cache directories; host Codex and Claude credential sources and host harness
+cache directories; host Codex, Claude, and Copilot credential sources and host harness
 state; GitHub label definitions, issues, pull requests, reviews, comments,
 commit statuses, and merged history; and remote `factory/*` branches. Retained
 labels are deliberate: `factory bootstrap-labels` is idempotent, while deleting

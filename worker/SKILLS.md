@@ -1,8 +1,9 @@
 # Worker skill set
 
-The worker image ships a curated skill set at `$HOME/.codex/skills` and
-`$HOME/.claude/skills`. Both harnesses read those directories, so a role agent
-sees the same craft references whichever adapter runs it.
+The worker image ships a curated skill set at `$HOME/.codex/skills`,
+`$HOME/.claude/skills`, and `$HOME/.copilot/skills`. Each harness reads its own
+directory, so a role agent sees the same craft references whichever adapter
+runs it.
 
 The set is factory-owned and pinned by the worker image digest recorded in
 `factory.yaml`. A run never reads a personal skill directory from the host, so
@@ -12,16 +13,26 @@ an agent's visible instructions stay reproducible for the run's digest. See
 ## Supported harnesses and discovery roots
 
 The worker image installs the harnesses pinned by `worker/base.Dockerfile`.
-Each one reads the skill set from its own role home, so the two installations
+Each one reads the skill set from its own role home, so the installations
 are separate roots holding the same names rather than one shared root.
 
 | Harness | Installed root | Other roots it also reads |
 | --- | --- | --- |
 | `codex` | `$HOME/.codex/skills` | `$HOME/.agents/skills`, the project `.codex/skills`, the system cache root |
 | `claude` | `$HOME/.claude/skills` | the project `.claude/skills`, installed plugins |
+| `copilot` | `$HOME/.copilot/skills` (`$COPILOT_HOME/skills`, personal skills) | `$HOME/.agents/skills`; the project `.github/skills`, `.claude/skills`, and `.agents/skills`; installed plugins; built-in skills |
 
 Pinned Codex still discovers the deprecated `$CODEX_HOME/skills` root, so the
 `.codex/skills` installation remains the supported location for that version.
+
+The Copilot CLI is the pinned release recorded in
+`docs/spikes/0003-copilot-cli-protocol.md`. Its private home
+`$HOME/.copilot` is on the role volume. The launcher `factory-copilot`
+restores the image-owned settings in that home before every launch:
+`ignoredSkillsLocations: ["/work"]` hides every project skill root in the
+worktree, and installed plugins are removed. `disabledSkills` names only the
+two built-in skills `customize-cloud-agent` and `github-pr-media`, never a
+curated skill.
 
 `$HOME/.agents/skills` is deliberately left empty and the checks assert it
 stays that way. A second root holding the same names would let one skill name
@@ -42,11 +53,12 @@ switch that removes a shipped skill from the model-visible catalog:
 | --- | --- | --- |
 | `codex` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | absent, so the skill is advertised |
 | `claude` | `disable-model-invocation: true` in the `SKILL.md` front matter | absent, so the skill is advertised |
+| `copilot` | the skill name in `disabledSkills` of the managed `settings.json` | only the two built-in skills are named |
 
 A hidden skill under pinned Codex is reachable only through an explicit
 `$skill-name` mention in the prompt text. The factory role prompts name a skill
 in backticks as prose, which is not an explicit mention, so a hidden skill
-would leave a role mandated to use guidance it cannot reach. Neither switch
+would leave a role mandated to use guidance it cannot reach. No switch
 appears in this set: role prompts, not activation metadata, decide which role
 uses which skill.
 
@@ -122,6 +134,13 @@ the startup diagnosis.
 `worker/skill-smoke.json` holds a `codex` record and a `claude` record for the
 pinned digest, so the startup diagnosis passes both `worker skill contract`
 checks.
+
+There is no `copilot` record. The smoke does not drive Copilot yet, and a
+live Copilot call needs the dedicated credential that release blocker RB-7 in
+`docs/spikes/0003-copilot-cli-protocol.md` still waits for. Offline,
+`scripts/verify-headless-worker.sh` runs `factory-copilot skill list` with the
+pinned CLI and requires every curated skill in the listing and no planted
+project skill. A listing is not activation evidence.
 
 macOS keeps the Claude Code credential in the login Keychain rather than in a
 file. Usually the smoke finds no file at the default `CLAUDE_AUTH_PATH` and

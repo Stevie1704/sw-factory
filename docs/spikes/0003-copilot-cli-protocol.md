@@ -187,6 +187,28 @@ token to `$COPILOT_HOME/config.json` in plain text (no keychain in the
 worker); its format is undocumented, so the environment projection is
 preferred.
 
+### Worker projection observations (#283, OBSERVED offline)
+
+The worker uses `/run/factory-auth/copilot-token` and the launcher
+`factory-copilot` (`docs/worker-runtime.md`). Offline runs of the pinned CLI
+in the built worker image, with `--network none` and sentinel values only:
+
+| `COPILOT_GITHUB_TOKEN` value | stderr first line (exit 1, empty stdout) |
+| --- | --- |
+| no type prefix (any text) | `Error: No authentication information found.` |
+| `github_pat_…`, `gho_…`, `ghu_…` | `Error: Authentication token found but could not be validated.` |
+| `ghp_…` | `Error: Classic Personal Access Tokens (ghp_) are not supported by Copilot.` |
+| `ghs_…` | `Error: Failed to load models` |
+| `GITHUB_PAT_…` (upper case) | `Error: No authentication information found.` |
+
+So the CLI ignores `COPILOT_GITHUB_TOKEN` without a supported type prefix,
+while `GH_TOKEN` with any text counts as a token (`fake-gh-token` fixture).
+`--secret-env-vars=COPILOT_GITHUB_TOKEN` does not change the result. The
+worker seeding refuses a token without a `github_pat_`, `gho_`, or `ghu_`
+prefix. `copilot skill list` through the launcher lists the curated personal
+skills, hides a planted `/work/.github/skills` skill, and marks the two
+built-in skills `(disabled)`. A listing is not activation evidence (RB-7).
+
 ## Release blockers
 
 Each blocker needs live evidence from `COPILOT_PROBE_LIVE=1` (or an operator
