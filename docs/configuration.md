@@ -1326,7 +1326,10 @@ Session commands (ADR 0021, ADR 0024):
   `investigation_needed` needs at least one unresolved question in the brief
   and creates no backlog item. `hand_off` and `regenerate_draft` start
   planning; a role that cannot start
-  is named in the outcome detail. `edit_draft` passes plan validation before
+  is named in the outcome detail. A busy store at the role start keeps the
+  command pending for the next pass. A command whose role started before the
+  coordinator stopped returns its applied outcome when it resumes; it starts
+  no second role. `edit_draft` passes plan validation before
   the coordinator saves it.
 - `approve` names the digests of a preview that `preview_plan` rendered,
   because only the coordinator talks to the tracker. Publication needs a

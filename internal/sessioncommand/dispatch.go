@@ -30,6 +30,7 @@ type Store interface {
 	SavePlanRevision(context.Context, store.IdeationWrite, store.PlanRevision) (store.IdeationSession, store.PlanRevision, error)
 	ApprovePlan(context.Context, store.IdeationWrite, store.PlanApproval) (store.IdeationSession, store.PlanApproval, error)
 	TransitionIdeationSession(context.Context, store.IdeationWrite) (store.IdeationSession, error)
+	SessionInvocations(context.Context, string) ([]store.SessionInvocation, error)
 }
 
 var _ Store = (*store.Store)(nil)

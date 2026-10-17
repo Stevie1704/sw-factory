@@ -100,6 +100,9 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 	if err != nil {
 		return Outcome{}, err
 	}
+	if started, ok, err := startedRole(ctx, env, command, ideationStarted); err != nil || ok {
+		return started, err
+	}
 	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
 	if err != nil {
 		return Outcome{}, err
@@ -126,9 +129,11 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 	if env.Roles == nil {
 		return Applied(session, "turn accepted"), nil
 	}
-	detail := "turn accepted; the ideation role started"
+	detail := ideationStarted
 	if err := env.Roles.StartIdeation(ctx, session.ID, command.RequestID); err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || store.IsTransient(err) {
+			// The turn is stored and the command stays pending, so the next
+			// pass starts the role for it.
 			return Outcome{}, err
 		}
 		detail = "turn accepted; the ideation role did not start: " + err.Error()
@@ -137,6 +142,35 @@ func submitTurn(ctx context.Context, env Env, command store.IdeationCommand) (Ou
 		session = current
 	}
 	return Applied(session, detail), nil
+}
+
+// Details of the applied outcome of a command that started a session role.
+const (
+	// ideationStarted is the detail of a turn that started the ideation role.
+	ideationStarted = "turn accepted; the ideation role started"
+	// planningStarted is the detail of a command that started planning.
+	planningStarted = "the planning role started"
+)
+
+// startedRole returns the applied outcome of a resumed command whose role
+// already started. The role start commits the invocation and the session
+// revision in one write, and the command outcome follows in another, so a
+// coordinator that stops between them leaves a command that a revision check
+// would report as a conflict. A first attempt reports false without a read.
+func startedRole(ctx context.Context, env Env, command store.IdeationCommand, detail string) (Outcome, bool, error) {
+	if command.Attempts <= 1 || env.Roles == nil {
+		return Outcome{}, false, nil
+	}
+	invocations, err := env.Store.SessionInvocations(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	for _, invocation := range invocations {
+		if invocation.TriggerID == command.RequestID {
+			return Outcome{Code: store.IdeationCommandApplied, SessionRevision: invocation.SessionRevision, Detail: detail}, true, nil
+		}
+	}
+	return Outcome{}, false, nil
 }
 
 // hasTurn reports whether history holds the turn id.
@@ -177,6 +211,9 @@ func handOff(ctx context.Context, env Env, command store.IdeationCommand) (Outco
 	payload, err := payloadOf[HandOffPayload](command)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if started, ok, err := startedRole(ctx, env, command, planningStarted); err != nil || ok {
+		return started, err
 	}
 	brief, session, err := currentBrief(ctx, env, command, payload.BriefRevision)
 	if err != nil {
@@ -244,11 +281,14 @@ func investigationNeeded(ctx context.Context, env Env, command store.IdeationCom
 }
 
 // regenerateDraft checks that the displayed plan revision is current and that
-// the lifecycle allows a role start. This build has no planning role.
+// the lifecycle allows a role start. It then starts planning.
 func regenerateDraft(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	payload, err := payloadOf[PlanRevisionPayload](command)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if started, ok, err := startedRole(ctx, env, command, planningStarted); err != nil || ok {
+		return started, err
 	}
 	session, err := CurrentSession(ctx, env, command)
 	if err != nil {
@@ -272,7 +312,7 @@ func startPlanning(ctx context.Context, env Env, session store.IdeationSession, 
 	if current, err := env.Store.IdeationSession(ctx, session.ID); err == nil {
 		session = current
 	}
-	return Applied(session, "the planning role started"), nil
+	return Applied(session, planningStarted), nil
 }
 
 // roleUnavailable reports that no session role can start, after it checked
