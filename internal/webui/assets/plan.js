@@ -205,18 +205,17 @@
 
   // split adds a second part after node id, moves the second half of its
   // acceptance criteria there, and marks every reference to id for a choice
-  // between the parts.
+  // between the parts. An item with one criterion keeps it; the new part
+  // starts without a criterion, and validation asks for one before save.
   Editor.prototype.split = function (id) {
     var original = byId(this.nodes, id);
     var part = copyNode(original);
     part.id = this.freeID(id);
     part.title = original.title + " (part 2)";
     var criteria = original.acceptance_criteria;
-    if (criteria.length > 1) {
-      var half = Math.ceil(criteria.length / 2);
-      original.acceptance_criteria = criteria.slice(0, half);
-      part.acceptance_criteria = criteria.slice(half);
-    }
+    var half = Math.ceil(criteria.length / 2);
+    original.acceptance_criteria = criteria.slice(0, half);
+    part.acceptance_criteria = criteria.slice(half);
     this.nodes.splice(this.nodes.indexOf(original) + 1, 0, part);
     this.nodes.forEach(function (node) {
       if (node === part || node === original) {
