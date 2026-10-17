@@ -196,6 +196,54 @@ func TestHeadlessRecoveryResumesTheSameCopilotSessionAfterAuthRefresh(t *testing
 	}
 }
 
+// TestHeadlessRecoveryAdoptsAnIdentityLaunchedBeforeItWasPersisted verifies
+// a coordinator that stopped after the launch but before it persisted the
+// native identity recovers that identity from the process output on restart
+// and continues exactly that session. Unusable Copilot identity evidence is
+// never adopted, so the run waits for a person instead of starting fresh.
+func TestHeadlessRecoveryAdoptsAnIdentityLaunchedBeforeItWasPersisted(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		harness config.Harness
+		stdout  string
+		adopted bool
+	}{
+		{name: "codex", harness: config.HarnessCodex, stdout: identityEvent(config.HarnessCodex, recoverySessionID), adopted: true},
+		{name: "claude", harness: config.HarnessClaude, stdout: identityEvent(config.HarnessClaude, recoverySessionID), adopted: true},
+		{name: "copilot", harness: config.HarnessCopilot, stdout: identityEvent(config.HarnessCopilot, recoverySessionID), adopted: true},
+		{name: "copilot malformed identity", harness: config.HarnessCopilot, stdout: `{"sessionId":"not-a-session"}` + "\n"},
+		{name: "copilot conflicting identities", harness: config.HarnessCopilot, stdout: identityEvent(config.HarnessCopilot, recoverySessionID) + `{"sessionId":"0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}` + "\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHeadlessRecoveryFixture(t, test.harness, "")
+			processes := &headlessProcessRecoveryWorker{
+				headlessRecoveryWorker: fixture.worker, harness: test.harness, onLaunch: runningProcess(test.harness),
+				process: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: test.stdout},
+			}
+
+			err := fixture.restartCoordinator(processes)
+
+			invocation := fixture.persistedInvocation(t)
+			if !test.adopted {
+				if invocation.NativeSessionID != "" || len(processes.launches) != 0 {
+					t.Fatalf("invocation session %q with %d launches, want no adopted identity and no launch", invocation.NativeSessionID, len(processes.launches))
+				}
+				if run := fixture.persistedRun(t); run.Status != store.StatusWaitingForHuman {
+					t.Fatalf("run = %s (%q), want a human pause; reconcile error %v", run.Status, run.LifecycleReason, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("startup reconciliation: %v", err)
+			}
+			if invocation.NativeSessionID != recoverySessionID {
+				t.Fatalf("persisted native session = %q, want the launched %s", invocation.NativeSessionID, recoverySessionID)
+			}
+			assertOnlyExactResumes(t, processes, 1)
+		})
+	}
+}
+
 // restartCoordinator builds a new coordinator over the fixture's durable state
 // with production adapters bound to the controlled process worker, and runs
 // its startup reconciliation once.
