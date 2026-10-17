@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -33,6 +34,34 @@ func TestEveryScenarioNamesExistingDeterministicTests(t *testing.T) {
 			if !tests[directory][name] {
 				t.Errorf("scenario %q names %s, which does not exist", scenario.ID, reference)
 			}
+		}
+	}
+}
+
+// releaseEvidenceTest matches a `<package directory>:<TestName>` reference in
+// a release evidence record. The directory "." is the module root.
+var releaseEvidenceTest = regexp.MustCompile("`" + `(\.|[a-z][a-z0-9_/-]*):(Test[A-Za-z0-9_]+)` + "`")
+
+// TestCopilotReleaseEvidenceNamesExistingTests keeps the Copilot release
+// traceability record honest: every deterministic test it cites as evidence
+// for an acceptance criterion must exist.
+func TestCopilotReleaseEvidenceNamesExistingTests(t *testing.T) {
+	record, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "acceptance", "copilot.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	references := releaseEvidenceTest.FindAllStringSubmatch(string(record), -1)
+	if len(references) == 0 {
+		t.Fatal("docs/acceptance/copilot.md names no deterministic test")
+	}
+	tests := map[string]map[string]bool{}
+	for _, reference := range references {
+		directory, name := reference[1], reference[2]
+		if tests[directory] == nil {
+			tests[directory] = testFunctions(t, filepath.Join(repositoryRoot, filepath.FromSlash(directory)))
+		}
+		if !tests[directory][name] {
+			t.Errorf("docs/acceptance/copilot.md names %s:%s, which does not exist", directory, name)
 		}
 	}
 }
