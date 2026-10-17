@@ -65,7 +65,7 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 		return Result{}, err
 	}
 	if !approval.Binds(session.PlanRevision, fresh.Target, fresh.Payload, fresh.RelationshipMapping) {
-		return Result{}, fmt.Errorf("%w: approval %q of session %q; review and approve the current preview", ErrStaleApproval, approval.ID, session.ID)
+		return Result{}, fmt.Errorf("%w: approval %q of session %q; %s", ErrStaleApproval, approval.ID, session.ID, staleApprovalAction(session.State))
 	}
 	approved, err := decodeApproval(approval)
 	if err != nil {
@@ -91,6 +91,19 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	}
 	result, err := p.finish(ctx, session.ID, request.AttemptID, approval.ID, run.ledger, halt)
 	return result, errors.Join(runErr, err)
+}
+
+// staleApprovalAction names what the user can do about provider drift after
+// approval in state, limited to the actions the session lifecycle offers
+// there. An approved session can return to plan review through an edit and
+// then be approved again. Once publication started, the approved plan can
+// no longer change: only a restored tracker configuration lets a retry
+// continue, and cancellation keeps the created items.
+func staleApprovalAction(state store.IdeationState) string {
+	if state == store.IdeationStateApproved {
+		return "restore the tracker configuration and publish again, or edit the draft to return it to review and approve the new preview"
+	}
+	return "restore the tracker configuration and publish again, or cancel the session; created items stay in the tracker"
 }
 
 // finish records the receipt and lifecycle result of one attempt. It runs
