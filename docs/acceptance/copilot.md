@@ -216,8 +216,10 @@ a token, a transcript, or a host path.
 
 1. Rebuild the worker image with `scripts/build-worker.sh`, record the new
    digest in `factory.yaml`, and run `factory doctor`.
-2. Run the live probes:
-   `COPILOT_PROBE_LIVE=1 COPILOT_PROBE_TOKEN_FILE=<token file> scripts/probe-copilot-cli.sh <output directory>`.
+2. Run the live probes on the pinned worker image. They launch Copilot only
+   through `factory-copilot`, so they observe the managed settings and the
+   curated skills of a real launch:
+   `COPILOT_PROBE_LIVE=1 COPILOT_PROBE_TOKEN_FILE=<token file> COPILOT_PROBE_WORKER_IMAGE=<image@digest> scripts/probe-copilot-cli.sh <output directory>`.
    Update the spike record for RB-1 to RB-7.
 3. Run the skill smoke for the pinned image:
    `HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh`.

@@ -247,3 +247,48 @@ func TestCopilotFixturesAreSanitized(t *testing.T) {
 		}
 	}
 }
+
+// liveProbeLine matches one recorded live probe call and captures the command
+// it runs.
+var liveProbeLine = regexp.MustCompile(`(?m)^live_probe\s+\S+\s+(\S+)`)
+
+// TestCopilotLiveProbesRunThroughTheProductionLauncher verifies that every
+// live probe, which is the RB-7 suppression evidence, runs on the production
+// worker image through factory-copilot with its managed settings and its own
+// credential projection, never through the bare CLI.
+func TestCopilotLiveProbesRunThroughTheProductionLauncher(t *testing.T) {
+	manifest := readCopilotManifest(t)
+	script, err := os.ReadFile(manifest.ProbeScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, live, found := strings.Cut(string(script), "# Live probes.")
+	if !found {
+		t.Fatalf("%s has no live probe section", manifest.ProbeScript)
+	}
+	if !strings.Contains(live, "COPILOT_PROBE_WORKER_IMAGE") {
+		t.Errorf("live probes do not run on the production worker image")
+	}
+	if !strings.Contains(live, "target=/run/factory-auth/copilot-token,readonly") {
+		t.Errorf("live probes do not project the credential where factory-copilot reads it")
+	}
+	if strings.Contains(live, "COPILOT_GITHUB_TOKEN=") {
+		t.Errorf("live probes export the token themselves instead of the launcher")
+	}
+	calls := liveProbeLine.FindAllStringSubmatch(live, -1)
+	if len(calls) == 0 {
+		t.Fatal("live probe section records no live_probe call")
+	}
+	launched := 0
+	for _, call := range calls {
+		switch call[1] {
+		case "copilot":
+			t.Errorf("live probe %q runs the bare CLI, want factory-copilot", call[0])
+		case "factory-copilot":
+			launched++
+		}
+	}
+	if launched == 0 {
+		t.Error("no live probe runs factory-copilot")
+	}
+}
