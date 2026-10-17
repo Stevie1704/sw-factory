@@ -21,7 +21,8 @@
 // The outcome is written into the form's [data-command-status] element, and
 // a "factory:command" event with the answer is sent from the form. When the
 // UI server cannot be reached, a "factory:command-unreachable" event is sent
-// instead and the form keeps its request ID for the resend.
+// instead and the form keeps its request ID for the resend. A form also keeps
+// its request ID after an answer that is not final.
 (function () {
   "use strict";
 
@@ -52,6 +53,26 @@
     return !!value && typeof value === "object" && typeof value.status === "number";
   }
 
+  // isFinal reports whether answer settles its request: a completed command,
+  // or a refusal that appended nothing. A store_unavailable answer is not
+  // final, because the command can be in the inbox; a resend with the same
+  // request ID then returns it.
+  function isFinal(answer) {
+    if (!isAnswer(answer)) {
+      return false;
+    }
+    if (answer.state) {
+      return answer.state === "completed";
+    }
+    return answer.outcome !== "store_unavailable";
+  }
+
+  // pending reports whether answer is a command the coordinator has not
+  // completed yet.
+  function pending(answer) {
+    return answer.state === "accepted" || answer.state === "applying";
+  }
+
   // readAnswer returns the JSON answer with its HTTP status.
   function readAnswer(response) {
     return response.json().then(function (answer) {
@@ -77,9 +98,11 @@
     });
   }
 
-  // wait polls an accepted command until it completes.
+  // wait polls an accepted command until it completes. A poll answer
+  // without a command state, or a failed poll, keeps the last known state
+  // and polls again.
   function wait(answer) {
-    if (answer.state !== "accepted" && answer.state !== "applying") {
+    if (!pending(answer)) {
       return Promise.resolve(answer);
     }
     return new Promise(function (resolve) {
@@ -88,7 +111,9 @@
       return fetch("/api/commands/" + encodeURIComponent(answer.request_id), {
         credentials: "same-origin",
         cache: "no-store"
-      }).then(readAnswer, function () {
+      }).then(readAnswer).then(function (polled) {
+        return polled.state ? polled : answer;
+      }, function () {
         return answer;
       });
     }).then(wait);
@@ -159,16 +184,18 @@
         expected_revision: Number(form.dataset.expectedRevision),
         payload: payloadOf(form)
       }, 1).then(function (answer) {
-        if (status && (answer.state === "accepted" || answer.state === "applying")) {
+        if (status && pending(answer)) {
           status.textContent = "accepted; waits for the coordinator";
         }
         return wait(answer);
       }).then(function (answer) {
         if (status) {
-          status.textContent = describe(answer);
+          status.textContent = describe(answer) + (isFinal(answer) ? "" : "; submit again to retry the same request");
         }
-        delete form.dataset.dirty;
-        delete form.dataset.requestId;
+        if (isFinal(answer)) {
+          delete form.dataset.dirty;
+          delete form.dataset.requestId;
+        }
         form.dispatchEvent(new CustomEvent("factory:command", { bubbles: true, detail: answer }));
       }, function () {
         if (status) {
@@ -185,7 +212,7 @@
     Array.prototype.forEach.call(document.querySelectorAll("form[data-session-command]"), wire);
   }
 
-  window.factoryCommands = { submit: submit, newRequestID: newRequestID, isAnswer: isAnswer };
+  window.factoryCommands = { submit: submit, newRequestID: newRequestID, isAnswer: isAnswer, isFinal: isFinal };
   wireAll();
   new MutationObserver(wireAll).observe(document.body, { childList: true, subtree: true });
 })();

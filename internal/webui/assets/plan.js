@@ -332,6 +332,12 @@
       payload: { nodes: editor.nodes.map(payloadNode) }
     }).then(function (answer) {
       editor.inFlight = false;
+      if (!window.factoryCommands.isFinal(answer)) {
+        // The command can be in the inbox, so the next save replays it.
+        editor.showState();
+        editor.status.textContent = (answer.outcome || answer.state) + ": " + (answer.detail || "") + " Save again to retry the same request.";
+        return;
+      }
       editor.requestID = "";
       if (answer.outcome === "applied") {
         delete editor.form.dataset.dirty;
