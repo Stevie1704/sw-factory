@@ -129,6 +129,11 @@ type StartRequest struct {
 	// Limits are the host-owned resource limits for a new worker container.
 	// Omitted values select the documented defaults.
 	Limits ResourceLimits
+	// ReplaceImage recreates an existing worker whose image differs from
+	// Image@ImageDigest instead of refusing it. The role volume stays. A
+	// session role sets it, because each invocation pins the image again;
+	// a run keeps its frozen image and leaves it unset.
+	ReplaceImage bool
 }
 
 // ResumeRequest contains the immutable image identity needed to resume an
@@ -353,7 +358,9 @@ func NewDockerRuntime() *DockerRuntime {
 
 // Start creates a hardened worker from the exact image@digest reference. A
 // running matching worker is reused, while a stopped matching worker is
-// started in place when its mount contract matches the request.
+// started in place when its mount contract matches the request. A worker
+// with another image is refused, or recreated when the request sets
+// ReplaceImage.
 func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	if err := validateStartRequest(request); err != nil {
 		return err
@@ -362,10 +369,15 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 	name := containerName(workerID)
 	inspection, err := r.inspectContainer(ctx, name)
 	if err == nil {
-		if inspection.Image != imageReference(request.Image, request.ImageDigest) {
+		imageChanged := inspection.Image != imageReference(request.Image, request.ImageDigest)
+		if imageChanged && !request.ReplaceImage {
 			return fmt.Errorf("worker %q uses image %q, want frozen image %q", request.RunID, inspection.Image, imageReference(request.Image, request.ImageDigest))
 		}
-		if !workerMountsPresent(request, inspection) {
+		if imageChanged {
+			if err := r.recreateWorker(ctx, name, inspection.Running); err != nil {
+				return fmt.Errorf("recreate worker %q for image %q: %w", request.RunID, imageReference(request.Image, request.ImageDigest), err)
+			}
+		} else if !workerMountsPresent(request, inspection) {
 			if err := r.recreateWorker(ctx, name, inspection.Running); err != nil {
 				return fmt.Errorf("recreate worker %q for required mounts: %w", request.RunID, err)
 			}

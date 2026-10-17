@@ -598,7 +598,10 @@ and structured reports as run roles, with these differences:
   and the session revision the invocation serves. A session report leaves
   `run_id` empty. Worker resources are named from the owner key
   `session-<id>`; the worker of one role is `session-<id>-<role>`, and its role
-  volume keeps the native session between turns.
+  volume keeps the native session between turns. Each invocation pins the
+  worker image again. When the pinned digest changed since the last turn, the
+  coordinator recreates the role worker from the new image and keeps the role
+  volume; a run keeps its frozen image.
 - **Context.** Each invocation fetches the target branch and mounts a detached
   checkout of the fetched commit read-only at `/work`. That commit is the
   recorded context revision. The user's checkout is never mounted.

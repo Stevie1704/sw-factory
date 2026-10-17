@@ -429,6 +429,34 @@ func TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses(t *testing.T) {
 	}
 }
 
+// TestSessionRolesPinTheNewImageOfTheNextTurn verifies that a worker image
+// digest change between two turns pins the new digest on the next
+// invocation and asks the worker runtime to recreate the session role worker
+// from it, so the turn does not fail on the image of the first turn.
+func TestSessionRolesPinTheNewImageOfTheNextTurn(t *testing.T) {
+	fixture := newSessionFixture(t, config.HarnessClaude)
+	first, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.report(first, ideationResultForTest())
+	if err := fixture.roles().Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+	fixture.policy.WorkerBuild.Digest = newDigest
+	fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
+	second, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+	if err != nil {
+		t.Fatalf("StartIdeationTurn(new digest) error = %v", err)
+	}
+	start := fixture.worker.starts[1]
+	if second.ImageDigest != newDigest || start.ImageDigest != newDigest || !start.ReplaceImage || start.WorkerID != fixture.worker.starts[0].WorkerID {
+		t.Fatalf("second invocation = %#v, worker start = %#v; want the new digest pinned on the same role worker with ReplaceImage", second, start)
+	}
+}
+
 // TestSessionRolesAcceptAtMostOneResultPerUserTurn verifies that a second
 // launch for an answered turn is refused, and that a role result from a
 // cancelled invocation or an old revision changes nothing.

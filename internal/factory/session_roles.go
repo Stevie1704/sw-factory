@@ -274,7 +274,9 @@ func (r *SessionRoles) launch(ctx context.Context, launch sessionLaunch) (store.
 }
 
 // startProcess starts the read-only worker, projects the harness credential,
-// and starts or resumes the native session.
+// and starts or resumes the native session. Each invocation pins the image
+// again, so the session role worker is recreated from a changed image; its
+// role volume, which holds the native session, stays.
 func (r *SessionRoles) startProcess(ctx context.Context, invocation store.SessionInvocation, adapter harness.HeadlessRuntime, promptText string, seed func(context.Context, string, string) error) (string, error) {
 	owner := sessionWorkerOwner(invocation.SessionID)
 	gitMetadata, err := prepareGitMetadataProjection(invocation.ID, r.deps.Registration.Path, invocation.SnapshotPath)
@@ -286,7 +288,7 @@ func (r *SessionRoles) startProcess(ctx context.Context, invocation store.Sessio
 		GitMetadataPath: gitMetadata, Image: invocation.Image, ImageDigest: invocation.ImageDigest,
 		InvocationPath: invocation.InvocationDirectory, ResultPath: invocation.ResultDirectory,
 		CredentialStoreID: invocation.CredentialStoreID, Role: invocation.Role,
-		Limits: config.EffectiveWorkerLimits(r.deps.Registration.WorkerLimits),
+		Limits: config.EffectiveWorkerLimits(r.deps.Registration.WorkerLimits), ReplaceImage: true,
 	}); err != nil {
 		return "", fmt.Errorf("start session worker: %w", err)
 	}
