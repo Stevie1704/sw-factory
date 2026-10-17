@@ -25,9 +25,11 @@ type faultyStoreForTest struct {
 	*store.Store
 	failOn  func(store.PublicationOperation) bool
 	crash   bool
-	mu      sync.Mutex
-	crashed bool
-	fired   bool
+	// failReceipts counts the receipt writes that fail before one passes.
+	failReceipts int
+	mu           sync.Mutex
+	crashed      bool
+	fired        bool
 }
 
 // down reports whether the simulated process is dead.
@@ -81,10 +83,20 @@ func (f *faultyStoreForTest) TransitionIdeationSession(ctx context.Context, writ
 	return f.Store.TransitionIdeationSession(ctx, write)
 }
 
-// RecordPublicationReceipt fails after a crash.
+// RecordPublicationReceipt fails after a crash, and fails the first
+// failReceipts receipt writes without persisting them.
 func (f *faultyStoreForTest) RecordPublicationReceipt(ctx context.Context, write store.IdeationWrite, receipt store.PublicationReceipt) (store.IdeationSession, store.PublicationReceipt, error) {
 	if err := f.down(); err != nil {
 		return store.IdeationSession{}, store.PublicationReceipt{}, err
+	}
+	f.mu.Lock()
+	fail := f.failReceipts > 0
+	if fail {
+		f.failReceipts--
+	}
+	f.mu.Unlock()
+	if fail {
+		return store.IdeationSession{}, store.PublicationReceipt{}, errors.New("injected receipt write failure")
 	}
 	return f.Store.RecordPublicationReceipt(ctx, write, receipt)
 }
@@ -418,11 +430,62 @@ func TestCancellationStopsFutureWorkWithoutDeletingItems(t *testing.T) {
 		if got := h.operation("item/n-1"); got.State != store.PublicationOperationSucceeded || got.ExternalID != h.fake.Items()[0].Ref.ExternalID {
 			t.Fatalf("item/n-1 = %#v, want its identity kept", got)
 		}
+		recorded := h.receipt("attempt-1")
+		if recorded.Outcome != store.PublicationOutcomeIncomplete || len(recorded.Items) != 1 || recorded.Items[0].NodeID != "n-1" ||
+			recorded.Items[0].ExternalID != h.fake.Items()[0].Ref.ExternalID || result.Receipt.ID != "attempt-1" {
+			t.Fatalf("receipt = %#v, result receipt = %#v; want an incomplete receipt that lists the created n-1", recorded, result.Receipt)
+		}
+		for _, want := range []string{"cancelled", "not run: item/n-2, item/n-3, link/parent/n-3/n-1, link/depends_on/n-3/n-2, link/parent/n-2/n-1"} {
+			if !strings.Contains(recorded.Detail, want) {
+				t.Fatalf("receipt detail = %q, want %q", recorded.Detail, want)
+			}
+		}
 		if _, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"}); !errors.Is(err, publication.ErrNotPublishable) {
 			t.Fatalf("Publish() after cancel error = %v, want ErrNotPublishable", err)
 		}
 		h.assertInertTracker()
 	})
+
+	t.Run("cancelled attempt records its receipt on resume", func(t *testing.T) {
+		t.Parallel()
+		h := newApprovedHarness(t)
+		faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+		cancelling := &afterFirstCreateForTest{PlanTracker: h.fake}
+		cancelling.hook = func() {
+			if _, err := h.store.TransitionIdeationSession(t.Context(), h.write(h.session(), workflow.SessionEventCancelled)); err != nil {
+				t.Errorf("cancel session: %v", err)
+			}
+		}
+		if _, err := h.publisherWith(faulty, cancelling).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err == nil {
+			t.Fatal("Publish() hid the receipt failure")
+		}
+		resumed, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"})
+		if !errors.Is(err, publication.ErrPublicationCancelled) {
+			t.Fatalf("resumed Publish() error = %v, want ErrPublicationCancelled", err)
+		}
+		if resumed.Receipt.ID != "attempt-1" || len(resumed.Receipt.Items) != 1 || h.fake.Writes() != 1 {
+			t.Fatalf("resumed receipt = %#v with %d writes; want the n-1 receipt and no new write", resumed.Receipt, h.fake.Writes())
+		}
+		if state := h.session().State; state != store.IdeationStateCancelled {
+			t.Fatalf("session state = %s, want cancelled", state)
+		}
+	})
+}
+
+// receipt returns the recorded receipt with id.
+func (h *harness) receipt(id string) store.PublicationReceipt {
+	h.t.Helper()
+	history, err := h.store.IdeationHistory(h.t.Context(), h.sessionID)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for _, receipt := range history.Receipts {
+		if receipt.ID == id {
+			return receipt
+		}
+	}
+	h.t.Fatalf("receipts = %#v, want %q", history.Receipts, id)
+	return store.PublicationReceipt{}
 }
 
 // TestCancelledSessionReconcilesAnAmbiguousCreate verifies that a session

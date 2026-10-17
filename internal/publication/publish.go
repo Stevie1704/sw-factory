@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -52,6 +53,9 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	if !ok {
 		return Result{}, fmt.Errorf("%w: session %q", ErrNotApproved, session.ID)
 	}
+	if ledger := approvalOperations(history.Operations, approval.ID); session.State == store.IdeationStateCancelled && lacksCancelledReceipt(history, approval.ID, ledger) {
+		return p.finish(ctx, session.ID, request.AttemptID, approval.ID, ledger, "the session was cancelled during publication")
+	}
 	if session.State != store.IdeationStateApproved && session.State != store.IdeationStatePublishing &&
 		session.State != store.IdeationStatePublicationIncomplete {
 		return Result{}, fmt.Errorf("%w: session %q is %s", ErrNotPublishable, session.ID, session.State)
@@ -99,7 +103,7 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	if session.State == store.IdeationStateCancelled {
-		return Result{Session: session, Operations: ledger}, fmt.Errorf("%w: session %q; created items stay in the tracker", ErrPublicationCancelled, session.ID)
+		return p.finishCancelled(ctx, session, attemptID, approvalID, ledger, halt)
 	}
 	receipt := receiptFromLedger(attemptID, approvalID, ledger)
 	if halt != "" {
@@ -122,6 +126,83 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return Result{Operations: ledger}, err
 	}
 	return Result{Session: session, Receipt: receipt, Operations: ledger}, nil
+}
+
+// finishCancelled records the incomplete receipt of an attempt that the
+// session's cancellation stopped. The receipt lists every item and
+// relationship that exists, and its detail names every operation whose
+// outcome is unknown, that made no change, or that never ran. The session
+// stays cancelled with its reason, and the result carries
+// ErrPublicationCancelled, because publication does not resume.
+func (p *Publisher) finishCancelled(ctx context.Context, session store.IdeationSession, attemptID, approvalID string, ledger []store.PublicationOperation, halt string) (Result, error) {
+	cancelled := fmt.Errorf("%w: session %q; created items stay in the tracker", ErrPublicationCancelled, session.ID)
+	if len(ledger) == 0 {
+		return Result{Session: session, Operations: ledger}, cancelled
+	}
+	receipt := receiptFromLedger(attemptID, approvalID, ledger)
+	receipt.Outcome = store.PublicationOutcomeIncomplete
+	if halt == "" {
+		halt = "the session was cancelled during publication"
+	}
+	receipt.Detail = bounded(halt + "; created items stay in the tracker; " + ledgerGaps(ledger))
+	write, err := p.Lifecycle.Write(session, workflow.SessionEventReconciled, session.StateReason, p.now())
+	if err != nil {
+		return Result{Session: session, Operations: ledger}, err
+	}
+	session, receipt, err = p.Store.RecordPublicationReceipt(ctx, write, receipt)
+	if err != nil {
+		return Result{Operations: ledger}, err
+	}
+	return Result{Session: session, Receipt: receipt, Operations: ledger}, cancelled
+}
+
+// lacksCancelledReceipt reports whether a cancelled session's ledger of
+// approvalID has evidence that no receipt records yet: the ledger is not
+// empty and no receipt of the approval lists exactly the items and
+// relationships that the ledger shows as created. A resumed attempt whose
+// receipt write failed after the cancellation then records it.
+func lacksCancelledReceipt(history store.IdeationHistory, approvalID string, ledger []store.PublicationOperation) bool {
+	if len(ledger) == 0 {
+		return false
+	}
+	current := receiptFromLedger("", approvalID, ledger)
+	for _, receipt := range history.Receipts {
+		if receipt.ApprovalID == approvalID && slices.Equal(receipt.Items, current.Items) && slices.Equal(receipt.Relationships, current.Relationships) {
+			return false
+		}
+	}
+	return true
+}
+
+// ledgerGaps names every operation of ledger that did not succeed, grouped
+// by what is known about it, for a receipt detail.
+func ledgerGaps(ledger []store.PublicationOperation) string {
+	groups := []struct {
+		label  string
+		states []store.PublicationOperationState
+		ids    []string
+	}{
+		{label: "unknown outcome", states: []store.PublicationOperationState{store.PublicationOperationAttempted, store.PublicationOperationAmbiguous}},
+		{label: "not applied", states: []store.PublicationOperationState{store.PublicationOperationFailed}},
+		{label: "not run", states: []store.PublicationOperationState{store.PublicationOperationPending}},
+	}
+	for _, operation := range ledger {
+		for index := range groups {
+			if slices.Contains(groups[index].states, operation.State) {
+				groups[index].ids = append(groups[index].ids, operation.ID)
+			}
+		}
+	}
+	parts := []string{}
+	for _, group := range groups {
+		if len(group.ids) > 0 {
+			parts = append(parts, group.label+": "+strings.Join(group.ids, ", "))
+		}
+	}
+	if len(parts) == 0 {
+		return "every operation succeeded"
+	}
+	return strings.Join(parts, "; ")
 }
 
 // receiptFromLedger returns the receipt id of approvalID that lists every
