@@ -67,10 +67,11 @@ func (c *CopilotHeadless) StartHeadless(ctx context.Context, request HeadlessSta
 	if err != nil {
 		return HeadlessSession{}, fmt.Errorf("assign Copilot native session id: %w", err)
 	}
-	// As for Claude Code, a replayed fresh start adopts the process that
-	// already owns this invocation, which was given an earlier identity.
-	// Exact-identity enforcement therefore belongs on resume only.
-	return c.launch(ctx, request, copilotHeadlessCommand(request, "--session-id="+assigned), worker.HeadlessLaunchFresh, "")
+	// A newly started process must confirm the assigned identity, so a CLI
+	// that ignores --session-id fails closed. A replayed fresh start that
+	// adopts the process already owning this invocation keeps the identity
+	// that process was given earlier; the shared launch skips the check then.
+	return c.launch(ctx, request, copilotHeadlessCommand(request, "--session-id="+assigned), worker.HeadlessLaunchFresh, "", assigned)
 }
 
 // ResumeHeadless continues exactly the recorded native session. The CLI
@@ -88,7 +89,7 @@ func (c *CopilotHeadless) ResumeHeadless(ctx context.Context, request HeadlessSt
 	if err := validateCopilotSelection(request); err != nil {
 		return HeadlessSession{}, err
 	}
-	return c.launch(ctx, request, copilotHeadlessCommand(request, "--resume="+request.ResumeSessionID), worker.HeadlessLaunchResume, request.ResumeSessionID)
+	return c.launch(ctx, request, copilotHeadlessCommand(request, "--resume="+request.ResumeSessionID), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
 // copilotReasoningEfforts is the effort set the pinned CLI 1.0.98 accepts.

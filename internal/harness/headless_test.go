@@ -199,8 +199,11 @@ type headlessTestWorker struct {
 	inspections  []worker.HeadlessInspection
 	inspectCalls int
 	startErr     error
-	cancelCalls  int
-	finishCalls  int
+	// adopted reports that a process already owned the invocation, so the
+	// launch reused it instead of starting the requested command.
+	adopted     bool
+	cancelCalls int
+	finishCalls int
 	// respond derives the projection from the recorded launch, so a test can
 	// verify that an adapter-assigned native identity round-trips.
 	respond func(worker.HeadlessRequest) worker.HeadlessInspection
@@ -231,7 +234,7 @@ func (w *headlessTestWorker) StartHeadless(_ context.Context, request worker.Hea
 	if w.startErr != nil {
 		return worker.HeadlessExecution{}, w.startErr
 	}
-	return worker.HeadlessExecution{RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID}, nil
+	return worker.HeadlessExecution{RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID, Adopted: w.adopted}, nil
 }
 
 // InspectHeadless returns the controlled process state.

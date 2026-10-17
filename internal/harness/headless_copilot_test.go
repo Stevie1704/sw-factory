@@ -146,10 +146,27 @@ func TestCopilotHeadlessResumesOnlyTheRecordedCompleteIdentity(t *testing.T) {
 // TestCopilotHeadlessAdoptsTheProcessThatAlreadyOwnsTheInvocation verifies a
 // replayed fresh launch keeps the surviving process and its identity.
 func TestCopilotHeadlessAdoptsTheProcessThatAlreadyOwnsTheInvocation(t *testing.T) {
-	workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: copilotIdentityEvidence(copilotHeadlessSession)}}
+	workerRuntime := &headlessTestWorker{adopted: true, inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: copilotIdentityEvidence(copilotHeadlessSession)}}
 	session, err := harness.NewCopilotHeadless(workerRuntime).StartHeadless(context.Background(), copilotRequest())
 	if err != nil || session.NativeSessionID != copilotHeadlessSession || workerRuntime.cancelCalls != 0 {
 		t.Fatalf("StartHeadless() = %#v, %v with %d cancellations; want the surviving process", session, err, workerRuntime.cancelCalls)
+	}
+}
+
+// TestCopilotHeadlessRefusesAFreshStartThatIgnoresTheAssignedSession verifies
+// that a newly started process must confirm the --session-id it was given. A
+// CLI that ignores the option and reports its own identity fails closed as a
+// native session mismatch, and the process is cleaned up.
+func TestCopilotHeadlessRefusesAFreshStartThatIgnoresTheAssignedSession(t *testing.T) {
+	workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: copilotIdentityEvidence(headlessTestSession)}}
+	runtime := harness.NewCopilotHeadless(workerRuntime)
+	runtime.NewSessionID = func() (string, error) { return copilotHeadlessSession, nil }
+	_, err := runtime.StartHeadless(context.Background(), copilotRequest())
+	if !harness.IsNativeSessionMismatch(err) {
+		t.Fatalf("StartHeadless() = %v, want a native session mismatch", err)
+	}
+	if workerRuntime.cancelCalls != 1 {
+		t.Fatalf("cancellations = %d, want one failed-launch cleanup", workerRuntime.cancelCalls)
 	}
 }
 

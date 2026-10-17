@@ -93,7 +93,7 @@ func (c *ClaudeHeadless) StartHeadless(ctx context.Context, request HeadlessStar
 	// process was given. Requiring the newly generated identity there would
 	// cancel a healthy run. Exact-session enforcement belongs on resume, where
 	// it guards against a forked conversation.
-	return c.launch(ctx, request, claudeHeadlessCommand(request, assigned, false), worker.HeadlessLaunchFresh, "")
+	return c.launch(ctx, request, claudeHeadlessCommand(request, assigned, false), worker.HeadlessLaunchFresh, "", "")
 }
 
 // ResumeHeadless continues the exact persisted native session and never
@@ -109,7 +109,7 @@ func (c *ClaudeHeadless) ResumeHeadless(ctx context.Context, request HeadlessSta
 	if !validSessionID(request.ResumeSessionID) {
 		return HeadlessSession{}, errors.New("Claude native session id must be a version-four UUID")
 	}
-	return c.launch(ctx, request, claudeHeadlessCommand(request, request.ResumeSessionID, true), worker.HeadlessLaunchResume, request.ResumeSessionID)
+	return c.launch(ctx, request, claudeHeadlessCommand(request, request.ResumeSessionID, true), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
 // claudeHeadlessCommand translates one neutral request into the documented

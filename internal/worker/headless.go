@@ -77,6 +77,11 @@ type HeadlessExecution struct {
 	WorkerID string
 	// InvocationID identifies the process state.
 	InvocationID string
+	// Adopted reports that a process already owned the invocation, so this
+	// call reused it and did not run the requested command. An adapter that
+	// assigned a native identity for this call can require it back only when
+	// Adopted is false.
+	Adopted bool
 }
 
 // HeadlessInspection reports bounded detached-process state and diagnostics.
@@ -129,13 +134,13 @@ func (r *DockerRuntime) StartHeadless(ctx context.Context, request HeadlessReque
 	case HeadlessStatusStarting, HeadlessStatusRunning:
 		// A detached process already owns the invocation, or a resume is still
 		// in flight. Both states are idempotent observations across response loss.
-		return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID}, nil
+		return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID, Adopted: true}, nil
 	case HeadlessStatusExited:
 		if request.Mode == HeadlessLaunchFresh {
 			// A fresh launch is idempotent across coordinator response loss. The
 			// durable helper state is the launch boundary, so never create a
 			// second native process for the same invocation.
-			return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID}, nil
+			return HeadlessExecution{RunID: request.RunID, WorkerID: workerID, InvocationID: request.InvocationID, Adopted: true}, nil
 		}
 	case HeadlessStatusCancelled:
 		if request.Mode != HeadlessLaunchResume {

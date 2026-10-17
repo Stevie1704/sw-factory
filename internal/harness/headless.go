@@ -255,8 +255,11 @@ func (h *headless) HeadlessFailureFor(ctx context.Context, request HeadlessInspe
 // launch runs one already-translated native command in the detached worker and
 // returns only after the harness has revealed its native session identity.
 // expectedSessionID is the identity the caller requires, empty when the harness
-// assigns one that the adapter must discover.
-func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, command []string, mode worker.HeadlessLaunchMode, expectedSessionID string) (HeadlessSession, error) {
+// assigns one that the adapter must discover. assignedSessionID is the identity
+// the adapter gave this command; it is required back only when the worker
+// started the command instead of adopting a process that already owned the
+// invocation. Empty means the adapter does not enforce an assigned identity.
+func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, command []string, mode worker.HeadlessLaunchMode, expectedSessionID, assignedSessionID string) (HeadlessSession, error) {
 	if err := validateHeadlessStartRequest(h.protocol.name, request); err != nil {
 		return HeadlessSession{}, err
 	}
@@ -276,13 +279,16 @@ func (h *headless) launch(ctx context.Context, request HeadlessStartRequest, com
 	for name, value := range h.protocol.environment {
 		environment[name] = value
 	}
-	_, err := h.worker.StartHeadless(ctx, worker.HeadlessRequest{
+	execution, err := h.worker.StartHeadless(ctx, worker.HeadlessRequest{
 		RunID: request.RunID, WorkerID: request.WorkerID, InvocationID: request.InvocationID,
 		Command: command, EnvironmentPolicy: worker.EnvironmentPolicyRole, Role: request.Role,
 		Environment: environment, Mode: mode,
 	})
 	if err != nil {
 		return HeadlessSession{}, normalizeHeadlessError(h.protocol.name, err)
+	}
+	if expectedSessionID == "" && !execution.Adopted {
+		expectedSessionID = assignedSessionID
 	}
 	nativeID, err := h.waitForNativeSession(ctx, request)
 	if err != nil {

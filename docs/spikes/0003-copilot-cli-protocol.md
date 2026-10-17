@@ -165,8 +165,12 @@ worker seam. Until RB-1 names the real event, the one function
 - The evidence must be one canonical version-four UUID. A malformed value or
   two different values fail closed as an unexpected exit; absent evidence
   fails closed when the discovery window ends or the process settles.
-- A resume must report the recorded UUID, else the shared lifecycle cancels
-  the process and reports a native session mismatch.
+- A resume must report the recorded UUID, and a newly started fresh process
+  must report the `--session-id` UUID it was given. Else the shared lifecycle
+  cancels the process and reports a native session mismatch, so a CLI that
+  ignores `--session-id` fails closed. A replayed fresh start that adopts the
+  process already owning the invocation (the worker reports `Adopted`) keeps
+  the identity that process was given earlier.
 
 If the live `-p --output-format json` run shows other field names, or no
 identity field, change only `copilotSessionEvidenceFields` or

@@ -36,7 +36,7 @@ func (c *CodexHeadless) StartHeadless(ctx context.Context, request HeadlessStart
 	if strings.TrimSpace(request.ResumeSessionID) != "" {
 		return HeadlessSession{}, errors.New("fresh Codex headless start cannot include a resume session")
 	}
-	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchFresh, "")
+	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchFresh, "", "")
 }
 
 // ResumeHeadless launches Codex exec resume for the exact persisted native
@@ -45,7 +45,7 @@ func (c *CodexHeadless) ResumeHeadless(ctx context.Context, request HeadlessStar
 	if strings.TrimSpace(request.ResumeSessionID) == "" {
 		return HeadlessSession{}, errors.New("Codex headless resume session id is required")
 	}
-	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchResume, request.ResumeSessionID)
+	return c.launch(ctx, request, codexHeadlessCommand(request), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
 // codexHeadlessCommand translates one neutral request into the documented
