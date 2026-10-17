@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
@@ -92,23 +93,14 @@ func (c *CopilotHeadless) ResumeHeadless(ctx context.Context, request HeadlessSt
 	return c.launch(ctx, request, copilotHeadlessCommand(request, "--resume="+request.ResumeSessionID), worker.HeadlessLaunchResume, request.ResumeSessionID, "")
 }
 
-// copilotReasoningEfforts is the effort set the pinned CLI 1.0.98 accepts.
-// Any other value fails at argument parsing, so it is refused before launch.
-var copilotReasoningEfforts = map[string]bool{
-	"none": true, "minimal": true, "low": true, "medium": true, "high": true, "xhigh": true, "max": true,
-}
-
-// validateCopilotSelection refuses a model or effort selection that the
-// pinned CLI cannot honor exactly. Whether a supported value is honored at
-// runtime has no machine evidence yet (release blocker RB-3).
+// validateCopilotSelection refuses, before launch, a model or effort
+// selection that the pinned CLI cannot honor exactly. The value sets live in
+// the repository configuration, so a launch and a configuration accept the
+// same selections. Whether a supported value is honored at runtime has no
+// machine evidence yet (release blocker RB-3).
 func validateCopilotSelection(request HeadlessStartRequest) error {
-	// "auto" lets Copilot choose the model, so the selected model would not
-	// be the one that runs.
-	if strings.EqualFold(request.Model, "auto") {
-		return errors.New("Copilot model \"auto\" is not an exact model selection")
-	}
-	if request.ReasoningEffort != "" && !copilotReasoningEfforts[request.ReasoningEffort] {
-		return fmt.Errorf("Copilot does not support reasoning effort %q", request.ReasoningEffort)
+	if err := config.ValidateHarnessSelection(config.HarnessCopilot, request.Model, request.ReasoningEffort); err != nil {
+		return fmt.Errorf("Copilot selection: %w", err)
 	}
 	return nil
 }
