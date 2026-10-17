@@ -147,6 +147,33 @@ native `linux/arm64` run.
   and that no other session directory was created by the process.
 - Never pass `-n/--name`, so name matching cannot pick another session.
 
+### Adapter evidence source (#284, PROVISIONAL pending RB-1)
+
+The headless adapter (`internal/harness/headless_copilot.go`) does not use
+the on-disk evidence above. The shared headless lifecycle reads identity only
+from the output of the current detached process, because role-home files can
+belong to an older session and the adapter has no file access through the
+worker seam. Until RB-1 names the real event, the one function
+`copilotSessionEvidence` reads identity as follows:
+
+- Only complete JSON lines of the current process output count. Prose, the
+  `--resume=` hint, partial lines, and lines over 1 MiB do not.
+- The value of a `sessionId` or `session_id` key at any depth of the object is
+  identity evidence. No event type name is assumed.
+- The evidence must be one canonical version-four UUID. A malformed value or
+  two different values fail closed as an unexpected exit; absent evidence
+  fails closed when the discovery window ends or the process settles.
+- A resume must report the recorded UUID, else the shared lifecycle cancels
+  the process and reports a native session mismatch.
+
+If the live `-p --output-format json` run shows other field names, or no
+identity field, change only `copilotSessionEvidenceFields` or
+`copilotSessionEvidence`. Until then a real Copilot launch can fail closed
+at identity discovery; that is the intended behavior while RB-1 is open.
+The resume pre- and postflight checks of `events.jsonl` and `workspace.yaml`
+are not implemented; the CLI itself fails closed on an unknown full UUID
+(OBSERVED). They stay open under RB-2.
+
 ## Credential boundary (proposal, pending RB-4)
 
 Use a fine-grained personal access token owned by a dedicated personal

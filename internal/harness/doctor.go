@@ -43,6 +43,8 @@ func CapabilitiesFor(name string) (Capabilities, error) {
 		return Capabilities{Name: NameCodex, NativeResume: true, Headless: true}, nil
 	case NameClaude:
 		return Capabilities{Name: NameClaude, NativeResume: true, Headless: true}, nil
+	case NameCopilot:
+		return Capabilities{Name: NameCopilot, NativeResume: true, Headless: true}, nil
 	default:
 		return Capabilities{}, fmt.Errorf("%w: %q", ErrUnknownHarness, name)
 	}
