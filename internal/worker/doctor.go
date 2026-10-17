@@ -229,16 +229,30 @@ func (r *DockerRuntime) CheckHarness(ctx context.Context, request HarnessCheckRe
 	if !validName(request.Name) {
 		return errors.New("harness executable name is unsafe")
 	}
-	command := "command -v " + request.Name + " >/dev/null 2>&1 && " + request.Name + " --version >/dev/null 2>&1"
 	if _, err := r.runDocker(ctx, []string{
 		"run", "--rm", "--pull=never", "--user", WorkerUser,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--network", "none",
 		"--entrypoint", "/bin/sh",
-		imageReference(request.Image.Name, request.Image.Digest), "-c", command,
+		imageReference(request.Image.Name, request.Image.Digest), "-c", harnessExecutableProbe(request.Name),
 	}); err != nil {
 		return redactCause(err, "harness executable is not usable in the worker image")
 	}
 	return nil
+}
+
+// CopilotVersionLine is the first `copilot --version` line of the Copilot
+// CLI release the compatibility record docs/spikes/copilot-cli-1.0.98 proved.
+const CopilotVersionLine = "GitHub Copilot CLI 1.0.98."
+
+// harnessExecutableProbe returns the in-image shell probe for one validated
+// harness executable name. The Copilot adapter depends on the observed
+// behavior of one CLI release, so the Copilot probe also requires that
+// release; another release is not usable.
+func harnessExecutableProbe(name string) string {
+	if name == "copilot" {
+		return `command -v copilot >/dev/null 2>&1 && test "$(copilot --version 2>/dev/null | head -n 1)" = "` + CopilotVersionLine + `"`
+	}
+	return "command -v " + name + " >/dev/null 2>&1 && " + name + " --version >/dev/null 2>&1"
 }
 
 // CheckHarnessAuthentication streams one explicit credential file into a

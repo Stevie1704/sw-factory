@@ -2,6 +2,9 @@ package worker_test
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -33,9 +36,34 @@ func TestBaseImagePinsTheProvedCopilotRelease(t *testing.T) {
 		t.Fatal("base.Dockerfile does not install the pinned @github/copilot package")
 	}
 	build := readRepositoryFile(t, "scripts/build-worker.sh")
-	if !strings.Contains(build, `COPILOT_VERSION="${COPILOT_VERSION:-`+manifest.Version+`}"`) ||
+	if !strings.Contains(build, "docs/spikes/copilot-cli-"+manifest.Version+"/manifest.json") ||
 		!strings.Contains(build, `--build-arg "COPILOT_VERSION=$COPILOT_VERSION"`) {
-		t.Fatalf("scripts/build-worker.sh does not pass the proved Copilot version %s to the base build", manifest.Version)
+		t.Fatalf("scripts/build-worker.sh does not pass the proved Copilot version %s from its manifest to the base build", manifest.Version)
+	}
+}
+
+// TestWorkerBuildRefusesAnUnprovedCopilotRelease verifies a COPILOT_VERSION
+// override that differs from the proved release stops the build before any
+// Docker call, so the image check cannot compare the override with itself.
+func TestWorkerBuildRefusesAnUnprovedCopilotRelease(t *testing.T) {
+	root, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := filepath.Join(t.TempDir(), "docker-called")
+	docker := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\ntouch '"+record+"'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("sh", "scripts/build-worker.sh")
+	command.Dir = root
+	command.Env = []string{"PATH=/usr/bin:/bin", "DOCKER=" + docker, "COPILOT_VERSION=1.0.99"}
+	output, err := command.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "COPILOT_VERSION=1.0.99 differs from the proved Copilot CLI") {
+		t.Fatalf("build-worker.sh = %v, output %q; want a refusal of the unproved release", err, output)
+	}
+	if _, statErr := os.Stat(record); !os.IsNotExist(statErr) {
+		t.Fatal("build-worker.sh called Docker before refusing the unproved release")
 	}
 }
 

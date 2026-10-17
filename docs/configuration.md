@@ -769,6 +769,10 @@ Azure DevOps credentials. A role with shell access can read its own token, so
 keep the token's permission narrow. That the narrow permission is enough, and
 that it cannot write a repository, is release blocker RB-4.
 
+A run invocation on Copilot without a registered token file, or with a
+`--copilot-auth` that is not the registered file, is refused before the
+factory creates any invocation directory, commit status, or worker.
+
 ### Copilot-only and mixed configuration
 
 A role default that names `copilot` selects it. Every Copilot role must
@@ -822,6 +826,8 @@ targets](#harness-override-targets)).
   then run `factory doctor`.
 - Change `COPILOT_VERSION` only after the new release has a compatibility
   proof like spike 0003; the adapter depends on the observed CLI behavior.
+  `scripts/build-worker.sh` reads the release from the proof's manifest and
+  refuses a `COPILOT_VERSION` override that differs from it.
 - An image built before Copilot support stays valid for Codex and Claude
   Code. Selecting Copilot with it fails with `harness.executable.unusable`,
   whose action names the rebuild.
@@ -842,8 +848,9 @@ targets](#harness-override-targets)).
 - **Cancellation**: `/factory cancel` stops the Copilot process; a report it
   writes afterwards is ignored.
 - **Cleanup**: `factory cleanup` and `factory reset` remove role volumes,
-  which hold the Copilot session state. They never remove the credential
-  volume or the registered token file.
+  which hold the Copilot session state. `factory cleanup` keeps the
+  credential volume; `factory reset` removes it. Neither removes the
+  registered token file on the host.
 
 ### Failure actions
 

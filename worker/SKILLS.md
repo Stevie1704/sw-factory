@@ -34,6 +34,17 @@ worktree, and installed plugins are removed. `disabledSkills` names only the
 two built-in skills `customize-cloud-agent` and `github-pr-media`, never a
 curated skill.
 
+Docker copies the image's skills into a role volume only while the volume is
+empty. A session role keeps its volume when its worker moves to a new image,
+so a volume first created from an image without Copilot has no
+`.copilot/skills`, and a later skill change does not reach an existing
+volume. The launcher therefore refuses a Copilot home that lacks any
+role-mandated skill: it prints `factory-copilot: role skills missing;
+recreate the role volume` and exits 78. The launch fails as an unexpected
+exit; a run invocation keeps the line in its `harness-failure.log`. The remedy
+is to remove that role volume, so Docker seeds a new one from the current
+image.
+
 `$HOME/.agents/skills` is deliberately left empty and the checks assert it
 stays that way. A second root holding the same names would let one skill name
 resolve to two installations, and the worker must not ship that ambiguity.

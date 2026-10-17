@@ -397,8 +397,11 @@ func TestCopilotReportAcceptanceAdmitsOnlyTheExactInvocationReport(t *testing.T)
 				t.Fatalf("accepted invocation = %s with %d finishes, want completed and finished once", runStore.invocations[launch.Invocation.ID].Status, headlessWorker.finishes)
 			}
 			accepted := *runStore.current
-			if _, err := service.AcceptAgentReport(context.Background(), request); err == nil && runStore.current.Revision != accepted.Revision {
-				t.Fatalf("duplicate acceptance advanced the run from revision %d to %d", accepted.Revision, runStore.current.Revision)
+			// A duplicate may be refused or acknowledged; either way it must not
+			// change the run.
+			_, _ = service.AcceptAgentReport(context.Background(), request)
+			if runStore.current.Revision != accepted.Revision || runStore.current.Stage != accepted.Stage {
+				t.Fatalf("duplicate acceptance moved the run from revision %d (%s) to %d (%s)", accepted.Revision, accepted.Stage, runStore.current.Revision, runStore.current.Stage)
 			}
 			if headlessWorker.finishes != 1 || len(headlessWorker.headlessStarts) != 1 {
 				t.Fatalf("duplicate acceptance = finishes %d launches %d, want no second process effect", headlessWorker.finishes, len(headlessWorker.headlessStarts))
@@ -465,12 +468,23 @@ func TestRefreshAuthServesCopilotAndKeepsTheRecordedHarness(t *testing.T) {
 }
 
 // TestRefreshAuthExplainsHowToRegisterAMissingCopilotSource verifies the
-// remedy names the Copilot registration option.
+// remedy names the Copilot registration option when the source was removed
+// from the registration after the launch.
 func TestRefreshAuthExplainsHowToRegisterAMissingCopilotSource(t *testing.T) {
 	t.Parallel()
 
-	service, _, _, runID := copilotRefreshService(t, config.AuthenticationConfig{})
-	_, err := service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: runID})
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+	policy.ModelOptions["implementation"] = []string{"gpt-5.2"}
+	launched := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CopilotAuthPath: filepath.Join(t.TempDir(), "copilot-token")})
+	launch, err := launched.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{})
+	_, err = service.RefreshAuth(context.Background(), factory.AuthRefreshRequest{RunID: launch.Invocation.RunID})
 	if err == nil || !strings.Contains(err.Error(), "factory register --update --copilot-auth <path>") {
 		t.Fatalf("RefreshAuth() error = %v, want Copilot registration guidance", err)
 	}
@@ -590,3 +604,43 @@ func (w *headlessAgentWorker) FinishHeadless(context.Context, worker.HeadlessReq
 }
 
 var _ worker.HeadlessProcessRuntime = (*headlessAgentWorker)(nil)
+
+// TestCopilotLaunchRefusesAnUnusableTokenSourceBeforeAnyResource verifies a
+// Copilot launch with no registered token source, or with a --copilot-auth
+// that is not the registered source, is refused at admission: no invocation
+// directory, persisted invocation, or detached process exists afterwards.
+func TestCopilotLaunchRefusesAnUnusableTokenSourceBeforeAnyResource(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		registered string
+		override   string
+		want       string
+	}{
+		{name: "no registered source", want: "no registered copilot token source"},
+		{name: "override is not the registered source", registered: "/host/copilot/token", override: "/host/other/token", want: "not restart-safe"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, runStore, runtime, _ := newAgentService(t)
+			headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+			policy := validRepositoryConfig()
+			policy.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+			policy.ModelOptions["implementation"] = []string{"gpt-5.2"}
+			service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CopilotAuthPath: test.registered})
+			run := *runStore.current
+
+			_, err := service.StartAgent(context.Background(), factory.AgentRequest{CopilotAuthPath: test.override})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("StartAgent() error = %v, want %q", err, test.want)
+			}
+			artifacts := filepath.Join(filepath.Dir(run.Worktree), ".factory-agents", run.ID)
+			if _, statErr := os.Stat(artifacts); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("invocation directory %s exists after refusal (stat error %v)", artifacts, statErr)
+			}
+			if len(runStore.invocations) != 0 || len(headlessWorker.headlessStarts) != 0 {
+				t.Fatalf("refusal left invocations:%d processes:%d, want none", len(runStore.invocations), len(headlessWorker.headlessStarts))
+			}
+		})
+	}
+}

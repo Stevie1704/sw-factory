@@ -141,7 +141,7 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 // new directory that it removes when the session ends.
 func runOnboardSession(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("onboard", errorsOutput)
-	harness := flags.String("harness", string(config.HarnessClaude), "interactive harness that runs the onboarding: claude or codex")
+	harness := flags.String("harness", string(config.HarnessClaude), "interactive host harness that runs the onboarding: claude or codex (Copilot runs only inside the worker)")
 	baseImage := baseImageFlag(flags)
 	if err := flags.Parse(args); err != nil {
 		return 2

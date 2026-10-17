@@ -14,7 +14,10 @@ The host needs:
 - a running Docker daemon whose server platform is `linux/arm64` or
   `linux/amd64`, and that uses the containerd image store;
 - the GitHub CLI, authenticated for the target repository;
-- Codex or Claude Code, installed and signed in.
+- Codex or Claude Code, installed and signed in. The onboarding session runs
+  one of them interactively on the host. GitHub Copilot CLI cannot run it,
+  because the factory runs Copilot only inside the worker with a dedicated
+  token.
 
 Check them before any other step. For a failed check, name the missing
 prerequisite and its supported remedy, such as installing Git, jq, Docker, or

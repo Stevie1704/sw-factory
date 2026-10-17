@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/harness"
 )
 
 // The launcher names its three fixed in-worker paths on these lines. The
@@ -65,6 +67,15 @@ func newCopilotLauncher(t *testing.T) copilotLauncher {
 	if err := os.MkdirAll(launcher.path, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	for _, skill := range copilotRoleSkills() {
+		path := filepath.Join(launcher.home, "skills", skill, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("---\nname: "+skill+"\n---\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	fake := "#!/bin/sh\n" +
 		"{ for argument in \"$@\"; do printf 'arg=%s\\n' \"$argument\"; done; env | sort; } > '" + launcher.record + "'\n" +
 		"printf 'copilot ran\\n'\n"
@@ -72,6 +83,12 @@ func newCopilotLauncher(t *testing.T) copilotLauncher {
 		t.Fatal(err)
 	}
 	return launcher
+}
+
+// copilotRoleSkills is every role-mandated worker skill: the mandatory set
+// plus the skills of the optional pr_writer and ideation roles.
+func copilotRoleSkills() []string {
+	return append(harness.MandatorySkills(), harness.PullRequestWriterSkill, harness.GrillingSkill)
 }
 
 // run starts the launcher with arguments and the extra environment, from a
@@ -282,5 +299,60 @@ func TestCopilotManagedSettingsSuppressUnapprovedBehavior(t *testing.T) {
 		if _, ok := set[name.(string)]; ok {
 			t.Errorf("settings disable the curated worker skill %q", name)
 		}
+	}
+}
+
+// TestCopilotLauncherRefusesARoleHomeWithoutTheRoleSkills verifies a role
+// volume that lacks a role-mandated skill, such as one Docker seeded from a
+// worker image before Copilot, never starts Copilot without its guidance:
+// the launcher prints one line that names the remedy and exits 78.
+func TestCopilotLauncherRefusesARoleHomeWithoutTheRoleSkills(t *testing.T) {
+	for _, skill := range copilotRoleSkills() {
+		t.Run(skill, func(t *testing.T) {
+			launcher := newCopilotLauncher(t)
+			if err := os.WriteFile(launcher.credential, []byte("github_pat_test-only\n"), 0o444); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.RemoveAll(filepath.Join(launcher.home, "skills", skill)); err != nil {
+				t.Fatal(err)
+			}
+			stdout, stderr, code := launcher.run(t, nil, "--version")
+			if code != 78 || stdout != "" || stderr != "factory-copilot: role skills missing; recreate the role volume\n" {
+				t.Fatalf("launcher = exit %d stdout %q stderr %q, want exit 78 and the role-skills line", code, stdout, stderr)
+			}
+			if _, err := os.Stat(launcher.record); !os.IsNotExist(err) {
+				t.Fatal("launcher started Copilot without a role-mandated skill")
+			}
+		})
+	}
+}
+
+// TestCopilotLauncherReplacesALeftoverSettingsCopy verifies a read-only
+// settings.json.new that an interrupted launch left behind cannot block the
+// next launch.
+func TestCopilotLauncherReplacesALeftoverSettingsCopy(t *testing.T) {
+	launcher := newCopilotLauncher(t)
+	if err := os.WriteFile(launcher.credential, []byte("github_pat_test-only\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(launcher.home, "settings.json.new"), []byte("{}"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, code := launcher.run(t, nil, "--version"); code != 0 {
+		t.Fatalf("launcher = exit %d stderr %q, want a launch over the leftover copy", code, stderr)
+	}
+	settings, err := os.ReadFile(filepath.Join(launcher.home, "settings.json"))
+	if err != nil || string(settings) != readRepositoryFile(t, "worker/copilot-settings.json") {
+		t.Fatalf("Copilot settings = %q, %v; want the managed settings", settings, err)
+	}
+}
+
+// TestCopilotLauncherRequiresEveryRoleMandatedSkill verifies the launcher's
+// skill list names exactly the role-mandated skills the harness proves, so a
+// new mandated skill cannot be missed by the launch-time check.
+func TestCopilotLauncherRequiresEveryRoleMandatedSkill(t *testing.T) {
+	want := `role_skills="` + strings.Join(copilotRoleSkills(), " ") + `"`
+	if !strings.Contains(readRepositoryFile(t, "worker/factory-copilot"), "\n"+want+"\n") {
+		t.Fatalf("worker/factory-copilot must declare %s", want)
 	}
 }

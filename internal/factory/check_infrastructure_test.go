@@ -114,6 +114,7 @@ func newCheckRecoveryFixtureFor(t *testing.T, runID string, journaled bool, impl
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
+		Authentication: config.AuthenticationConfig{CopilotAuthPath: filepath.Join(root, "copilot-token")},
 	}}}
 	ids := []string{runID, "initial", "repair"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

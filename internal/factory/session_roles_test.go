@@ -538,65 +538,70 @@ func TestSessionRolesPinTheNewImageOfTheNextTurn(t *testing.T) {
 	}
 }
 
-// TestSessionRolesAcceptAtMostOneResultPerUserTurn verifies that a second
-// launch for an answered turn is refused, and that a role result from a
-// cancelled invocation or an old revision changes nothing.
+// TestSessionRolesAcceptAtMostOneResultPerUserTurn verifies, with every
+// harness adapter, that a second launch for an answered turn is refused, and
+// that a role result from a cancelled invocation or an old revision changes
+// nothing.
 func TestSessionRolesAcceptAtMostOneResultPerUserTurn(t *testing.T) {
-	fixture := newSessionFixture(t, config.HarnessCodex)
-	roles := fixture.roles()
-	cancelled, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := roles.CancelRole(t.Context(), "session-1", "user stopped the turn"); err != nil {
-		t.Fatalf("CancelRole() error = %v", err)
-	}
-	session := fixture.session()
-	if session.State != store.IdeationStateAwaitingUser || !strings.Contains(session.StateReason, "user stopped the turn") ||
-		fixture.invocation(cancelled.ID).Status != store.SessionInvocationCancelled || len(fixture.worker.cancelled) != 1 {
-		t.Fatalf("after cancel session = %#v, invocation = %#v", session, fixture.invocation(cancelled.ID))
-	}
-	fixture.report(cancelled, ideationResultForTest())
-	if err := roles.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if fixture.session().BriefRevision != 0 {
-		t.Fatal("a report from a cancelled invocation changed the brief")
-	}
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			roles := fixture.roles()
+			cancelled, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := roles.CancelRole(t.Context(), "session-1", "user stopped the turn"); err != nil {
+				t.Fatalf("CancelRole() error = %v", err)
+			}
+			session := fixture.session()
+			if session.State != store.IdeationStateAwaitingUser || !strings.Contains(session.StateReason, "user stopped the turn") ||
+				fixture.invocation(cancelled.ID).Status != store.SessionInvocationCancelled || len(fixture.worker.cancelled) != 1 {
+				t.Fatalf("after cancel session = %#v, invocation = %#v", session, fixture.invocation(cancelled.ID))
+			}
+			fixture.report(cancelled, ideationResultForTest())
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.session().BriefRevision != 0 {
+				t.Fatal("a report from a cancelled invocation changed the brief")
+			}
 
-	retried, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
-	if err != nil {
-		t.Fatalf("StartIdeationTurn(retry) error = %v", err)
-	}
-	fixture.report(retried, ideationResultForTest())
-	if err := roles.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1"); !errors.Is(err, factory.ErrSessionRoleNotStartable) && !errors.Is(err, store.ErrSessionTriggerConsumed) {
-		t.Fatalf("StartIdeationTurn(answered turn) error = %v, want a refusal for an answered turn", err)
-	}
-	if got := len(fixture.worker.launches); got != 2 {
-		t.Fatalf("launches = %d, want no launch for an answered turn", got)
-	}
+			retried, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err != nil {
+				t.Fatalf("StartIdeationTurn(retry) error = %v", err)
+			}
+			fixture.report(retried, ideationResultForTest())
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1"); !errors.Is(err, factory.ErrSessionRoleNotStartable) && !errors.Is(err, store.ErrSessionTriggerConsumed) {
+				t.Fatalf("StartIdeationTurn(answered turn) error = %v, want a refusal for an answered turn", err)
+			}
+			if got := len(fixture.worker.launches); got != 2 {
+				t.Fatalf("launches = %d, want no launch for an answered turn", got)
+			}
 
-	fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
-	stale, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventCancelled, "user cancelled the session", time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := fixture.store.TransitionIdeationSession(t.Context(), write); err != nil {
-		t.Fatal(err)
-	}
-	fixture.report(stale, ideationResultForTest())
-	if err := roles.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if got := fixture.invocation(stale.ID); got.Status != store.SessionInvocationCancelled || fixture.session().BriefRevision != 1 {
-		t.Fatalf("stale invocation = %#v, brief revision %d; want cancelled and no new brief", got, fixture.session().BriefRevision)
+			fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
+			stale, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventCancelled, "user cancelled the session", time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.store.TransitionIdeationSession(t.Context(), write); err != nil {
+				t.Fatal(err)
+			}
+			fixture.report(stale, ideationResultForTest())
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := fixture.invocation(stale.ID); got.Status != store.SessionInvocationCancelled || fixture.session().BriefRevision != 1 {
+				t.Fatalf("stale invocation = %#v, brief revision %d; want cancelled and no new brief", got, fixture.session().BriefRevision)
+			}
+		})
 	}
 }
 
@@ -923,61 +928,65 @@ func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger
 	return invocation
 }
 
-// TestSessionRolesPlanFromTheFrozenBrief verifies that planning receives the
-// frozen brief without the conversation, that an accepted plan records the
+// TestSessionRolesPlanFromTheFrozenBrief verifies, with every harness
+// adapter, that planning receives the frozen brief without the conversation, that an accepted plan records the
 // pinned brief and context revisions and moves the session to draft review,
 // and that the plan validation seam can reject a draft.
 func TestSessionRolesPlanFromTheFrozenBrief(t *testing.T) {
-	fixture := newSessionFixture(t, config.HarnessClaude)
-	write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventEdited, "", time.Time{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := fixture.store.SaveBriefRevision(t.Context(), write, store.Brief{Problem: "No export.", Scope: []store.BriefItem{{ID: "json", Text: "JSON export"}}}); err != nil {
-		t.Fatal(err)
-	}
-	roles := fixture.roles()
-	planning, err := roles.StartPlanning(t.Context(), "session-1", "handoff-1")
-	if err != nil {
-		t.Fatalf("StartPlanning() error = %v", err)
-	}
-	var packet struct {
-		BriefRevision int64           `json:"brief_revision"`
-		Brief         *report.Brief   `json:"brief"`
-		Turns         json.RawMessage `json:"turns"`
-	}
-	data, err := os.ReadFile(filepath.Join(planning.InvocationDirectory, "session.json"))
-	if err != nil || json.Unmarshal(data, &packet) != nil || packet.BriefRevision != 1 || packet.Brief == nil || packet.Brief.Problem != "No export." || len(packet.Turns) != 0 {
-		t.Fatalf("planning packet = %s, %v; want the frozen brief and no conversation", data, err)
-	}
-	fixture.report(planning, report.Report{Outcome: report.OutcomeCompleted, PlanDraft: &report.PlanDraft{Nodes: []report.PlanNode{
-		{ID: "export", Kind: "task", Title: "Add the export command", AcceptanceCriteria: []string{"factory export writes JSON"}, BriefRefs: []string{"json"}},
-	}}})
-	if err := roles.Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	history, err := fixture.store.IdeationHistory(t.Context(), "session-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if history.Session.State != store.IdeationStateDraftReview || len(history.Plans) != 1 ||
-		history.Plans[0].SourceBriefRevision != 1 || history.Plans[0].ContextRevision != sessionContextRevisionForTest {
-		t.Fatalf("history after planning = %#v, want one pinned draft in review", history)
-	}
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventEdited, "", time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := fixture.store.SaveBriefRevision(t.Context(), write, store.Brief{Problem: "No export.", Scope: []store.BriefItem{{ID: "json", Text: "JSON export"}}}); err != nil {
+				t.Fatal(err)
+			}
+			roles := fixture.roles()
+			planning, err := roles.StartPlanning(t.Context(), "session-1", "handoff-1")
+			if err != nil {
+				t.Fatalf("StartPlanning() error = %v", err)
+			}
+			var packet struct {
+				BriefRevision int64           `json:"brief_revision"`
+				Brief         *report.Brief   `json:"brief"`
+				Turns         json.RawMessage `json:"turns"`
+			}
+			data, err := os.ReadFile(filepath.Join(planning.InvocationDirectory, "session.json"))
+			if err != nil || json.Unmarshal(data, &packet) != nil || packet.BriefRevision != 1 || packet.Brief == nil || packet.Brief.Problem != "No export." || len(packet.Turns) != 0 {
+				t.Fatalf("planning packet = %s, %v; want the frozen brief and no conversation", data, err)
+			}
+			fixture.report(planning, report.Report{Outcome: report.OutcomeCompleted, PlanDraft: &report.PlanDraft{Nodes: []report.PlanNode{
+				{ID: "export", Kind: "task", Title: "Add the export command", AcceptanceCriteria: []string{"factory export writes JSON"}, BriefRefs: []string{"json"}},
+			}}})
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			history, err := fixture.store.IdeationHistory(t.Context(), "session-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if history.Session.State != store.IdeationStateDraftReview || len(history.Plans) != 1 ||
+				history.Plans[0].SourceBriefRevision != 1 || history.Plans[0].ContextRevision != sessionContextRevisionForTest {
+				t.Fatalf("history after planning = %#v, want one pinned draft in review", history)
+			}
 
-	fixture.validator = func([]store.PlanNode) error { return errors.New("plan has a dependency cycle") }
-	rejected, err := fixture.roles().StartPlanning(t.Context(), "session-1", "regenerate-1")
-	if err != nil {
-		t.Fatalf("StartPlanning(regenerate) error = %v", err)
-	}
-	fixture.report(rejected, report.Report{Outcome: report.OutcomeCompleted, PlanDraft: &report.PlanDraft{Nodes: []report.PlanNode{{ID: "a", Kind: "task", Title: "A"}}}})
-	if err := fixture.roles().Reconcile(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	got := fixture.invocation(rejected.ID)
-	if got.Status != store.SessionInvocationRejected || got.FailureKind != "plan_rejected" || fixture.session().PlanRevision != 1 ||
-		fixture.session().State != store.IdeationStateDraftReview {
-		t.Fatalf("rejected plan invocation = %#v, session = %#v; want the draft kept in review", got, fixture.session())
+			fixture.validator = func([]store.PlanNode) error { return errors.New("plan has a dependency cycle") }
+			rejected, err := fixture.roles().StartPlanning(t.Context(), "session-1", "regenerate-1")
+			if err != nil {
+				t.Fatalf("StartPlanning(regenerate) error = %v", err)
+			}
+			fixture.report(rejected, report.Report{Outcome: report.OutcomeCompleted, PlanDraft: &report.PlanDraft{Nodes: []report.PlanNode{{ID: "a", Kind: "task", Title: "A"}}}})
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			got := fixture.invocation(rejected.ID)
+			if got.Status != store.SessionInvocationRejected || got.FailureKind != "plan_rejected" || fixture.session().PlanRevision != 1 ||
+				fixture.session().State != store.IdeationStateDraftReview {
+				t.Fatalf("rejected plan invocation = %#v, session = %#v; want the draft kept in review", got, fixture.session())
+			}
+		})
 	}
 }
 

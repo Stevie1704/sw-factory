@@ -54,6 +54,15 @@ func TestHeadlessRecoverySettlesNativeFailuresThroughTheRecordedAdapter(t *testi
 			status: store.StatusWaitingForHuman, reason: LifecycleReasonAutomaticHarnessRecoveryExhausted, resumeCount: 1,
 		},
 		{
+			// The model-unavailable shape is unobserved (release blocker
+			// RB-5); it stays a bounded exit, never a retry or a new model.
+			name: "copilot unobserved model unavailable is a bounded exit", harness: config.HarnessCopilot,
+			resumed: func(string) worker.HeadlessInspection {
+				return exitedProcess("", "Error: Model \"gpt-5.2\" is not available. Run copilot --model to choose another model.\n"+recoveryLeakedSecret)
+			},
+			status: store.StatusWaitingForHuman, reason: LifecycleReasonAutomaticHarnessRecoveryExhausted, resumeCount: 1,
+		},
+		{
 			// Copilot's capacity failure shape is unobserved (release blocker
 			// RB-5), so it keeps the bounded unexpected-exit policy until a
 			// classified marker exists.
@@ -138,7 +147,12 @@ func TestHeadlessRecoveryBoundsAnUnexpectedCopilotExit(t *testing.T) {
 				t.Fatalf("run after the automatic resume = %s (%q), want active", run.Status, run.LifecycleReason)
 			}
 
-			processes.process = exitedProcess(identityEvent(config.HarnessCopilot, recoverySessionID), "unrecognised failure\n"+recoveryLeakedSecret)
+			// Launch materialisation creates the invocation root that keeps
+			// the local diagnostic.
+			if err := os.MkdirAll(invocationRoot(fixture.persistedRun(t), fixture.invocation.ID), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			processes.process = exitedProcess(identityEvent(config.HarnessCopilot, recoverySessionID), "unrecognised failure\n"+recoveryLeakedSecret+"\n"+strings.Repeat("x", 4*maxHarnessFailureDiagnosticBytes))
 			if test.reported {
 				if err := os.WriteFile(filepath.Join(fixture.invocation.ResultDirectory, report.ReportFileName), []byte("{}"), 0o600); err != nil {
 					t.Fatal(err)
@@ -158,6 +172,15 @@ func TestHeadlessRecoveryBoundsAnUnexpectedCopilotExit(t *testing.T) {
 			assertOnlyExactResumes(t, processes, 1)
 			if invocation := fixture.persistedInvocation(t); invocation.RecoveryResumeCount != 1 {
 				t.Fatalf("recovery resumes = %d, want the single automatic allowance", invocation.RecoveryResumeCount)
+			}
+			if !test.reported {
+				diagnostic, err := os.ReadFile(filepath.Join(invocationRoot(fixture.persistedRun(t), fixture.invocation.ID), harnessFailureDiagnosticName))
+				if err != nil || !strings.Contains(string(diagnostic), "unrecognised failure") || len(diagnostic) > maxHarnessFailureDiagnosticBytes+1024 {
+					t.Fatalf("local diagnostic = %d bytes, %v; want the bounded exit output kept beside the invocation", len(diagnostic), err)
+				}
+				if strings.Contains(string(diagnostic), recoveryLeakedSecret) {
+					t.Fatal("local diagnostic keeps the token the harness printed")
+				}
 			}
 		})
 	}
@@ -376,3 +399,64 @@ func (w *headlessProcessRecoveryWorker) FinishHeadless(context.Context, worker.H
 }
 
 var _ worker.HeadlessProcessRuntime = (*headlessProcessRecoveryWorker)(nil)
+
+// TestAutomaticResumeIsBoundedToOnePerInvocation pins the automatic-resume
+// allowance at the resume seam itself: an invocation that already used its
+// one automatic resume is returned unchanged, with no worker or store effect,
+// whatever a caller's own pre-check allows.
+func TestAutomaticResumeIsBoundedToOnePerInvocation(t *testing.T) {
+	invocation := store.Invocation{ID: "inv-resumed", RunID: "run-resumed", Harness: string(config.HarnessCopilot), NativeSessionID: recoverySessionID, Status: store.InvocationStatusActive, RecoveryResumeCount: 1}
+	module := newInvocationLifecycle(nil, nil, nil, nil, nil, nil, invocationLifecycleHooks{}, nil)
+	got, err := module.resumePersistedInvocation(context.Background(), config.RepositoryRegistration{}, nil, store.Run{ID: "run-resumed"}, invocation)
+	if err != nil || got.RecoveryResumeCount != 1 || got.ID != invocation.ID {
+		t.Fatalf("second automatic resume = %#v, %v; want the invocation unchanged and no resume", got, err)
+	}
+}
+
+// TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect verifies
+// a coordinator that restarts after AcceptAgentReport completed a Copilot
+// invocation relaunches, resumes, cancels, and finishes no Copilot process,
+// and the invocation stays completed.
+func TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect(t *testing.T) {
+	fixture := newHeadlessRecoveryFixture(t, config.HarnessCopilot, recoverySessionID)
+	processes := &headlessProcessRecoveryWorker{headlessRecoveryWorker: fixture.worker, harness: config.HarnessCopilot, onLaunch: runningProcess(config.HarnessCopilot)}
+	processes.process = runningProcess(config.HarnessCopilot)(recoverySessionID)
+	if _, err := report.WriteAtomicForInvocation(fixture.invocation.ResultDirectory, fixture.invocation.ID, report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: fixture.invocation.ID, RunID: fixture.run.ID,
+		Harness: string(config.HarnessCopilot), Role: "implementation", Stage: "implementation",
+		Outcome: report.OutcomeCompleted, Summary: "implementation complete",
+		Handoff: &report.Handoff{
+			ChangeSummary:     "implemented the behavior",
+			AcceptanceMapping: []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "focused test"}},
+			FocusedCommands:   []string{"go test ./..."},
+		},
+		NativeSessionID: recoverySessionID, ReportedAt: fixture.now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dependencies := fixture.dependencies(harness.NewHeadlessAdapters(processes))
+	dependencies.Worker = processes
+	accepting := NewWithDependencies(filepath.Join(fixture.root, "host.yaml"), dependencies)
+	if _, err := accepting.AcceptAgentReport(t.Context(), AgentReportRequest{RunID: fixture.run.ID, InvocationID: fixture.invocation.ID}); err != nil {
+		t.Fatalf("AcceptAgentReport() error = %v", err)
+	}
+	if invocation := fixture.persistedInvocation(t); invocation.Status != store.InvocationStatusCompleted {
+		t.Fatalf("accepted invocation = %s, want completed", invocation.Status)
+	}
+	// The accepting coordinator is itself a fresh start, so it may already
+	// have used the one automatic resume; only the restart must add nothing.
+	launches, cancels, finishes := len(processes.launches), processes.cancels, processes.finishes
+	resumes := fixture.persistedInvocation(t).RecoveryResumeCount
+
+	// This fixture has no independent test stage, so the restarted
+	// coordinator may pause the run at the clean-implementation boundary; that
+	// harness-neutral startup rule is not under test here. Whatever it
+	// decides, it must not touch the finished Copilot session.
+	_ = fixture.restartCoordinator(processes)
+	if len(processes.launches) != launches || processes.cancels != cancels || processes.finishes != finishes {
+		t.Fatalf("restart effects = launches %d->%d cancels %d->%d finishes %d->%d, want none", launches, len(processes.launches), cancels, processes.cancels, finishes, processes.finishes)
+	}
+	if invocation := fixture.persistedInvocation(t); invocation.Status != store.InvocationStatusCompleted || invocation.RecoveryResumeCount != resumes {
+		t.Fatalf("invocation after restart = %#v, want completed and not resumed again", invocation)
+	}
+}

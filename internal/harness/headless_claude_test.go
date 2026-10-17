@@ -148,6 +148,11 @@ func TestClaudeHeadlessClassifiesOnlyMachineReadableFailures(t *testing.T) {
 			stdout: `{"type":"system","subtype":"api_retry","error":"rate_limit"}` + "\n" + `{"type":"result","subtype":"success","is_error":false}` + "\n",
 			want:   harness.ErrUnexpectedExit,
 		},
+		{
+			name:   "retry category before an unreadable oversized line",
+			stdout: `{"type":"system","subtype":"api_retry","error":"rate_limit"}` + "\n" + `{"text":"` + strings.Repeat("x", 2<<20) + `"}` + "\n" + `{"type":"result","subtype":"success","is_error":false}` + "\n",
+			want:   harness.ErrUnexpectedExit,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{
@@ -157,7 +162,7 @@ func TestClaudeHeadlessClassifiesOnlyMachineReadableFailures(t *testing.T) {
 			err := harness.NewClaudeHeadless(workerRuntime).HeadlessFailureFor(context.Background(), harness.HeadlessInspectionRequest{
 				InvocationID: "inv-claude-classify", RunID: "run-claude-headless", WorkerID: "worker-claude-headless",
 			})
-			if !errors.Is(err, test.want) {
+			if !errors.Is(err, test.want) || (test.want != harness.ErrRateLimited && errors.Is(err, harness.ErrRateLimited)) {
 				t.Fatalf("HeadlessFailureFor() = %v, want %v", err, test.want)
 			}
 			if strings.Contains(err.Error(), "token=") || strings.Contains(err.Error(), "rate limit") {

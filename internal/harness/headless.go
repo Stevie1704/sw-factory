@@ -105,6 +105,9 @@ type HeadlessInspection struct {
 	// OutOfMemory reports a failed exit after the worker memory limit killed
 	// a process during the invocation.
 	OutOfMemory bool
+	// StartFailed reports the worker helper's own evidence that the command
+	// could not start; process output cannot set it.
+	StartFailed bool
 }
 
 // HeadlessRuntime is the factory-owned lifecycle seam for terminal-free
@@ -162,7 +165,7 @@ func (h *headless) InspectHeadless(ctx context.Context, request HeadlessInspecti
 	if err != nil {
 		return HeadlessInspection{}, err
 	}
-	return HeadlessInspection{Status: result.Status, ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr, StdoutTruncated: result.StdoutTruncated, StderrTruncated: result.StderrTruncated, OutOfMemory: result.OutOfMemory}, nil
+	return HeadlessInspection{Status: result.Status, ExitCode: result.ExitCode, Stdout: result.Stdout, Stderr: result.Stderr, StdoutTruncated: result.StdoutTruncated, StderrTruncated: result.StderrTruncated, OutOfMemory: result.OutOfMemory, StartFailed: result.StartFailed}, nil
 }
 
 // CancelHeadless delegates idempotent cancellation to the worker process
@@ -378,10 +381,9 @@ func (h *headless) classifyInspection(inspection HeadlessInspection) *HeadlessFa
 	if inspection.Status == worker.HeadlessStatusExited && inspection.OutOfMemory {
 		return &HeadlessFailure{Cause: NewOutOfMemoryError(h.protocol.name), ExitCode: inspection.ExitCode}
 	}
-	// The worker helper records this evidence only when the command could not
+	// The worker helper records this state only when the command could not
 	// start, so harness output can never produce it.
-	if inspection.Status == worker.HeadlessStatusExited && inspection.ExitCode == worker.HeadlessStartFailedExitCode &&
-		strings.HasPrefix(inspection.Stderr, worker.HeadlessStartFailedMarker+"\n") {
+	if inspection.Status == worker.HeadlessStatusExited && inspection.StartFailed {
 		return &HeadlessFailure{Cause: NewHarnessMissingError(h.protocol.name), ExitCode: inspection.ExitCode}
 	}
 	output := inspection.Stdout
@@ -407,15 +409,18 @@ func (h *headless) workerRequestForSession(session HeadlessSession) worker.Headl
 }
 
 // forEachHeadlessEvent visits every complete machine-readable line of bounded
-// process output and stops early when the visitor returns false.
-func forEachHeadlessEvent(output string, visit func(line string) bool) {
+// process output and stops early when the visitor returns false. It returns
+// an error when a line exceeds maxHeadlessEventLineBytes: the lines after it
+// stay unread, so callers must treat the evidence as unusable and fail closed.
+func forEachHeadlessEvent(output string, visit func(line string) bool) error {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 4096), maxHeadlessEventLineBytes)
 	for scanner.Scan() {
 		if !visit(scanner.Text()) {
-			return
+			return nil
 		}
 	}
+	return scanner.Err()
 }
 
 // normalizeHeadlessError maps worker and process-boundary failures to the

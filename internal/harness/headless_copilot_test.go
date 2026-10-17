@@ -185,6 +185,7 @@ func TestCopilotHeadlessFailsClosedOnUnusableIdentityEvidence(t *testing.T) {
 		{name: "non-string identity", stdout: `{"sessionId":7}` + "\n" + copilotIdentityEvidence(copilotHeadlessSession)},
 		{name: "conflicting identities", stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"session_id":"` + headlessTestSession + `"}` + "\n"},
 		{name: "nested identity only", stdout: `{"data":{"sessionId":"` + copilotHeadlessSession + `"}}` + "\n"},
+		{name: "conflicting identity after an oversized line", stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"text":"` + strings.Repeat("x", 2<<20) + `"}` + "\n" + `{"session_id":"` + headlessTestSession + `"}` + "\n"},
 		{name: "oversized line", stdout: `{"text":"` + strings.Repeat("x", 2<<20) + `"}` + "\n" + copilotIdentityEvidence(copilotHeadlessSession)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -223,6 +224,7 @@ func TestCopilotHeadlessMapsObservedFailuresToTypedOutcomes(t *testing.T) {
 		{name: "corrupt session", stderr: copilotFixture(t, "resume-corrupt.stderr"), want: harness.ErrUnexpectedExit},
 		{name: "non-UUID session", stderr: copilotFixture(t, "session-id-unknown-name.stderr"), want: harness.ErrUnexpectedExit},
 		{name: "argument error", stderr: copilotFixture(t, "effort-unsupported.stderr"), want: harness.ErrUnexpectedExit},
+		{name: "unobserved model unavailable", stderr: "Error: Model \"gpt-5.2\" is not available. Run copilot --model to choose another model.\n", want: harness.ErrUnexpectedExit},
 		{name: "unobserved policy denial", stderr: "Error: Copilot CLI is disabled by your organization's policy. Rate limit does not apply.\n", want: harness.ErrUnexpectedExit},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -248,14 +250,28 @@ func TestCopilotHeadlessMapsObservedFailuresToTypedOutcomes(t *testing.T) {
 
 // TestCopilotHeadlessNeverTreatsCLISuccessAsCompletion verifies that a clean
 // exit with identity evidence still settles as an unexpected exit, so only an
-// accepted factory report completes an invocation.
+// accepted factory report completes an invocation, and that retry events the
+// run recovered from before it succeeded never become a capacity outcome.
+// The retry event shape is unobserved (release blocker RB-5).
 func TestCopilotHeadlessNeverTreatsCLISuccessAsCompletion(t *testing.T) {
-	workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{
-		Status: worker.HeadlessStatusExited, Stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"type":"done","success":true}` + "\n",
-	}}
-	err := harness.NewCopilotHeadless(workerRuntime).HeadlessFailureFor(context.Background(), harness.HeadlessInspectionRequest{InvocationID: "inv-copilot", RunID: "run-copilot"})
-	if !errors.Is(err, harness.ErrUnexpectedExit) {
-		t.Fatalf("HeadlessFailureFor() = %v, want an unexpected exit without a report", err)
+	success := `{"type":"done","success":true}` + "\n"
+	for _, test := range []struct {
+		name, stdout, stderr string
+	}{
+		{name: "success", stdout: copilotIdentityEvidence(copilotHeadlessSession) + success},
+		{
+			name:   "retry events then success",
+			stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"type":"retry","error":"rate_limit","status":429}` + "\n" + success,
+			stderr: "Error: 429 Too Many Requests; retrying\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workerRuntime := &headlessTestWorker{inspection: worker.HeadlessInspection{Status: worker.HeadlessStatusExited, Stdout: test.stdout, Stderr: test.stderr}}
+			err := harness.NewCopilotHeadless(workerRuntime).HeadlessFailureFor(context.Background(), harness.HeadlessInspectionRequest{InvocationID: "inv-copilot", RunID: "run-copilot"})
+			if !errors.Is(err, harness.ErrUnexpectedExit) || errors.Is(err, harness.ErrRateLimited) {
+				t.Fatalf("HeadlessFailureFor() = %v, want an unexpected exit without a report", err)
+			}
+		})
 	}
 }
 

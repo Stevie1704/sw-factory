@@ -17,11 +17,18 @@
 # - A missing, empty, or unreadable credential gives exactly one stderr line,
 #   "factory-copilot: credential unavailable", and exit status 78
 #   (EX_CONFIG). The credential and its path are never printed.
+# - A Copilot home without every role-mandated skill gives exactly one stderr
+#   line, "factory-copilot: role skills missing; recreate the role volume",
+#   and exit status 78. Docker seeds a role volume from the image only while
+#   the volume is empty, so a volume first created from an image without
+#   Copilot never receives the skills (worker/SKILLS.md).
 set -euo pipefail
 
 credential_file=/run/factory-auth/copilot-token
 managed_settings=/usr/local/share/factory-copilot/settings.json
 copilot_home=/home/factory/.copilot
+# role_skills are the role-mandated worker skills (internal/harness/skills.go).
+role_skills="implement specification-review standards-review pr grilling"
 
 # credential_unavailable reports the one failure line the adapter maps to an
 # authentication failure.
@@ -47,8 +54,22 @@ restore_managed_configuration() {
   umask 077
   mkdir -p "$copilot_home"
   rm -rf "$copilot_home/mcp-config.json" "$copilot_home/hooks" "$copilot_home/installed-plugins"
+  # An interrupted launch can leave a read-only copy that cp cannot replace.
+  rm -f "$copilot_home/settings.json.new"
   cp "$managed_settings" "$copilot_home/settings.json.new"
   mv -f "$copilot_home/settings.json.new" "$copilot_home/settings.json"
+}
+
+# require_role_skills refuses a Copilot home that lacks a role-mandated skill,
+# so no role runs without the guidance its prompt names.
+require_role_skills() {
+  local skill
+  for skill in $role_skills; do
+    if [ ! -f "$copilot_home/skills/$skill/SKILL.md" ]; then
+      printf 'factory-copilot: role skills missing; recreate the role volume\n' >&2
+      exit 78
+    fi
+  done
 }
 
 token=""
@@ -62,6 +83,7 @@ fi
 
 remove_caller_controls
 restore_managed_configuration
+require_role_skills
 
 export COPILOT_HOME="$copilot_home"
 export COPILOT_AUTO_UPDATE=false

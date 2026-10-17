@@ -175,9 +175,12 @@ func newNonBlockingReadinessFixture(t *testing.T, options ...func(*config.Reposi
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: operationalPath, RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
-		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
+		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json"), CopilotAuthPath: filepath.Join(root, "copilot-token")},
 	}}}
 	ids := []string{"run-nonblocking", "implementation", "spec-review", "standards-review", "pr-writer-1", "pr-writer-2", "pr-writer-3"}
+	if _, testStage := policy.RoleHarnessDefaults["test"]; testStage {
+		ids = append([]string{"run-nonblocking", "test-stage"}, ids[1:]...)
+	}
 	now := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
 	harnessRuntime := &agentHarness{}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

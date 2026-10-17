@@ -57,6 +57,7 @@ func TestTestStageAcceptsVerifiedRedTestsAndLaunchesImplementation(t *testing.T)
 		GitHub:               config.GitHubConfig{Owner: "example", Repository: "project"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
+		Authentication:       config.AuthenticationConfig{CopilotAuthPath: filepath.Join(root, "copilot-token")},
 		WorkerLimits:         config.WorkerLimitsConfig{Memory: "3g"},
 	}}}
 	ids := []string{"run-test-stage", "test-invocation", "implementation-invocation"}
@@ -658,6 +659,7 @@ func newObjectionCycleFixtureFor(t *testing.T, allowAutomatedObjections bool, te
 		AuthorizedUsers:      []string{"alice"},
 		OperationalDataPath:  filepath.Join(root, "state", "factory.db"),
 		RepositoryConfigPath: filepath.Join(repositoryPath, config.RepositoryConfigFileName),
+		Authentication:       config.AuthenticationConfig{CopilotAuthPath: filepath.Join(root, "copilot-token")},
 	}}}
 	ids := []string{"run-objection", "test-invocation", "implementation-invocation", "revision-invocation", "implementation-after-revision", "revision-invocation-2", "implementation-after-revision-2"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

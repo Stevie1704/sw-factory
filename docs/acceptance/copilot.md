@@ -84,8 +84,12 @@ Offline status: met. Live: blocked by RB-1 and RB-6.
 - `internal/harness:TestCopilotHeadlessLaunchesThroughTheWorkerLauncherWithTheAssignedSession`
 - `internal/harness:TestHeadlessAdaptersShareOneLifecycleContract`
 - `internal/factory:TestCopilotAndMixedHarnessWorkflowsReachReadiness`
+  (the Copilot-only run includes the test stage)
 - `internal/factory:TestSessionRolesLaunchAcceptAndResumeThroughBothHarnesses`
-  (ideation and planning on Codex, Claude Code, and Copilot)
+  (ideation on Codex, Claude Code, and Copilot)
+- `internal/factory:TestSessionRolesPlanFromTheFrozenBrief` and
+  `internal/factory:TestSessionRolesAcceptAtMostOneResultPerUserTurn`
+  (planning and one result per turn on Codex, Claude Code, and Copilot)
 
 ### 3. Copilot-only and mixed selection with frozen policy
 
@@ -117,17 +121,27 @@ Offline status: met. Live: blocked by RB-4 and RB-5.
 - `internal/factory:TestCopilotCredentialSeedingProjectsTheRegisteredSource`
 - `internal/factory:TestRefreshAuthServesCopilotAndKeepsTheRecordedHarness`
 - `internal/factory:TestRefreshAuthExplainsHowToRegisterAMissingCopilotSource`
+- `internal/factory:TestCopilotLaunchRefusesAnUnusableTokenSourceBeforeAnyResource`
+- `internal/factory:TestHarnessFailureDiagnosticMasksGitHubTokens`
 - `internal/harness:TestStartupChecksDiagnoseTheCopilotCredentialSource`
 
 ### 5. Restart, recreation, repair, capacity, auth repair, cancellation, and replay keep identity and budgets
 
-Offline status: met, through the deterministic tests of the
-`copilot-mixed-harness-recovery` scenario. Live: blocked by RB-2 and RB-5.
-Capacity has no observed Copilot shape, so it settles as an unexpected exit
-with the bounded resume allowance and never as an endless retry.
+Offline status: met for restart, recreation, repair, auth repair,
+cancellation, and replay, through the deterministic tests of the
+`copilot-mixed-harness-recovery` scenario. Live: blocked by RB-2.
+
+Capacity: **BLOCKED-LIVE (RB-5), not met.** Copilot has no observed capacity
+shape, so a capacity failure settles as an unexpected exit with the bounded
+resume allowance, never as a capacity wait and never as an endless retry. The
+tests below prove only that fail-closed behavior.
 
 - `internal/factory:TestHeadlessStartupRecreatesWorkerAndResumesOnce`
 - `internal/factory:TestHeadlessRecoveryBoundsAnUnexpectedCopilotExit`
+- `internal/factory:TestAutomaticResumeIsBoundedToOnePerInvocation`
+- `internal/factory:TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect`
+- `internal/factory:TestHeadlessRecoverySettlesNativeFailuresThroughTheRecordedAdapter`
+  (unobserved capacity and model-unavailable output stay bounded exits)
 - `internal/factory:TestHeadlessRecoveryResumesTheSameCopilotSessionAfterAuthRefresh`
 - `internal/factory:TestMixedHarnessReviewRoundRepairsInTheRecordedImplementationHarness`
 - `internal/factory:TestCheckRepairResumesTheRecordedHarnessAfterAConfigurationChange`

@@ -75,7 +75,9 @@ func codexCommandOptions(command []string, model, reasoningEffort string) []stri
 // treats human-readable output as a native session identity.
 func threadStartedID(output string) string {
 	identity := ""
-	forEachHeadlessEvent(output, func(line string) bool {
+	// An unreadable line ends the scan before any identity was found, so a
+	// scan error leaves identity empty and needs no separate handling.
+	_ = forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
@@ -94,7 +96,7 @@ func threadStartedID(output string) string {
 // is carried by a documented failure event, never when it is standalone prose.
 func classifyHeadlessEvents(output string) *HeadlessFailure {
 	var failure *HeadlessFailure
-	forEachHeadlessEvent(output, func(line string) bool {
+	scanErr := forEachHeadlessEvent(output, func(line string) bool {
 		var event struct {
 			Type    string `json:"type"`
 			Code    string `json:"code"`
@@ -150,6 +152,10 @@ func classifyHeadlessEvents(output string) *HeadlessFailure {
 		}
 		return false
 	})
+	if scanErr != nil {
+		// Unread events could name any outcome, so none is inferred.
+		return &HeadlessFailure{Cause: NewUnexpectedExitError(NameCodex)}
+	}
 	return failure
 }
 

@@ -88,7 +88,8 @@ harness never touches another harness's file.
 
 The base image installs the Copilot CLI release that
 `docs/spikes/0003-copilot-cli-protocol.md` proved (`COPILOT_VERSION` in
-`worker/base.Dockerfile` and `scripts/build-worker.sh`). The worker image never
+`worker/base.Dockerfile`; `scripts/build-worker.sh` reads it from the proof's
+manifest and refuses a different override). The worker image never
 contains the `gh` CLI, because a `gh` login is a fallback Copilot credential.
 An image built before Copilot support has no Copilot files; Codex and Claude
 workers from that image are unchanged.
@@ -134,8 +135,9 @@ the automatic model switch on rate limits (`continueOnAutoMode: false`), trust
 no folder, and disable only the two built-in skills. Repository hooks, MCP
 servers, and plugins load only for a trusted folder, and the worker never
 trusts `/work`. Whether a live run honors every suppression is release blocker
-RB-7. Removing the role volumes removes Copilot sessions; cleanup and reset
-never remove the shared credential volume.
+RB-7. Removing the role volumes removes Copilot sessions. Ordinary cleanup
+never removes the shared credential volume; only a complete `factory reset`
+removes it, together with the projected Copilot token.
 
 The skill smoke (`HARNESSES=copilot COPILOT_TOKEN_PATH=<token file>
 scripts/smoke-skills.sh`) starts the same launcher in a disposable worker.
@@ -223,8 +225,12 @@ cannot forge an out-of-memory failure.
 When the kernel exposes no `oom_kill` count, or the baseline could not be
 recorded, an out-of-memory kill stays an ordinary failed exit.
 
-When the helper cannot start the requested command, it records exit status
-127 and the stderr line `process start failed`. This happens, for example,
+When the helper cannot start the requested command, it records its own
+`start_failed` state, exit status 127, and the stderr line
+`process start failed`. The state names the cause, because a started
+command can print the same line. A helper in an image built before that
+state existed records only the line and the status, so for it the adapter
+still reads them. This happens, for example,
 when a repository selects Copilot on a worker image built before
 `factory-copilot` existed. The harness adapter reports an unexpected exit
 that names the missing executable. The coordinator does not resume it,

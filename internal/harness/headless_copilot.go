@@ -158,9 +158,10 @@ var copilotSessionEvidenceFields = []string{"sessionId", "session_id"}
 
 // copilotSessionEvidence collects identity evidence from every complete JSON
 // line. conflict reports evidence that is not a canonical version-four UUID,
-// or two different identities, so the launch fails closed.
+// two different identities, or a line too long to read, so the launch fails
+// closed.
 func copilotSessionEvidence(output string) (identity string, conflict bool) {
-	forEachHeadlessEvent(output, func(line string) bool {
+	scanErr := forEachHeadlessEvent(output, func(line string) bool {
 		var event map[string]any
 		if json.Unmarshal([]byte(line), &event) != nil {
 			return true
@@ -180,6 +181,10 @@ func copilotSessionEvidence(output string) (identity string, conflict bool) {
 		}
 		return true
 	})
+	if scanErr != nil {
+		// An unread line could carry a conflicting identity.
+		return "", true
+	}
 	return identity, conflict
 }
 

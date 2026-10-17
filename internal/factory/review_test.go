@@ -930,7 +930,7 @@ func newReviewFixture(t *testing.T) reviewFixture {
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{
 		Path: repositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"},
 		OperationalDataPath: filepath.Join(root, "state", "factory.db"), RepositoryConfigPath: filepath.Join(repositoryPath, "factory.yaml"),
-		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json")},
+		Authentication: config.AuthenticationConfig{CodexAuthPath: filepath.Join(root, "codex-auth.json"), CopilotAuthPath: filepath.Join(root, "copilot-token")},
 	}}}
 	ids := []string{"run-review", "review-session", "standards-session", "repair-session"}
 	service := factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{

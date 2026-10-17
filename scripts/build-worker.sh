@@ -11,7 +11,6 @@ WORKER_TAG="${WORKER_TAG:-v1}"
 NPM_VERSION="${NPM_VERSION:-11.21.0}"
 CLAUDE_VERSION="${CLAUDE_VERSION:-2.1.232}"
 CODEX_VERSION="${CODEX_VERSION:-0.148.0}"
-COPILOT_VERSION="${COPILOT_VERSION:-1.0.98}"
 WORKER_PLATFORM="${WORKER_PLATFORM:-}"
 # A release build names its version; every other base is a development base.
 FACTORY_RELEASE="${FACTORY_RELEASE:-development}"
@@ -31,6 +30,22 @@ if [ -n "${GO_VERSION:-}" ] && [ "$GO_VERSION" != "$approved_go" ]; then
   exit 1
 fi
 GO_VERSION="$approved_go"
+
+# The compatibility record names the only proved Copilot CLI release. A
+# different COPILOT_VERSION is refused, because the image check below compares
+# the installed CLI with this value and would otherwise accept any release.
+proved_copilot_manifest=docs/spikes/copilot-cli-1.0.98/manifest.json
+proved_copilot="$(sed -n 's/^ *"version": "\([^"]*\)".*/\1/p' "$proved_copilot_manifest" | head -n 1)"
+if [ -z "$proved_copilot" ]; then
+  echo "$proved_copilot_manifest names no Copilot CLI release" >&2
+  exit 1
+fi
+if [ -n "${COPILOT_VERSION:-}" ] && [ "$COPILOT_VERSION" != "$proved_copilot" ]; then
+  echo "COPILOT_VERSION=$COPILOT_VERSION differs from the proved Copilot CLI $proved_copilot ($proved_copilot_manifest)." >&2
+  echo "Unset COPILOT_VERSION, or prove the new release and update its compatibility record first." >&2
+  exit 1
+fi
+COPILOT_VERSION="$proved_copilot"
 
 platform_args=""
 if [ -n "$WORKER_PLATFORM" ]; then

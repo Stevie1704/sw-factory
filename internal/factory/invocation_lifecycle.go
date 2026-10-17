@@ -68,6 +68,9 @@ type LaunchSnapshot struct {
 	// ReviewAuthorizedUnits is the host-local maximum fan-out a maintainer may
 	// authorize for this installation.
 	ReviewAuthorizedUnits int
+	// Authentication is the registered credential sources of the repository,
+	// which admission checks before any launch resource exists.
+	Authentication config.AuthenticationConfig
 }
 
 // LaunchPlan is the pure admission decision for one harness invocation.
@@ -551,7 +554,7 @@ func (l *invocationLifecycle) gatherLaunch(ctx context.Context, request Invocati
 	}
 	agentRequest, roleDefinition := resolveLaunchRoleForGather(run, agentRequest)
 	testRevision, reviewRepair, implementationResume := launchModeHints(run, agentRequest, roleDefinition)
-	snapshot := LaunchSnapshot{Run: run, Packet: packet, Request: agentRequest, InvocationID: request.InvocationID}
+	snapshot := LaunchSnapshot{Run: run, Packet: packet, Request: agentRequest, InvocationID: request.InvocationID, Authentication: request.Registration.Authentication}
 	// Source reads are selected only by immutable mode hints. Their ownership
 	// and validity remain admission decisions in PlanLaunch.
 	snapshot.ResumeSource, err = l.gatherResumeSource(ctx, request.RunStore, invocationStore, run, testRevision, reviewRepair, implementationResume)
@@ -800,6 +803,9 @@ func PlanLaunch(snapshot LaunchSnapshot, request AgentRequest) (LaunchPlan, erro
 	}
 	policy, err := resolveAgentPolicy(snapshot.Packet.RepositoryConfig, request)
 	if err != nil {
+		return LaunchPlan{}, err
+	}
+	if err := validateLaunchCredentialSource(snapshot.Authentication, request, policy.Harness); err != nil {
 		return LaunchPlan{}, err
 	}
 	if resumeSource != nil {
@@ -1408,16 +1414,58 @@ func classifyHeadlessExit(runtime harness.Runtime, ctx context.Context, request 
 // credentialSeeding selects the registered, harness-specific source and
 // returns a post-worker projection step plus its factory-managed identity.
 func (l *invocationLifecycle) credentialSeeding(registration config.RepositoryRegistration, request AgentRequest, harnessName config.Harness) (func(context.Context, string, string) error, string, error) {
-	overrideAuthPath := ""
+	return harnessCredentialSeeding(l.worker, registration, harnessName, credentialSourceOverride(request, harnessName))
+}
+
+// credentialSourceOverride returns the per-launch auth source the request
+// names for harnessName, empty when it names none.
+func credentialSourceOverride(request AgentRequest, harnessName config.Harness) string {
 	switch harnessName {
 	case config.HarnessCodex:
-		overrideAuthPath = request.CodexAuthPath
+		return request.CodexAuthPath
 	case config.HarnessClaude:
-		overrideAuthPath = request.ClaudeAuthPath
+		return request.ClaudeAuthPath
 	case config.HarnessCopilot:
-		overrideAuthPath = request.CopilotAuthPath
+		return request.CopilotAuthPath
 	}
-	return harnessCredentialSeeding(l.worker, registration, harnessName, overrideAuthPath)
+	return ""
+}
+
+// registeredCredentialSource returns the registered host auth source of
+// harnessName, empty when none is registered.
+func registeredCredentialSource(authentication config.AuthenticationConfig, harnessName config.Harness) string {
+	switch harnessName {
+	case config.HarnessCodex:
+		return authentication.CodexAuthPath
+	case config.HarnessClaude:
+		return authentication.ClaudeAuthPath
+	case config.HarnessCopilot:
+		return authentication.CopilotAuthPath
+	}
+	return ""
+}
+
+// validateCredentialSourceOverride refuses an override that does not name
+// the registered source, because a restart could not repeat it.
+func validateCredentialSourceOverride(harnessName config.Harness, registeredAuthPath, overrideAuthPath string) error {
+	if overrideAuthPath != "" && (registeredAuthPath == "" || filepath.Clean(overrideAuthPath) != filepath.Clean(registeredAuthPath)) {
+		return fmt.Errorf("%s auth source override is not restart-safe; configure the source on the registered repository", harnessName)
+	}
+	return nil
+}
+
+// validateLaunchCredentialSource is the pure admission check of the selected
+// harness credential source. Copilot keeps no credential of its own in the
+// worker, so a Copilot launch also needs a registered token source.
+func validateLaunchCredentialSource(authentication config.AuthenticationConfig, request AgentRequest, harnessName config.Harness) error {
+	registered := registeredCredentialSource(authentication, harnessName)
+	if err := validateCredentialSourceOverride(harnessName, registered, credentialSourceOverride(request, harnessName)); err != nil {
+		return err
+	}
+	if harnessName == config.HarnessCopilot && strings.TrimSpace(registered) == "" {
+		return errors.New("no registered copilot token source; register one with `factory register --update --copilot-auth <path>`")
+	}
+	return nil
 }
 
 // harnessCredentialSeeding selects the registered source of harnessName and
@@ -1425,27 +1473,24 @@ func (l *invocationLifecycle) credentialSeeding(registration config.RepositoryRe
 // store identity. A nil step means the worker keeps its own credential. An
 // override must name the registered source, so a restart can repeat it.
 func harnessCredentialSeeding(workerRuntime worker.WorkerRuntime, registration config.RepositoryRegistration, harnessName config.Harness, overrideAuthPath string) (func(context.Context, string, string) error, string, error) {
-	var registeredAuthPath string
+	registeredAuthPath := registeredCredentialSource(registration.Authentication, harnessName)
 	var seed func(context.Context, worker.CredentialSeedRequest) error
 	switch harnessName {
 	case config.HarnessCodex:
-		registeredAuthPath = registration.Authentication.CodexAuthPath
 		if seeder, ok := workerRuntime.(worker.CredentialSeeder); ok {
 			seed = seeder.SeedCodexCredentials
 		}
 	case config.HarnessClaude:
-		registeredAuthPath = registration.Authentication.ClaudeAuthPath
 		if seeder, ok := workerRuntime.(worker.ClaudeCredentialSeeder); ok {
 			seed = seeder.SeedClaudeCredentials
 		}
 	case config.HarnessCopilot:
-		registeredAuthPath = registration.Authentication.CopilotAuthPath
 		if seeder, ok := workerRuntime.(worker.CopilotCredentialSeeder); ok {
 			seed = seeder.SeedCopilotCredentials
 		}
 	}
-	if overrideAuthPath != "" && (registeredAuthPath == "" || filepath.Clean(overrideAuthPath) != filepath.Clean(registeredAuthPath)) {
-		return nil, "", fmt.Errorf("%s auth source override is not restart-safe; configure the source on the registered repository", harnessName)
+	if err := validateCredentialSourceOverride(harnessName, registeredAuthPath, overrideAuthPath); err != nil {
+		return nil, "", err
 	}
 	authPath := defaultString(overrideAuthPath, registeredAuthPath)
 	if authPath == "" {
