@@ -277,7 +277,10 @@ type RegisterRequest struct {
 	// CodexAuthPath is an optional host-side Codex auth.json path.
 	CodexAuthPath string
 	// ClaudeAuthPath is an optional host-side Claude credential file path.
-	ClaudeAuthPath       string
+	ClaudeAuthPath string
+	// CopilotAuthPath is an optional host-side file holding one dedicated
+	// Copilot CLI token.
+	CopilotAuthPath      string
 	RepositoryConfigPath string
 	// WorkingDirectory is the directory the register command was invoked in. It
 	// is the inference source for values the operator did not supply.
@@ -592,7 +595,7 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		GitHub:               config.GitHubConfig{Owner: strings.TrimSpace(request.GitHubOwner), Repository: strings.TrimSpace(request.GitHubRepository)},
 		AuthorizedUsers:      request.AuthorizedUsers,
 		Polling:              config.PollingConfig{Interval: defaultString(request.PollingInterval, "30s"), Backoff: defaultString(request.PollingBackoff, "5m")},
-		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath, ClaudeAuthPath: request.ClaudeAuthPath},
+		Authentication:       config.AuthenticationConfig{CodexAuthPath: request.CodexAuthPath, ClaudeAuthPath: request.ClaudeAuthPath, CopilotAuthPath: request.CopilotAuthPath},
 		OperationalDataPath:  operationalPath,
 		RepositoryConfigPath: repositoryConfigPath,
 	}
@@ -616,8 +619,8 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 // updateRegistration changes the explicitly supplied credential sources on an
 // existing registration after proving the requested checkout is the same one.
 func (s *Service) updateRegistration(ctx context.Context, host config.HostConfig, request RegisterRequest) (RegisterResult, error) {
-	if strings.TrimSpace(request.CodexAuthPath) == "" && strings.TrimSpace(request.ClaudeAuthPath) == "" {
-		return RegisterResult{}, errors.New("registration update requires --codex-auth or --claude-auth")
+	if strings.TrimSpace(request.CodexAuthPath) == "" && strings.TrimSpace(request.ClaudeAuthPath) == "" && strings.TrimSpace(request.CopilotAuthPath) == "" {
+		return RegisterResult{}, errors.New("registration update requires --codex-auth, --claude-auth, or --copilot-auth")
 	}
 	repositoryPath, err := s.resolveRegistrationPath(ctx, request)
 	if err != nil {
@@ -633,6 +636,9 @@ func (s *Service) updateRegistration(ctx context.Context, host config.HostConfig
 	}
 	if request.ClaudeAuthPath != "" {
 		updated.Authentication.ClaudeAuthPath = request.ClaudeAuthPath
+	}
+	if request.CopilotAuthPath != "" {
+		updated.Authentication.CopilotAuthPath = request.CopilotAuthPath
 	}
 	host.Repositories[0] = updated
 	if err := config.ValidateHost(host); err != nil {
