@@ -55,9 +55,12 @@ the operational store.
 The remaining registration values keep their existing defaults: the host
 configuration path, a host-local operational data path, `factory.yaml` in the
 checkout, and the polling interval and backoff. The authentication options are
-never inferred: `--codex-auth` and `--claude-auth` stay explicit. Omit either
-option when that harness has no host-side credential file, such as a Claude
-Code credential kept in the macOS login Keychain.
+never inferred: `--codex-auth`, `--claude-auth`, and `--copilot-auth` stay
+explicit. Omit an option when that harness has no host-side credential file,
+such as a Claude Code credential kept in the macOS login Keychain.
+`factory register --update` changes only the sources it is given, so
+`factory register --update --copilot-auth <path>` adds or replaces the Copilot
+source and keeps the others.
 
 ### Explicit fallback flags
 
@@ -233,6 +236,7 @@ repositories:
     authentication:
       codex_auth_path: /Users/me/.codex/auth.json
       claude_auth_path: /Users/me/.claude/.credentials.json
+      copilot_auth_path: /Users/me/.config/factory/copilot-token
     review:
       concurrency: 2
       authorized_units: 8
@@ -420,6 +424,18 @@ credential in the login Keychain, so `claude_auth_path` is declared only where
 a credential file exists. A harness with no registered source keeps the
 credential the worker itself persisted in its role volume.
 
+`authentication.copilot_auth_path` is optional and names one private file that
+holds exactly one dedicated GitHub Copilot CLI token on one line: a
+fine-grained `github_pat_` token (or a `gho_` or `ghu_` token). Classic `ghp_`
+tokens are not supported. It is never the host `gh` login, `GH_TOKEN`,
+`GITHUB_TOKEN`, or `~/.copilot` state, and it is independent of the tracker
+and code-host credentials: a repository on Azure DevOps can select Copilot,
+and a GitHub repository does not need it. The token is copied into the
+factory-managed credential volume and has no role-home link; the worker
+launcher exports it only to the Copilot process. Copilot keeps no login of its
+own in the role volume, so a repository whose role defaults select `copilot`
+needs this source. See [Worker runtime](worker-runtime.md).
+
 ## Checked-in repository configuration
 
 [Repository initialization](repository-initialization.md) is the ordered
@@ -504,7 +520,7 @@ evaluation:
   retention: 720h
 ```
 
-The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), caches, worker image, base-synchronization mode, bounded `review_units` values, and optional positive `evaluation.retention`. `review_units.max_unit_bytes` defaults to 65,536 bytes and is capped at 1 MiB by factory policy; `max_units` defaults to four and is capped at eight. The factory owns the ten-line context-overlap policy. A large exact checkpoint is persisted as one deterministic review manifest; the specification and standards axes receive separate fresh invocations over those shared units. The host `review.concurrency` defaults to two simultaneous invocations and `review.authorized_units` defaults to eight; a manifest above the normal repository fan-out pauses until an authorized maintainer comments `/factory authorize-review <units>`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. A cache entry declares only a unique `name` and `read_only`. The name becomes the in-worker mount point `/cache/<name>`. A declared `path` is rejected, because host paths belong to host configuration. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
+The validator checks the schema version, target branch, setup, optional repository-relative `setup_files`, setup environment policy, ordered unique gates and earlier dependencies, matching role harness/model policies, the mandatory `test` role when `test_policy.mode` is `required`, optional `reasoning_effort_options` for declared roles, optional `role_craft` entries for declared roles, positive durations, positive retry limits, test policy, supported test-role prefixes, supported unique overrides (`model`, `reasoning_effort`, or `harness`), optional `override_harnesses` targets, caches, worker image, base-synchronization mode, bounded `review_units` values, and optional positive `evaluation.retention`. `review_units.max_unit_bytes` defaults to 65,536 bytes and is capped at 1 MiB by factory policy; `max_units` defaults to four and is capped at eight. The factory owns the ten-line context-overlap policy. A large exact checkpoint is persisted as one deterministic review manifest; the specification and standards axes receive separate fresh invocations over those shared units. The host `review.concurrency` defaults to two simultaneous invocations and `review.authorized_units` defaults to eight; a manifest above the normal repository fan-out pauses until an authorized maintainer comments `/factory authorize-review <units>`. `role_craft` paths must be nonempty, repository-relative Markdown paths without control characters, backslashes, absolute paths, or any `..` path segment. At claim time each selected file is read from the exact immutable base checkpoint; a missing file fails the claim. `setup_files` names the checked-in manifests and lockfiles whose contents identify the dependency graph; an empty list is valid. `test_policy.test_paths` and `test_policy.infrastructure_paths` authorize additional repository-relative paths for the independent test role; conventional `*_test.go`, `test/`, `tests/`, `test-support/`, and `__tests__/` paths are allowed by default. An empty `allowed_overrides` list is valid and means that issue-level overrides are disabled. A cache entry declares only a unique `name` and `read_only`. The name becomes the in-worker mount point `/cache/<name>`. A declared `path` is rejected, because host paths belong to host configuration. Validation errors are typed and identify the offending field, including `schema_version` for an unsupported newer schema.
 
 `test_policy.allow_automated_objections` is the repository-owned switch for the
 implementation-to-test objection cycle. The value frozen in the specification
@@ -628,7 +644,10 @@ receive a defaulted host path.
 
 `role_harness_defaults`, `model_options`, and `reasoning_effort_options` are
 selected independently for each role, so the best harness can be used for each
-stage. The supported harness values are `codex` and `claude`.
+stage. The supported harness values are `codex`, `claude`, and `copilot`. A
+Copilot-only repository and a mixed repository (for example `test: codex`,
+`implementation: copilot`, `ideation: claude`) are both valid. The choice of
+harness is independent of the work tracker and code host.
 
 A request selects one declared option per setting. When it selects nothing, the
 role uses its declared harness, its first declared model, and its first
@@ -639,9 +658,17 @@ launch as a typed policy rejection with the code `harness_override`,
 
 Declared values must match what the role's harness accepts. Codex takes its own
 effort names through `model_reasoning_effort`; Claude Code takes `low`,
-`medium`, `high`, `xhigh`, or `max` through `--effort`. `ValidateRepository`
-rejects Claude Code `reasoning_effort_options` with unsupported values before
-launch, so an invalid declaration never reaches the harness. Declare
+`medium`, `high`, `xhigh`, or `max` through `--effort`; Copilot takes `none`,
+`minimal`, `low`, `medium`, `high`, `xhigh`, or `max` through
+`--reasoning-effort`. A Copilot role must name its model: `auto` is refused,
+because it lets Copilot choose a different model than the one recorded.
+`ValidateRepository` rejects unsupported Claude Code and Copilot values before
+launch, so an invalid declaration never reaches the harness. The coordinator
+also checks the final harness, model, and effort together before it creates a
+directory, worker, or credential copy. An override cannot pair a harness with
+a value that harness would refuse or replace: the launch is refused with the
+code `harness_selection_unsupported`, and the factory never substitutes
+another harness, model, or effort. Declare
 `reasoning_effort_options` for every role, and keep `reasoning_effort` out of
 `allowed_overrides` unless an operator is meant to bypass that check.
 
@@ -650,6 +677,28 @@ harness. A repository that adds `harness` to `allowed_overrides` therefore accep
 responsibility for declaring model and effort options that every permitted
 harness accepts; otherwise an authorized override can pair one harness with
 another harness's option names.
+
+### Harness override targets
+
+A harness override reaches only the harnesses in `override_harnesses`. When
+the field is omitted, the targets are `codex` and `claude`, which is what
+`allowed_overrides: [harness]` meant before Copilot support. An existing
+repository therefore does not start to accept Copilot by override, and does
+not need Copilot in its worker image, until its checked-in configuration says
+so:
+
+```yaml
+allowed_overrides: [harness]
+override_harnesses: [codex, claude, copilot]
+```
+
+`override_harnesses` is valid only together with `harness` in
+`allowed_overrides`, must not be empty, and lists unique supported harness
+names. A role default that names `copilot` needs no entry. The same frozen
+list governs `factory agent --harness`, the `/factory config harness=` comment,
+startup diagnosis, and the required skill smoke evidence. A run claimed before
+the field existed keeps the `codex` and `claude` targets. See
+[ADR 0027](adr/0027-harness-overrides-name-their-targets.md).
 
 ## Factory-owned role, prompt, and stage registry
 
@@ -784,7 +833,7 @@ coordinator section only.
 The `pr` skill is in the worker image. `factory doctor` requires smoke evidence
 for it only when the repository declares `pr_writer`, and only from the harness
 that can run the role: the `pr_writer` harness in `role_harness_defaults`, or
-both harnesses when `allowed_overrides` contains `harness`. Record that smoke
+each harness override target when `allowed_overrides` contains `harness`. Record that smoke
 result for the pinned digest before you turn the role on. To add it to an
 existing record, run the smoke with `MANDATORY_SKILLS=pr` and `HARNESSES` set
 to that harness.
@@ -857,9 +906,28 @@ The recorded worker skill smoke evidence in `worker/skill-smoke.json` is keyed
 by this digest and by each harness's version, so a new digest invalidates it.
 Re-run `./scripts/smoke-skills.sh` after recording a new digest. Startup
 diagnosis blocks missing evidence for harnesses selected by
-`role_harness_defaults`, or for both supported harnesses when
-`allowed_overrides` contains `harness`; an unselected harness is reported as
-an advisory finding.
+`role_harness_defaults`, or for each harness override target when
+`allowed_overrides` contains `harness`; an unselected Codex or Claude harness
+is reported as an advisory finding. Copilot is diagnosed only when the
+repository can select it, so an image built before Copilot support stays
+valid for a Codex and Claude repository.
+
+For a selectable Copilot, `factory doctor` reports these cases separately:
+
+| Finding | Code | Blocks startup |
+| --- | --- | --- |
+| No usable `copilot` executable in the pinned image, for example an image built before Copilot support. The action names the rebuild with the current `scripts/build-worker.sh` and the new `worker_build.digest`. | `harness.executable.unusable` | Yes |
+| No recorded skill smoke for the pinned digest and Copilot version | `harness.skills.evidence_missing` or `harness.skills.evidence_stale` | Yes |
+| No `copilot_auth_path` and a role default selects Copilot | `harness.authentication.source_missing` | Yes |
+| No `copilot_auth_path` and Copilot is only an override target | `harness.authentication.source_missing` | No |
+| The token file is unsafe, or holds no supported token | `harness.authentication.source_unsafe`, `harness.authentication.source_unsupported` | Yes |
+| The token file is usable | `harness.authentication.entitlement_unverified` | No |
+
+The last row is a warning, not a pass. The diagnosis runs offline and makes no
+inference call, so it cannot establish the Copilot entitlement: a Copilot
+seat, an organization policy that allows Copilot CLI, and the Copilot Requests
+permission on the token. A rejected token pauses the run for
+`factory auth refresh`.
 
 The checked-in `worker_build.image` is intentionally an image name without a
 mutable tag. The reported SHA-256 digest is appended by the worker adapter as
@@ -985,14 +1053,20 @@ Answer commands normally use `/factory answer <question-id> <answer>`; the
 identifier may also be written as `question=`, `question-id=`, or `id=` for
 automation clients, and an answer may begin with `answer=`.
 
-The command grammar and current implementation support both the Codex and Claude
-adapters. A selected harness is still validated against the frozen role policy
-and the startup capability check before an issue can be claimed.
+The command grammar and current implementation support the Codex, Claude, and
+Copilot adapters (`/factory config harness=copilot`). A selected harness is
+still validated against the frozen role policy, including the
+`override_harnesses` targets, and the startup capability check before an issue
+can be claimed.
 
 For an expired credential, refresh the host source first with
 `factory auth refresh`. `factory auth refresh --resume` combines that
 credential projection with one explicit native-session continuation; the
-default command remains credential-only. The equivalent GitHub sequence is the
+default command remains credential-only. Both forms serve Copilot the same
+way: they reseed the registered `copilot_auth_path` and continue the recorded
+Copilot session. `--harness` must match the harness recorded for the
+invocation; a different name is refused before any credential is projected,
+so a refresh never moves a session to another harness. The equivalent GitHub sequence is the
 same host refresh followed by `/factory resume`, delivered by the live polling
 supervisor. The `--resume` path reconciles pending effects before continuing,
 and it reports a refresh success separately from a failed native-session
@@ -1094,8 +1168,8 @@ the branch, and opens a draft pull request.
 Before starting, prepare a dedicated GitHub repository with a checked-in
 `factory.yaml`, a fresh open issue carrying `agent-ready`, valid `gh` login,
 Docker with the configured worker image available, and the host Codex `auth.json`
-path registered in the host configuration. Codex and Claude Code repositories,
-including mixed per-role selections, use the headless worker path and do not
+path registered in the host configuration. Codex, Claude Code, and Copilot
+repositories, including mixed per-role selections, use the headless worker path and do not
 require terminal software. Build the local commands from this checkout
 (`factory`, `factory-report`, and `factory-worker-headless`) so the worker image
 can invoke the pinned report command; the headless worker helper is built into

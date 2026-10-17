@@ -106,7 +106,9 @@ with the installed release and uses that release's manifest and procedure.
 
 `factory onboard`, run from the checkout of the repository to onboard, starts
 a new interactive Claude Code session for the procedure. Use `--harness codex`
-to start Codex instead:
+to start Codex instead. The launcher supports only these two interactive
+harnesses; Copilot is a worker harness that a role can select in
+`factory.yaml`, not an onboarding launcher:
 
 ~~~sh
 factory onboard

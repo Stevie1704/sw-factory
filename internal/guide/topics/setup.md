@@ -140,8 +140,9 @@ factory doctor
 `factory register` infers the repository path, the GitHub owner and name from
 the `origin` remote, and the authorized user from the `gh` account. It never
 infers a credential path. The operator confirms every credential path. Omit
-the flag of a harness that has no credential file. Never read a credential
-file.
+the flag of a harness that has no credential file. When a role selects
+Copilot, add `--copilot-auth <copilot-token-path>`: a private file with one
+dedicated Copilot token, never the `gh` login. Never read a credential file.
 
 `factory bootstrap-labels` creates the six factory labels in the GitHub
 repository. `factory doctor` runs the complete startup diagnosis. Repeat the

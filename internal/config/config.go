@@ -165,7 +165,7 @@ type RepositoryConfig struct {
 	// OverrideHarnesses lists the harnesses a harness override may select.
 	// When it is omitted, a harness override reaches only the original Codex
 	// and Claude adapters, so an existing permission does not widen when the
-	// factory adds an adapter (ADR 0012).
+	// factory adds an adapter (ADR 0027).
 	OverrideHarnesses   []Harness           `yaml:"override_harnesses,omitempty"`
 	Caches              []CacheConfig       `yaml:"caches"`
 	WorkerBuild         WorkerBuildConfig   `yaml:"worker_build"`
