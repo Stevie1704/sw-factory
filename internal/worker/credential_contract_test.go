@@ -146,7 +146,7 @@ func TestDockerRuntimeSeedsCredentialsWithoutPrivilegedOperations(t *testing.T) 
 			if strings.Contains(line, "$HOME/.codex") {
 				t.Fatalf("uid 0 cannot write the factory-owned role home: %q", line)
 			}
-			wroteCredential = strings.Contains(line, "cat > \""+worker.CredentialPath+"/auth.json\"") || wroteCredential
+			wroteCredential = strings.Contains(line, "mv -f \""+worker.CredentialPath+"/auth.json.new\" \""+worker.CredentialPath+"/auth.json\"") || wroteCredential
 		case strings.Contains(line, "--user "+worker.WorkerUser):
 			linkedRoleHome = strings.Contains(line, "ln -s") && strings.Contains(line, "$HOME/.codex/auth.json") || linkedRoleHome
 		}
@@ -192,7 +192,7 @@ func TestDockerRuntimeSeedsOnlyTheClaudeCredentialFile(t *testing.T) {
 		if strings.Contains(line, "chown") {
 			t.Fatalf("credential seed requires a dropped capability: %q", line)
 		}
-		wroteCredential = wroteCredential || strings.Contains(line, "--user 0:0") && strings.Contains(line, "cat > \""+worker.CredentialPath+"/claude-credentials.json\"")
+		wroteCredential = wroteCredential || strings.Contains(line, "--user 0:0") && strings.Contains(line, "mv -f \""+worker.CredentialPath+"/claude-credentials.json.new\" \""+worker.CredentialPath+"/claude-credentials.json\"")
 		linkedRoleHome = linkedRoleHome || strings.Contains(line, "--user "+worker.WorkerUser) && strings.Contains(line, "ln -s") && strings.Contains(line, "$HOME/.claude/.credentials.json")
 	}
 	if !wroteCredential || !linkedRoleHome {
@@ -274,5 +274,98 @@ func TestDockerRuntimeKeepsACaptureLimitFailureThroughCredentialSeeding(t *testi
 				t.Fatalf("credential seed error = %q, want the %q step named", err, test.step)
 			}
 		})
+	}
+}
+
+// TestDockerRuntimeSeedsOnlyTheCopilotTokenIntoTheProjection verifies the
+// Copilot token is streamed into its own file in the shared credential volume,
+// replaced atomically, never linked into the role home, and never written
+// back to the host source.
+func TestDockerRuntimeSeedsOnlyTheCopilotTokenIntoTheProjection(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	authPath := filepath.Join(t.TempDir(), "copilot-token")
+	contents := []byte("github_pat_test-only\n")
+	if err := os.WriteFile(authPath, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	var seeder worker.CopilotCredentialSeeder = runtime
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID: "run-copilot-auth", WorktreePath: makeDirectory(t, "worktree"), GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Role: "implementation", Image: "ghcr.io/example/factory-worker", ImageDigest: testWorkerDigest,
+	}); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := seeder.SeedCopilotCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-copilot-auth", AuthPath: authPath}); err != nil {
+		t.Fatalf("SeedCopilotCredentials() error = %v", err)
+	}
+	lines := readStubLog(t, logPath)
+	joined := strings.Join(lines, "\n")
+	if strings.Contains(joined, filepath.Dir(authPath)) || strings.Contains(joined, "github_pat_test-only") || strings.Contains(joined, "docker.sock") {
+		t.Fatalf("credential seed leaked the host source or the token: %q", joined)
+	}
+	after, err := os.ReadFile(authPath)
+	if err != nil || string(after) != string(contents) {
+		t.Fatal("credential seed wrote back to the host source")
+	}
+	projection := worker.CredentialPath + "/" + worker.CopilotCredentialFile
+	var replacedAtomically bool
+	for _, line := range lines {
+		if !strings.HasPrefix(line, "exec ") {
+			continue
+		}
+		if strings.Contains(line, "chown") || strings.Contains(line, "ln -s") || strings.Contains(line, "$HOME") {
+			t.Fatalf("Copilot seed touched the role home or needs a dropped capability: %q", line)
+		}
+		replacedAtomically = replacedAtomically || strings.Contains(line, "--user 0:0") &&
+			strings.Contains(line, "chmod 0444") && strings.Contains(line, "mv -f") && strings.Contains(line, "\""+projection+"\"")
+	}
+	if !replacedAtomically {
+		t.Fatalf("Copilot seed calls = %#v, want one atomic root-owned replacement of %s", lines, projection)
+	}
+}
+
+// TestDockerRuntimeRefusesAnUnsafeCopilotCredentialSource verifies Copilot
+// applies the shared source checks and accepts exactly one token line, which
+// the in-worker launcher exports unchanged.
+func TestDockerRuntimeRefusesAnUnsafeCopilotCredentialSource(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	root := t.TempDir()
+	empty := filepath.Join(root, "empty")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(empty, link); err != nil {
+		t.Fatal(err)
+	}
+	multiline := filepath.Join(root, "multiline")
+	if err := os.WriteFile(multiline, []byte("github_pat_one\ngithub_pat_two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spaced := filepath.Join(root, "spaced")
+	if err := os.WriteFile(spaced, []byte("token=github_pat one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	for _, test := range []struct{ name, path, problem string }{
+		{name: "relative", path: "copilot-token", problem: "absolute safe path"},
+		{name: "symlink", path: link, problem: "symbolic link"},
+		{name: "empty", path: empty, problem: "empty"},
+		{name: "multiple lines", path: multiline, problem: "one token"},
+		{name: "whitespace", path: spaced, problem: "one token"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := runtime.SeedCopilotCredentials(context.Background(), worker.CredentialSeedRequest{RunID: "run-copilot-auth", AuthPath: test.path})
+			if err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("SeedCopilotCredentials() error = %v, want %q refusal", err, test.problem)
+			}
+			if strings.Contains(err.Error(), "github_pat") {
+				t.Fatalf("refusal leaked credential content: %v", err)
+			}
+		})
+	}
+	if lines := readStubLog(t, logPath); len(lines) != 0 {
+		t.Fatalf("Docker was invoked for a refused source: %#v", lines)
 	}
 }

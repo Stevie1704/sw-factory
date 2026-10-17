@@ -163,6 +163,28 @@ func TestProjectFingerprintFollowsTheCandidateContents(t *testing.T) {
 	}
 }
 
+// TestProjectLeavesOutAnUntrackedCopilotToken verifies a local copy of the
+// dedicated Copilot token never reaches the proof worker.
+func TestProjectLeavesOutAnUntrackedCopilotToken(t *testing.T) {
+	repository := candidateRepository(t)
+	writeFile(t, repository, "local/copilot-token", "github_pat_test-only\n", 0o600)
+	destination := t.TempDir()
+
+	candidate, err := gateproof.Project(context.Background(), repository, destination)
+	if err != nil {
+		t.Fatalf("Project() error = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(destination, "local", "copilot-token")); !os.IsNotExist(err) {
+		t.Fatalf("projection contains the Copilot token (stat error %v)", err)
+	}
+	for _, excluded := range candidate.Excluded {
+		if excluded.Path == "local/copilot-token" && excluded.Reason == gateproof.ExcludedCredentialFile {
+			return
+		}
+	}
+	t.Fatalf("Excluded = %#v, want local/copilot-token as a credential file", candidate.Excluded)
+}
+
 // TestProjectRefusesADirectoryThatIsNotACheckout verifies the candidate must
 // be a Git checkout, because Git selects the candidate files.
 func TestProjectRefusesADirectoryThatIsNotACheckout(t *testing.T) {

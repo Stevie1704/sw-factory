@@ -407,6 +407,32 @@ func TestDockerRuntimeRejectsAHostHarnessDirectoryAsACache(t *testing.T) {
 	}
 }
 
+// TestDockerRuntimeRejectsTheHostCopilotHomeAsACache verifies the host Copilot
+// home, which holds its config, sessions, plugins, hooks, MCP configuration,
+// and possibly a plain-text token, cannot cross the worker boundary as a
+// repository cache.
+func TestDockerRuntimeRejectsTheHostCopilotHomeAsACache(t *testing.T) {
+	stub, logPath, _ := writeDockerStub(t)
+	copilotHome := filepath.Join(t.TempDir(), ".copilot", "session-state")
+	if err := os.MkdirAll(copilotHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &worker.DockerRuntime{DockerBinary: stub}
+	if err := runtime.Start(context.Background(), worker.StartRequest{
+		RunID:           "run-host-copilot-cache",
+		WorktreePath:    makeDirectory(t, "worktree"),
+		GitMetadataPath: makeDirectory(t, "git-metadata"),
+		Caches:          []worker.CacheMount{{Name: "copilot", HostPath: copilotHome}},
+		Image:           "ghcr.io/example/factory-worker",
+		ImageDigest:     testWorkerDigest,
+	}); err == nil || !strings.Contains(err.Error(), "host harness") {
+		t.Fatalf("Start() error = %v, want host harness cache rejection", err)
+	}
+	if lines := readStubLog(t, logPath); len(lines) != 0 {
+		t.Fatalf("Docker was invoked after rejecting the host Copilot home: %#v", lines)
+	}
+}
+
 // TestDockerRuntimeReturnsACommandExitResult verifies a deterministic command
 // failure remains a command result and is not confused with runtime failure.
 func TestDockerRuntimeReturnsACommandExitResult(t *testing.T) {

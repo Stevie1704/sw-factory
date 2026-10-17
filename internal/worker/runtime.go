@@ -43,6 +43,10 @@ const (
 	// link in its role home. The two harnesses share one volume and never
 	// share a file.
 	claudeCredentialFile = "claude-credentials.json"
+	// CopilotCredentialFile is the Copilot token copy inside the credential
+	// volume. The in-worker launcher factory-copilot reads it directly and
+	// exports it only to its own process, so no role-home link exists.
+	CopilotCredentialFile = "copilot-token"
 	// WorkerUser is the fixed non-root identity used for worker processes.
 	WorkerUser = "10001:10001"
 	// workerPrimaryGroupID is already present in WorkerUser and does not need
@@ -214,6 +218,15 @@ type ClaudeCredentialSeeder interface {
 	// SeedClaudeCredentials streams one explicit Claude credential file into
 	// the worker.
 	SeedClaudeCredentials(context.Context, CredentialSeedRequest) error
+}
+
+// CopilotCredentialSeeder is the optional extension for narrowly scoped GitHub
+// Copilot CLI token seeding. The token is a dedicated credential, never the
+// host's gh login, GH_TOKEN, GITHUB_TOKEN, or ~/.copilot state.
+type CopilotCredentialSeeder interface {
+	// SeedCopilotCredentials streams one explicit Copilot token file into the
+	// worker's credential volume.
+	SeedCopilotCredentials(context.Context, CredentialSeedRequest) error
 }
 
 // NativeSessionProvider is the optional extension for non-screen session
@@ -583,14 +596,47 @@ type harnessCredential struct {
 	CredentialFile string
 	// RoleHome is the in-worker directory holding the harness role state.
 	RoleHome string
-	// LinkName is the file name the harness reads inside RoleHome.
+	// LinkName is the file name the harness reads inside RoleHome. An empty
+	// name means the harness reads the projection directly and no link exists.
 	LinkName string
+	// Validate optionally refuses source content the harness cannot use. Its
+	// error never contains the content.
+	Validate func([]byte) error
+}
+
+// SeedCopilotCredentials streams one explicit Copilot token file into the same
+// factory-managed credential volume. Copilot gets no role-home link: the
+// in-worker launcher factory-copilot reads the projection and exports the
+// token only to its own process. It never mounts the host file or returns
+// credential contents.
+func (r *DockerRuntime) SeedCopilotCredentials(ctx context.Context, request CredentialSeedRequest) error {
+	return r.seedCredentialFile(ctx, request, harnessCredential{
+		Harness:        "copilot",
+		CredentialFile: CopilotCredentialFile,
+		Validate:       validateCopilotToken,
+	})
+}
+
+// validateCopilotToken accepts exactly one printable token without whitespace,
+// optionally followed by one line ending, because the launcher exports the
+// first line unchanged as COPILOT_GITHUB_TOKEN.
+func validateCopilotToken(data []byte) error {
+	token := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
+	if token == "" {
+		return errors.New("must hold one token, not an empty line")
+	}
+	for _, character := range token {
+		if character <= ' ' || character == 0x7f {
+			return errors.New("must hold one token on one line without whitespace")
+		}
+	}
+	return nil
 }
 
 // seedCredentialFile is the one credential-seeding primitive shared by every
 // harness. It reads one explicit host file, streams its bytes into the
-// factory-managed credential volume, and links that copy into the role home.
-// The host source is only ever read.
+// factory-managed credential volume, and links that copy into the role home
+// when the harness reads it there. The host source is only ever read.
 func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request CredentialSeedRequest, credential harnessCredential) error {
 	if err := validateRunID(request.RunID); err != nil {
 		return err
@@ -618,20 +664,32 @@ func (r *DockerRuntime) seedCredentialFile(ctx context.Context, request Credenti
 	if len(data) == 0 {
 		return fmt.Errorf("%s auth file is empty", credential.Harness)
 	}
+	if credential.Validate != nil {
+		if err := credential.Validate(data); err != nil {
+			return fmt.Errorf("%s auth file %w", credential.Harness, err)
+		}
+	}
 	// The worker drops every capability, so uid 0 holds neither CAP_CHOWN nor
 	// CAP_DAC_OVERRIDE and is less able to write the factory-owned role home
 	// than the worker user itself. Each step therefore runs as the owner of the
 	// directory it writes, and no step changes ownership.
 	name := containerName(workerResourceID(request.RunID, request.WorkerID))
 	credentialPath := CredentialPath + "/" + credential.CredentialFile
-	linkPath := credential.RoleHome + "/" + credential.LinkName
+	// The copy is completed beside the projection and renamed over it, so a
+	// harness that starts during a reseed reads either the old or the new
+	// credential, never a partial file, and a repeated seed converges.
+	stagingPath := credentialPath + ".new"
 	if _, err := r.runDockerWithInput(ctx, []string{
 		"exec", "-i", "--user", "0:0", "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
-		"umask 077; rm -f \"" + credentialPath + "\"; cat > \"" + credentialPath + "\"; chmod 0444 \"" + credentialPath + "\"",
+		"set -e; umask 077; rm -f \"" + stagingPath + "\"; cat > \"" + stagingPath + "\"; chmod 0444 \"" + stagingPath + "\"; mv -f \"" + stagingPath + "\" \"" + credentialPath + "\"",
 	}, data); err != nil {
 		return fmt.Errorf("seed %s credentials: %w", credential.Harness, redactCause(err, "credential projection failed"))
 	}
+	if credential.LinkName == "" {
+		return nil
+	}
+	linkPath := credential.RoleHome + "/" + credential.LinkName
 	if _, err := r.runDocker(ctx, []string{
 		"exec", "--user", WorkerUser, "--workdir", WorktreePath,
 		name, "/bin/sh", "-c",
@@ -1556,11 +1614,11 @@ func validateCacheMount(cache CacheMount, seen map[string]struct{}) error {
 	return ensureCacheDirectory(cache.HostPath)
 }
 
-// hostHarnessDirectory identifies the full Codex or Claude state directories
-// that may never cross the worker boundary as repository caches.
+// hostHarnessDirectory identifies the full Codex, Claude, or Copilot state
+// directories that may never cross the worker boundary as repository caches.
 func hostHarnessDirectory(path string) bool {
 	for _, component := range strings.Split(filepath.ToSlash(filepath.Clean(path)), "/") {
-		if component == ".codex" || component == ".claude" {
+		if component == ".codex" || component == ".claude" || component == ".copilot" {
 			return true
 		}
 	}
