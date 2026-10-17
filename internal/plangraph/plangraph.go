@@ -28,8 +28,10 @@ const (
 
 // Explicit size limits of one draft plan. A plan over a limit is refused as a
 // whole with an actionable problem; it is never truncated. The limits keep a
-// draft small enough for one person to review. The report transport bound
-// (report.MaxPlanDraftNodes) is larger and only protects the report size.
+// draft small enough for one person to review. The report transport bounds
+// are separate: report.MaxPlanDraftNodes is larger, and a report must also fit
+// report.MaxReportBytes as a whole, which a plan inside these limits can
+// exceed when its texts are at their field limits.
 const (
 	// MaxPlanNodes bounds the items of one plan.
 	MaxPlanNodes = 25

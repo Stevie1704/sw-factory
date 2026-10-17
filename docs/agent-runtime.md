@@ -640,7 +640,10 @@ and structured reports as run roles, with these differences:
   parent has children. Dependencies and parent relationships together must not
   form a cycle, because a parent is done only after its children. A plan has at
   most 25 items, and an item has at most 12 acceptance criteria and 10
-  dependencies. A draft that breaks a rule ends the invocation as
+  dependencies. The whole report must also fit the 256 KiB report limit:
+  items at their text limits can exceed it, and `factory-report` then refuses
+  the report with its encoded size and asks the role to shorten the longest
+  texts. A draft that breaks a rule ends the invocation as
   `plan_rejected`; the session reason lists every problem and what to change,
   and an earlier draft stays under review. The coordinator never truncates a
   draft. Planning craft, such as when to decompose, stays in the versioned

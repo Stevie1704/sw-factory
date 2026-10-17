@@ -22,7 +22,9 @@ import (
 const SchemaVersion = 1
 
 // MaxReportBytes is the maximum serialized report size accepted by the
-// coordinator and report writer.
+// coordinator and report writer. The limits of single fields do not add up
+// to a report inside it; the writer checks the encoded size and names what
+// to shorten.
 const MaxReportBytes = 256 << 10
 
 const (
@@ -496,7 +498,8 @@ func writeAtomicReport(resultDirectory string, value Report) (string, error) {
 	}
 	data = append(data, '\n')
 	if len(data) > MaxReportBytes {
-		return "", fmt.Errorf("agent report exceeds the %d-byte limit", MaxReportBytes)
+		return "", fmt.Errorf("agent report is %d bytes encoded and exceeds the %d-byte limit: the field limits do not add up to a report that fits, "+
+			"so shorten the longest text, such as plan item bodies, acceptance criteria, brief items, or the message, and report again", len(data), MaxReportBytes)
 	}
 	temporary, err := os.CreateTemp(resultDirectory, ".report-*.tmp")
 	if err != nil {

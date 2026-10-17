@@ -12,8 +12,9 @@ const (
 	// report.
 	MaxIdeationMessageRunes = 16000
 	// MaxPlanDraftNodes is the transport bound on the nodes of one draft plan.
-	// Plan validation owns the planning limits; this bound only keeps one
-	// report inside MaxReportBytes.
+	// Plan validation owns the planning limits. This bound does not keep a
+	// report inside MaxReportBytes: nodes at their field limits can exceed it,
+	// and the report writer refuses such a report by its encoded size.
 	MaxPlanDraftNodes = 256
 	// maxBriefItems bounds each list of a brief update.
 	maxBriefItems = 64
