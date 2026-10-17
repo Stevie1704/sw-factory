@@ -28,10 +28,37 @@ var _ tracker.PlanPublisher = (*GhClient)(nil)
 // has one work-item type, the issue.
 const planIssueType = "issue"
 
+// planMarkerPrefix starts every hidden factory marker in an issue body or a
+// comment: the correlation marker and the textual link marker.
+const planMarkerPrefix = "<!-- factory-plan"
+
 // planMarker returns the hidden body marker that carries the correlation key
 // of one published plan item (ADR 0022).
 func planMarker(correlation string) string {
-	return "<!-- factory-plan: " + correlation + " -->"
+	return planMarkerPrefix + ": " + correlation + " -->"
+}
+
+// hasTrailingMarker reports whether the last nonblank line of body is
+// exactly marker. renderPlanBody writes the marker after all plan content,
+// so a marker that plan text quotes earlier in the body never matches.
+func hasTrailingMarker(body, marker string) bool {
+	trimmed := strings.TrimRight(body, " \t\r\n")
+	return strings.TrimSpace(trimmed[strings.LastIndex(trimmed, "\n")+1:]) == marker
+}
+
+// checkPlanContent returns a typed invalid-mapping error when plan text
+// contains the factory marker prefix. Text that carries a marker could make
+// the correlation lookup or the link verification adopt the wrong issue.
+func checkPlanContent(graph tracker.PlanGraph) error {
+	for _, item := range graph.Items {
+		for _, text := range append([]string{item.Title, item.Body}, item.AcceptanceCriteria...) {
+			if strings.Contains(strings.ToLower(text), planMarkerPrefix) {
+				return tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+					"node %s: the plan text contains %q, which only the factory may write; remove it", item.NodeID, planMarkerPrefix)
+			}
+		}
+	}
+	return nil
 }
 
 // validatePlanRepository is validateRepository for the planning port: it
@@ -49,6 +76,9 @@ func validatePlanRepository(repository tracker.Repository) error {
 // graph against an unchanged repository renders the same preview.
 func (c *GhClient) PreflightPlan(ctx context.Context, repository tracker.Repository, graph tracker.PlanGraph) (tracker.PlanPreview, error) {
 	if err := validatePlanRepository(repository); err != nil {
+		return tracker.PlanPreview{}, err
+	}
+	if err := checkPlanContent(graph); err != nil {
 		return tracker.PlanPreview{}, err
 	}
 	access, err := c.checkIssueCreation(ctx, repository)
@@ -407,11 +437,13 @@ var planFailureSignals = []struct {
 	{"http 422", tracker.PlanErrorInvalidMapping},
 }
 
-// Correlation lookup bound: the lookup reads at most correlationPages pages
-// of correlationPageSize issues, newest first.
+// Correlation lookup bound: the lookup reads the correlationIssues newest
+// issues of the account, in listing pages of correlationPageSize entries.
+// The issues endpoint lists pull requests too; they do not count toward the
+// bound.
 const (
 	correlationPageSize = 100
-	correlationPages    = 10
+	correlationIssues   = 1000
 )
 
 // planIssueListing is the listing projection of one issue for the
@@ -427,13 +459,15 @@ type planIssueListing struct {
 }
 
 // FindPlanItems returns every issue, in any state, that the authenticated
-// account created and whose body carries the exact correlation marker. It
+// account created and whose body ends with the exact correlation marker. It
 // lists the account's issues newest first through the issues endpoint,
 // which sees a just-created issue, instead of the search index, which lags.
-// The listing is bounded to the 1,000 newest issues of the account. An issue
-// beyond the bound is not found; the publication ledger never creates after
-// an unknown outcome without an operator decision, so the bound cannot cause
-// a blind duplicate.
+// The listing is bounded to the 1,000 newest issues of the account; pull
+// requests in the listing do not count. An issue beyond the bound is not
+// found. The publication ledger never creates after an unknown outcome
+// without an operator decision, and PlanLookupBound shows the bound to the
+// operator before that decision, so the bound cannot cause a blind
+// duplicate.
 func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
 	if err := validatePlanRepository(repository); err != nil {
 		return nil, err
@@ -447,7 +481,8 @@ func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Reposit
 	}
 	marker := planMarker(correlation)
 	found := []tracker.PlanItemRef{}
-	for page := 1; page <= correlationPages; page++ {
+	seen := 0
+	for page := 1; seen < correlationIssues; page++ {
 		var issues []planIssueListing
 		args := []string{
 			"api", "repos/" + repository.String() + "/issues", "--method", "GET",
@@ -458,7 +493,11 @@ func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Reposit
 			return nil, fmt.Errorf("list issues for correlation %s: %w", correlation, classifyPlanError(err))
 		}
 		for _, issue := range issues {
-			if issue.PullRequest == nil && strings.EqualFold(issue.User.Login, login) && strings.Contains(issue.Body, marker) {
+			if issue.PullRequest != nil || seen == correlationIssues {
+				continue
+			}
+			seen++
+			if strings.EqualFold(issue.User.Login, login) && hasTrailingMarker(issue.Body, marker) {
 				found = append(found, tracker.PlanItemRef{ExternalID: strconv.Itoa(issue.Number), URL: issue.HTMLURL})
 			}
 		}
@@ -467,6 +506,14 @@ func (c *GhClient) FindPlanItems(ctx context.Context, repository tracker.Reposit
 		}
 	}
 	return found, nil
+}
+
+var _ tracker.BoundedPlanLookup = (*GhClient)(nil)
+
+// PlanLookupBound names the issues FindPlanItems reads, so publication can
+// show the bound before the operator confirms that no issue exists.
+func (c *GhClient) PlanLookupBound() string {
+	return "the 1,000 newest issues that the authenticated account created in the repository"
 }
 
 // relationshipIssues resolves the issue numbers of both ends of

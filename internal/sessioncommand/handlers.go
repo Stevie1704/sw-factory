@@ -550,7 +550,8 @@ func publishAttempt(ctx context.Context, env Env, command store.IdeationCommand)
 // reconcile resolves one ambiguous item create. For an incomplete
 // publication it writes only the ledger, so the session revision does not
 // change. For a cancelled session it also records a receipt under the
-// request ID, and the session stays cancelled.
+// request ID, and the session stays cancelled. A resumed command whose
+// first attempt already recorded the reconciliation returns that outcome.
 func reconcile(ctx context.Context, env Env, command store.IdeationCommand) (Outcome, error) {
 	if env.Publisher == nil {
 		return unsupportedPlanning(ctx, env, command), nil
@@ -558,6 +559,11 @@ func reconcile(ctx context.Context, env Env, command store.IdeationCommand) (Out
 	payload, err := payloadOf[ReconcilePayload](command)
 	if err != nil {
 		return Outcome{}, err
+	}
+	if command.Attempts > 1 {
+		if outcome, settled, err := settledReconciliation(ctx, env, command, payload); err != nil || settled {
+			return outcome, err
+		}
 	}
 	session, err := CurrentSession(ctx, env, command)
 	if err != nil {
@@ -573,9 +579,49 @@ func reconcile(ctx context.Context, env Env, command store.IdeationCommand) (Out
 		if session, err = env.Store.IdeationSession(ctx, session.ID); err != nil {
 			return Outcome{}, err
 		}
-		return Applied(session, fmt.Sprintf("operation %s is %s; the session stays cancelled", operation.ID, operation.State)), nil
 	}
-	return Applied(session, fmt.Sprintf("operation %s is %s; publish again to continue", operation.ID, operation.State)), nil
+	return reconciled(session, operation), nil
+}
+
+// settledReconciliation returns the outcome of a resumed reconcile command
+// whose first attempt recorded the reconciliation before the coordinator
+// stopped. For a cancelled session the receipt under the request ID proves
+// it, because the store records it with the ledger update. For an
+// incomplete publication the operation already holds the requested result:
+// the adopted item, or not applied after a confirmed absence.
+func settledReconciliation(ctx context.Context, env Env, command store.IdeationCommand, payload *ReconcilePayload) (Outcome, bool, error) {
+	history, err := env.Store.IdeationHistory(ctx, command.SessionID)
+	if err != nil {
+		return Outcome{}, false, err
+	}
+	var operation store.PublicationOperation
+	for _, candidate := range history.Operations {
+		if candidate.ApprovalID == history.Session.ApprovalID && candidate.ID == payload.OperationID {
+			operation = candidate
+		}
+	}
+	if history.Session.State == store.IdeationStateCancelled {
+		for _, receipt := range history.Receipts {
+			if receipt.ID == command.RequestID {
+				return reconciled(history.Session, operation), true, nil
+			}
+		}
+		return Outcome{}, false, nil
+	}
+	adopted := payload.ExternalID != "" && operation.State == store.PublicationOperationSucceeded && operation.ExternalID == payload.ExternalID
+	absent := payload.ExternalID == "" && operation.State == store.PublicationOperationFailed
+	if history.Session.State == store.IdeationStatePublicationIncomplete && (adopted || absent) {
+		return reconciled(history.Session, operation), true, nil
+	}
+	return Outcome{}, false, nil
+}
+
+// reconciled returns the applied outcome of a reconciliation of operation.
+func reconciled(session store.IdeationSession, operation store.PublicationOperation) Outcome {
+	if session.State == store.IdeationStateCancelled {
+		return Applied(session, fmt.Sprintf("operation %s is %s; the session stays cancelled", operation.ID, operation.State))
+	}
+	return Applied(session, fmt.Sprintf("operation %s is %s; publish again to continue", operation.ID, operation.State))
 }
 
 // digest returns the lowercase SHA-256 of value.

@@ -115,13 +115,17 @@ func TestCreatePlanItemClassifiesFailuresByProvenOutcome(t *testing.T) {
 
 // TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag verifies that
 // the WIQL lookup finds every work item that carries the correlation tag, in
-// ID order, and no item with another tag.
+// ID order, and no item with another tag. WIQL CONTAINS also returns items
+// whose tag only contains the correlation tag, for example the tag of node
+// n-20 or of the intermediate item n-2--feature; the exact tag comparison
+// drops them.
 func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	t.Parallel()
 
 	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
 	first := boards.Seed("User Story", "Cache images", "factory-plan:session-1/2/n-2", "team-a")
 	boards.Seed("User Story", "Other", "factory-plan:session-1/2/n-20")
+	boards.Seed("Feature", "Intermediate", "factory-plan:session-1/2/n-2--feature")
 	second := boards.Seed("User Story", "Cache images copy", "factory-plan:session-1/2/n-2")
 	refs, err := planClient(boards, nil).FindPlanItems(t.Context(), repository, "session-1/2/n-2")
 	if err != nil {
@@ -139,6 +143,9 @@ func TestFindPlanItemsReturnsEveryItemWithTheExactCorrelationTag(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(boards.Calls()[0].Body), &query); err != nil || !strings.Contains(query.Query, "[System.TeamProject] = @project") {
 		t.Fatalf("WIQL = %q, %v; want a project-scoped query", query.Query, err)
+	}
+	if read := boards.Calls()[1]; !strings.Contains(read.URL.RawQuery, "ids=101%2C102%2C103%2C104") {
+		t.Fatalf("batch read = %s, want the four WIQL candidates read back", read.URL.RawQuery)
 	}
 }
 
@@ -218,4 +225,42 @@ func TestPlanRelationshipsUseParentAndPredecessorLinks(t *testing.T) {
 func mustKind(err error) tracker.PlanErrorKind {
 	kind, _ := tracker.PlanErrorKindOf(err)
 	return kind
+}
+
+// TestCreatePlanItemKeepsTheRequestBodyWithinOneArgument verifies that the
+// JSON patch of a create fits one az command-line argument: Markdown with
+// many '<', '>', and '&' characters is sent unescaped, and a description
+// whose encoded patch would exceed the Linux per-argument limit is refused
+// with a typed no-change error before preflight approves it and before any
+// az call.
+func TestCreatePlanItemKeepsTheRequestBodyWithinOneArgument(t *testing.T) {
+	t.Parallel()
+
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
+	markdown := renderedStory()
+	markdown.Body = strings.Repeat("<a & b>", 4000)
+	if _, err := planClient(boards, nil).CreatePlanItem(t.Context(), repository, markdown); err != nil {
+		t.Fatalf("CreatePlanItem(markdown) error = %v", err)
+	}
+	if body := boards.Writes()[0].Body; len(body) > 131071 || !strings.Contains(body, "<a & b>") {
+		t.Fatalf("create body has %d bytes, want the Markdown unescaped in one argument", len(body))
+	}
+
+	quoted := renderedStory()
+	quoted.Body = strings.Repeat(`"`, 70000)
+	empty := azuredevopstest.NewBoards(t, azuredevopstest.AgileProcess())
+	_, err := planClient(empty, nil).CreatePlanItem(t.Context(), repository, quoted)
+	if kind, _ := tracker.PlanErrorKindOf(err); kind != tracker.PlanErrorInvalidMapping || !strings.Contains(err.Error(), "encoded") {
+		t.Fatalf("CreatePlanItem(oversized) error = %v, want an invalid mapping about the encoded size", err)
+	}
+	if calls := empty.Calls(); len(calls) != 0 {
+		t.Fatalf("CreatePlanItem(oversized) called az %#v", calls)
+	}
+
+	graph := threeNodePlan()
+	graph.Items[1].Body = strings.Repeat(`"`, 70000)
+	_, err = planClient(empty, nil).PreflightPlan(t.Context(), repository, graph)
+	if kind, _ := tracker.PlanErrorKindOf(err); kind != tracker.PlanErrorInvalidMapping || !strings.Contains(err.Error(), "encoded") {
+		t.Fatalf("PreflightPlan(oversized) error = %v, want an invalid mapping before approval", err)
+	}
 }

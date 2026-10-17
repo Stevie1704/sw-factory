@@ -28,15 +28,24 @@ same plan against an unchanged project renders the same bytes.
 
 1. Local checks: every plan kind is mapped, every parent is on a higher level
    than its child, required intermediate items are added, and every title,
-   description, and tag fits Azure DevOps.
+   description, and tag fits Azure DevOps. The encoded create request of each
+   item must also fit one `az rest --body` argument (at most 131,071 bytes,
+   the Linux per-argument limit); a larger item is a typed `invalid_mapping`
+   error before approval.
 2. Permissions: View and Edit work items in the root area, and Create tag
    definition in the project.
 3. Process: the mapped types exist and are enabled
    (`wit/workitemtypes`), they are on backlog levels in the configured order
    (`work/backlogconfiguration`), the required fields have values and the
-   configured values are allowed (`wit/workitemtypes/{type}/fields`), a
-   configured state is a Proposed state, and the link types are enabled
-   (`wit/workitemrelationtypes`).
+   configured values are allowed (`wit/workitemtypes/{type}/fields`), every
+   configured value fits its field type and the field is not read-only
+   (`wit/fields`: an integer, double, boolean, date, or GUID value must
+   parse, and a string value has at most 255 characters; an area or
+   iteration path is exempt from the read-only flag, which Azure DevOps sets
+   on those paths although a create accepts them), a configured state is a
+   Proposed state, and the link types are enabled
+   (`wit/workitemrelationtypes`). A failed check is a typed `invalid_mapping`
+   error before approval.
 
 ### Correlation and reconciliation
 
@@ -105,6 +114,23 @@ perform. Record the live result here when an operator runs the procedure.
    - Expected: no second work item for that node. The ledger adopts the item
      by its tag, or stops as `ambiguous` until reconciliation; publication then
      finishes with exactly three items and three links.
+   - Reconciliation, when the ledger stops as `ambiguous`:
+     1. Open the plan page of the session (`/sessions/<id>/plan`). The
+        operation table shows the `ambiguous` create, its detail, and its
+        correlation tag `factory-plan:<session>/<revision>/<node>`.
+     2. In Azure Boards, run a query with `Tags Contains
+        factory-plan:<session>/<revision>/<node>` over all states. Compare
+        the tags exactly: CONTAINS also finds the tags of other nodes that
+        start with the same text, for example `<node>0` or
+        `<node>--feature`.
+     3. When exactly one work item carries the tag, adopt it on the plan
+        page with its work item ID. When none carries it, confirm that none
+        exists. The factory checks both choices against a fresh lookup and
+        refuses a choice that the lookup contradicts.
+     4. Publish again. Expected: no new work item for the reconciled node
+        after an adoption, exactly one after a confirmed absence, and
+        exactly three items and three links at the end. Record the ledger
+        states before and after the reconciliation.
 5. **Configured PBI mapping and rejection.** On the Scrum project, preview
    with the default mapping.
    - Expected: preview fails with `invalid_mapping` that names User Story, and
@@ -120,6 +146,11 @@ URLs, the ledger states, and whether the result matches.
 
 ### Cleanup
 
-1. Delete every created work item (Boards > the item > Delete), then empty
-   the Recycle Bin, or delete the disposable project.
-2. Delete the `factory-plan:` tag definitions from Project settings > Tags.
+1. Delete the disposable project (Project settings > Overview > Delete).
+   This is the recommended cleanup: it removes the created work items and
+   the project's tag definitions together.
+2. If you keep the project, delete every created work item (Boards > the
+   item > Delete) and empty the Recycle Bin. **Unverified:** removing the
+   `factory-plan:` tag definitions (for example from the tags settings of
+   the project) has not been tried on a live organization. Record the path
+   that works, or that the tags stay, when an operator runs the procedure.

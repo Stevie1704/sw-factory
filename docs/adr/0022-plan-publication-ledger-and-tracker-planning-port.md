@@ -51,13 +51,20 @@ recoverable without duplicates and without a Run.
    (an `attempted` row at startup, a timeout, or any error that is not a typed
    no-change error) also stops it as `ambiguous`. The operator then adopts one
    of the found items or confirms that none exists; both are checked against a
-   fresh lookup. Only typed permission, unsupported-capability, and
+   fresh lookup. An adapter whose lookup reads only part of the tracker
+   also implements the optional `tracker.BoundedPlanLookup`, and the ledger
+   detail of the stopped create names that bound before the operator
+   confirms absence. Only typed permission, unsupported-capability, and
    invalid-mapping errors prove that a create made no change. Relationships are
    verified before every create, so a retry never adds a duplicate link.
 5. **Partial results are evidence, never rolled back.** Each attempt records a
    publication receipt: published, or incomplete with the operation that
-   stopped and why. Interruption and cancellation stop before the next write;
-   created items stay in the tracker and in the ledger. Publication never adds
+   stopped and why. The ledger alone decides the outcome. Interruption and
+   cancellation stop before the next write; created items stay in the
+   tracker and in the ledger. A cancelled attempt also records an incomplete
+   receipt that names every operation that did not succeed, and a
+   reconciliation after cancellation records its ledger update and its
+   receipt in one transaction. Publication never adds
    a label or tag from the factory state labels, refuses a preview that
    contains one, copies no conversation turns into the payload, and never
    starts a run.

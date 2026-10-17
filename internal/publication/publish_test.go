@@ -12,6 +12,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/tracker/trackertest"
+	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
 // TestPublishCreatesTheApprovedGraphInDependencyOrder verifies that one
@@ -199,4 +200,53 @@ func (l *labellingTrackerForTest) PreflightPlan(ctx context.Context, repository 
 func isPlanError(err error, kind tracker.PlanErrorKind) bool {
 	got, ok := tracker.PlanErrorKindOf(err)
 	return ok && got == kind
+}
+
+// TestStaleApprovalNamesAnActionTheLifecycleAllows verifies that provider
+// drift after approval tells the user an action that the session lifecycle
+// offers in the session's state: an approved session can return to review
+// through an edit, and a partially published session can only be retried
+// after the tracker configuration is restored, or be cancelled.
+func TestStaleApprovalNamesAnActionTheLifecycleAllows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		prepare func(*harness)
+		want    []string
+		events  []workflow.SessionEvent
+	}{
+		{name: "approved", prepare: func(*harness) {}, want: []string{"edit the draft", "restore the tracker configuration"},
+			events: []workflow.SessionEvent{workflow.SessionEventEdited, workflow.SessionEventPublicationStarted}},
+		{name: "publication incomplete", prepare: func(h *harness) {
+			h.fake.Inject(trackertest.Fault{Op: trackertest.OpCreateItem, Key: "n-2", Err: tracker.NewPlanError(tracker.PlanErrorPermission, "no write access")})
+			h.publish("attempt-1")
+		}, want: []string{"restore the tracker configuration", "cancel the session"},
+			events: []workflow.SessionEvent{workflow.SessionEventPublicationStarted, workflow.SessionEventCancelled}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			h := newApprovedHarness(t)
+			test.prepare(h)
+			h.fake.Types = map[string]string{"spec": "Epic", "task": "Task"}
+			_, err := h.publisher().Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-2"})
+			if !errors.Is(err, publication.ErrStaleApproval) {
+				t.Fatalf("Publish() error = %v, want ErrStaleApproval", err)
+			}
+			for _, want := range test.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %q, want it to name %q", err, want)
+				}
+			}
+			if strings.Contains(err.Error(), "approve the current preview") {
+				t.Fatalf("error = %q names an approval, which the lifecycle refuses in %s", err, h.session().State)
+			}
+			for _, event := range test.events {
+				if _, err := workflow.DefaultSessionLifecycle().Next(h.session().State, event); err != nil {
+					t.Fatalf("lifecycle refuses %s in %s: %v", event, h.session().State, err)
+				}
+			}
+		})
+	}
 }
