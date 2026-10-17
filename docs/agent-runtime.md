@@ -36,7 +36,7 @@ The adapters differ in how a native session identity is obtained:
 | --- | --- | --- |
 | Codex headless | Read from the machine-readable `thread.started` event emitted by `codex exec --json` and retained in the invocation | `codex exec --json ... resume <uuid>` with the exec flags before the subcommand |
 | Claude Code headless | Assigned with `--session-id <uuid>` and confirmed by the `system`/`init` event's `session_id` in the `stream-json` output | `claude -p ... --resume <uuid>`, refused when the confirmed identity differs |
-| Copilot CLI headless | Assigned with `--session-id=<uuid>` and confirmed by a `sessionId` or `session_id` field in the JSONL output of the current process. This evidence is provisional until release blocker RB-1 names the real event; absent or ambiguous evidence fails closed. | `factory-copilot ... --resume=<uuid>` with the complete UUID only; the CLI fails closed on an unknown UUID. Bare `--resume`, `--continue`, and names are never passed. |
+| Copilot CLI headless | Assigned with `--session-id=<uuid>` and confirmed by a top-level `sessionId` or `session_id` field of a JSONL line in the output of the current process. This evidence is provisional until release blocker RB-1 names the real event; absent or ambiguous evidence fails closed. | `factory-copilot ... --resume=<uuid>` with the complete UUID only; the CLI fails closed on an unknown UUID. Bare `--resume`, `--continue`, and names are never passed. |
 
 ### Headless execution
 
@@ -54,7 +54,7 @@ vocabulary:
 | | Codex | Claude Code | Copilot CLI |
 | --- | --- | --- | --- |
 | Command | `codex exec --json` | `claude -p --output-format stream-json --verbose` | `factory-copilot --prompt=… --output-format=json --allow-all-tools --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN` |
-| Launch event | `thread.started` | `system` / `init` | provisional: any `sessionId` or `session_id` field (RB-1) |
+| Launch event | `thread.started` | `system` / `init` | provisional: a top-level `sessionId` or `session_id` field (RB-1) |
 | Failure events | `error` and `turn.failed`, classified from code, status, or documented message | the machine `error` category on an `api_retry` system event or an API-error message, applied only when the run also ended in a failed `result` | the first stderr line: a missing or unvalidated credential is an authentication failure. Every other shape (expired token, rate limit, policy or model denial) is not observed yet (RB-5) and settles as an unexpected exit, never as a capacity retry. |
 
 Machine output is control-plane input only. Claude Code retries a failed API

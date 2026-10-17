@@ -154,7 +154,7 @@ func TestCopilotHeadlessAdoptsTheProcessThatAlreadyOwnsTheInvocation(t *testing.
 }
 
 // TestCopilotHeadlessFailsClosedOnUnusableIdentityEvidence verifies absent,
-// partial, prose, malformed, oversized, and conflicting evidence never
+// partial, prose, malformed, nested, oversized, and conflicting evidence never
 // becomes a native identity, and the failed launch is cleaned up.
 func TestCopilotHeadlessFailsClosedOnUnusableIdentityEvidence(t *testing.T) {
 	for _, test := range []struct {
@@ -166,7 +166,8 @@ func TestCopilotHeadlessFailsClosedOnUnusableIdentityEvidence(t *testing.T) {
 		{name: "prose", stdout: "Resume with copilot --resume=" + copilotHeadlessSession + "\n"},
 		{name: "malformed identity", stdout: `{"sessionId":"0000000"}` + "\n"},
 		{name: "non-string identity", stdout: `{"sessionId":7}` + "\n" + copilotIdentityEvidence(copilotHeadlessSession)},
-		{name: "conflicting identities", stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"data":{"session_id":"` + headlessTestSession + `"}}` + "\n"},
+		{name: "conflicting identities", stdout: copilotIdentityEvidence(copilotHeadlessSession) + `{"session_id":"` + headlessTestSession + `"}` + "\n"},
+		{name: "nested identity only", stdout: `{"data":{"sessionId":"` + copilotHeadlessSession + `"}}` + "\n"},
 		{name: "oversized line", stdout: `{"text":"` + strings.Repeat("x", 2<<20) + `"}` + "\n" + copilotIdentityEvidence(copilotHeadlessSession)},
 	} {
 		t.Run(test.name, func(t *testing.T) {

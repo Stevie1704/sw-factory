@@ -25,7 +25,7 @@ token's narrow permission (Copilot Requests only) is the boundary.
 confirms the native session. For a Copilot `-p` run, no such event was
 observed (RB-1). The adapter assigns the UUID with `--session-id`, resumes only
 with `--resume=<full UUID>`, and reads identity provisionally from a
-`sessionId` or `session_id` field of the current process output. It fails
+top-level `sessionId` or `session_id` field of the current process output. It fails
 closed when that evidence is absent, malformed, or ambiguous. A real launch can
 therefore stop at identity discovery until RB-1 is closed. The one function
 that decides this is `copilotSessionEvidence`.

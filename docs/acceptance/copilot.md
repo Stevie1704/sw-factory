@@ -44,7 +44,7 @@ token, or an operator decision. A skipped probe is not a pass.
 
 | ID | What is not proved | Live evidence that closes it |
 | --- | --- | --- |
-| RB-1 | The JSONL event names of a `-p --output-format json` run: identity, final, and failure events. The adapter reads identity provisionally from any `sessionId` or `session_id` field, so a real launch can fail closed at identity discovery. | `COPILOT_PROBE_LIVE=1` probe `fresh`, then `copilotSessionEvidenceFields` set to the observed field. |
+| RB-1 | The JSONL event names of a `-p --output-format json` run: identity, final, and failure events. The adapter reads identity provisionally from a top-level `sessionId` or `session_id` field, so a real launch can fail closed at identity discovery. | `COPILOT_PROBE_LIVE=1` probe `fresh`, then `copilotSessionEvidenceFields` set to the observed field. |
 | RB-2 | Exact resume of a real session after process restart and worker recreation; full-UUID priority over names, summaries, and prefixes; a corrupt `events.jsonl`. | Live probe `resume` and the live `copilot-mixed-harness-recovery` scenario. |
 | RB-3 | That the selected model and effort run, and that a managed `fallback` model cannot replace them silently. | Live probes `model-unknown` and `effort-low`, plus machine evidence of the effective model. |
 | RB-4 | That a fine-grained token with only the Copilot Requests permission runs prompts and cannot write a repository or tracker; expiry and refresh behavior. | A non-mutating write check with the token against a disposable repository, and an expired-token run. |

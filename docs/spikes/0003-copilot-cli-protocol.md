@@ -158,8 +158,10 @@ worker seam. Until RB-1 names the real event, the one function
 
 - Only complete JSON lines of the current process output count. Prose, the
   `--resume=` hint, partial lines, and lines over 1 MiB do not.
-- The value of a `sessionId` or `session_id` key at any depth of the object is
-  identity evidence. No event type name is assumed.
+- Only the value of a top-level `sessionId` or `session_id` key of a line is
+  identity evidence. A nested key does not count, because tool output or
+  event payloads can carry other session identities. No event type name is
+  assumed.
 - The evidence must be one canonical version-four UUID. A malformed value or
   two different values fail closed as an unexpected exit; absent evidence
   fails closed when the discovery window ends or the process settles.

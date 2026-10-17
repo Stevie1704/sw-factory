@@ -151,15 +151,16 @@ func copilotNativeSessionID(output string) string {
 	return identity
 }
 
-// copilotSessionEvidenceFields are the JSON object keys read as native
-// session identity.
+// copilotSessionEvidenceFields are the top-level JSON object keys read as
+// native session identity.
 //
 // PROVISIONAL pending release blocker RB-1: the JSONL event names and fields
 // of a `copilot -p --output-format json` run are not observed yet. This is
 // the one place that decides which output is identity evidence. It reads
-// only complete JSON lines of the current process output, never event names,
-// model prose, or role-home files, which could belong to an older session.
-// Replace it with the observed identity event once RB-1 has live evidence.
+// only the top level of complete JSON lines of the current process output,
+// never nested values, event names, model prose, or role-home files, which
+// could carry tool output or belong to an older session. Replace it with the
+// observed identity event once RB-1 has live evidence.
 var copilotSessionEvidenceFields = []string{"sessionId", "session_id"}
 
 // copilotSessionEvidence collects identity evidence from every complete JSON
@@ -167,11 +168,17 @@ var copilotSessionEvidenceFields = []string{"sessionId", "session_id"}
 // or two different identities, so the launch fails closed.
 func copilotSessionEvidence(output string) (identity string, conflict bool) {
 	forEachHeadlessEvent(output, func(line string) bool {
-		var event any
+		var event map[string]any
 		if json.Unmarshal([]byte(line), &event) != nil {
 			return true
 		}
-		for _, value := range copilotEvidenceValues(event) {
+		for _, field := range copilotSessionEvidenceFields {
+			nested, found := event[field]
+			if !found {
+				continue
+			}
+			// A non-string identity value counts as malformed evidence.
+			value, _ := nested.(string)
 			if !validSessionID(value) || (identity != "" && value != identity) {
 				conflict = true
 				return false
@@ -181,39 +188,6 @@ func copilotSessionEvidence(output string) (identity string, conflict bool) {
 		return true
 	})
 	return identity, conflict
-}
-
-// copilotEvidenceValues returns every identity field value at any depth of
-// one decoded JSON value. A non-string identity value is returned as an
-// empty string, so it counts as malformed evidence.
-func copilotEvidenceValues(value any) []string {
-	var values []string
-	switch typed := value.(type) {
-	case map[string]any:
-		for key, nested := range typed {
-			if containsField(copilotSessionEvidenceFields, key) {
-				text, _ := nested.(string)
-				values = append(values, text)
-				continue
-			}
-			values = append(values, copilotEvidenceValues(nested)...)
-		}
-	case []any:
-		for _, nested := range typed {
-			values = append(values, copilotEvidenceValues(nested)...)
-		}
-	}
-	return values
-}
-
-// containsField reports whether fields contains key.
-func containsField(fields []string, key string) bool {
-	for _, field := range fields {
-		if field == key {
-			return true
-		}
-	}
-	return false
 }
 
 // copilotAuthenticationMarkers start the stderr lines that need an operator
