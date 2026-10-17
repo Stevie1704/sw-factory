@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -367,13 +368,8 @@ func validateHarnessModel(h Harness, model string) error {
 // validateHarnessEffort checks effort against the closed value set of h.
 func validateHarnessEffort(h Harness, effort string) error {
 	allowed, closed := harnessReasoningEfforts[h]
-	if effort == "" || !closed {
+	if effort == "" || !closed || slices.Contains(allowed, effort) {
 		return nil
-	}
-	for _, value := range allowed {
-		if value == effort {
-			return nil
-		}
 	}
 	return fmt.Errorf("must be %s for %s", joinAlternatives(allowed), harnessDisplayName(h))
 }
