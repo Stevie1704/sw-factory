@@ -403,15 +403,16 @@ func newAgentService(t *testing.T) (*factory.Service, *agentRunStore, *agentWork
 }
 
 // newDispatchingAgentService recreates a coordinator that derives real
-// headless adapters from the supplied worker process runtime.
-func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime worker.WorkerRuntime, policy config.RepositoryConfig, authentication config.AuthenticationConfig) *factory.Service {
+// headless adapters from the supplied worker process runtime. changedPaths
+// are the worktree changes the coordinator observes at report acceptance.
+func newDispatchingAgentService(t *testing.T, runStore *agentRunStore, runtime worker.WorkerRuntime, policy config.RepositoryConfig, authentication config.AuthenticationConfig, changedPaths ...string) *factory.Service {
 	t.Helper()
 	repackageSpecification(t, runStore, policy)
 	run := *runStore.current
 	host := config.HostConfig{SchemaVersion: config.CurrentHostSchemaVersion, Repositories: []config.RepositoryRegistration{{Path: run.RepositoryPath, GitHub: config.GitHubConfig{Owner: "example", Repository: "project"}, AuthorizedUsers: []string{"alice"}, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}, Authentication: authentication, OperationalDataPath: filepath.Join(filepath.Dir(run.RepositoryPath), "state", "factory.db"), RepositoryConfigPath: filepath.Join(run.RepositoryPath, "factory.yaml")}}}
 	githubRuntime := &fakeGitHub{issueValue: tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}}, statusComment: tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}}
 	runStore.github = githubRuntime
-	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA}}
+	worktree := &inspectingWorktree{fakeWorktree: fakeWorktree{workspace: gitadapter.Workspace{Worktree: run.Worktree}}, state: gitadapter.WorktreeState{RepositoryPath: run.RepositoryPath, Branch: run.Branch, HeadSHA: run.CheckpointSHA, ChangedPaths: changedPaths}}
 	return factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{Config: &fakeConfig{value: host}, OpenStore: func(context.Context, string) (factory.OperationalStore, error) { return runStore, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return policy, nil }, Worker: runtime, Tracker: githubRuntime, Worktree: worktree, Now: func() time.Time { return time.Date(2026, 8, 21, 8, 0, 0, 0, time.UTC) }, NewRunID: func() (string, error) { return "generated-dispatch", nil }})
 }
 

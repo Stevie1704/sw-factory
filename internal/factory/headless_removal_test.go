@@ -19,7 +19,7 @@ import (
 // TestCleanupConfirmsHeadlessResourcesForEveryHarness verifies confirmed
 // retention cleanup removes only Git, worker, output, and store projections.
 func TestCleanupConfirmsHeadlessResourcesForEveryHarness(t *testing.T) {
-	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude} {
+	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude, config.HarnessCopilot} {
 		t.Run(string(harnessName), func(t *testing.T) {
 			fixture := newHeadlessRemovalFixture(t, harnessName)
 			preview, err := fixture.service.Cleanup(t.Context(), factory.CleanupRequest{})
@@ -55,7 +55,7 @@ func TestCleanupConfirmsHeadlessResourcesForEveryHarness(t *testing.T) {
 // TestResetConfirmsHeadlessResourcesForEveryHarness verifies a full reset
 // deletes the registered local installation without any local-UI discovery.
 func TestResetConfirmsHeadlessResourcesForEveryHarness(t *testing.T) {
-	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude} {
+	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude, config.HarnessCopilot} {
 		t.Run(string(harnessName), func(t *testing.T) {
 			fixture := newHeadlessRemovalFixture(t, harnessName)
 			result, err := fixture.service.Reset(t.Context(), factory.ResetRequest{Confirm: true})

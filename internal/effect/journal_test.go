@@ -321,12 +321,28 @@ func (journalHarnessForTest) FinishHeadless(context.Context, harness.Session) er
 
 // countingResumeHarness records native resume calls and returns the persisted
 // native identity, modelling an idempotency boundary outside the coordinator.
-type countingResumeHarness struct{ resumes int }
-
-// Capabilities identifies a headless Codex adapter.
-func (*countingResumeHarness) Capabilities() harness.Capabilities {
-	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
+type countingResumeHarness struct {
+	resumes int
+	// name is the harness identity; empty means Codex.
+	name string
 }
+
+// Capabilities identifies a headless adapter of the configured harness.
+func (h *countingResumeHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: journalHarnessName(h.name), Headless: true, NativeResume: true}
+}
+
+// journalHarnessName defaults an unnamed test adapter to Codex.
+func journalHarnessName(name string) string {
+	if name == "" {
+		return "codex"
+	}
+	return name
+}
+
+// journalHarnesses lists every production harness a journaled native effect
+// must replay through.
+var journalHarnesses = []string{"codex", "claude", "copilot"}
 
 // StartHeadless is unused by resume-effect tests.
 func (*countingResumeHarness) StartHeadless(context.Context, harness.StartRequest) (harness.Session, error) {
@@ -346,11 +362,13 @@ func (*countingResumeHarness) FinishHeadless(context.Context, harness.Session) e
 type responseLossHarness struct {
 	finishes int
 	failOnce bool
+	// name is the harness identity; empty means Codex.
+	name string
 }
 
-// Capabilities identifies a headless Codex adapter.
-func (*responseLossHarness) Capabilities() harness.Capabilities {
-	return harness.Capabilities{Name: "codex", Headless: true, NativeResume: true}
+// Capabilities identifies a headless adapter of the configured harness.
+func (h *responseLossHarness) Capabilities() harness.Capabilities {
+	return harness.Capabilities{Name: journalHarnessName(h.name), Headless: true, NativeResume: true}
 }
 
 // StartHeadless is unused by result-acceptance tests.
@@ -417,8 +435,12 @@ func (resumeLifecycleForTest) StopActiveWorkers(context.Context, effect.RunStore
 	return nil
 }
 
-// HarnessRuntime returns the shared counting adapter.
-func (l resumeLifecycleForTest) HarnessRuntime(string) (harness.Runtime, error) {
+// HarnessRuntime returns the shared adapter only for the harness it is, so a
+// replay that resolved another harness than the recorded one fails.
+func (l resumeLifecycleForTest) HarnessRuntime(name string) (harness.Runtime, error) {
+	if l.runtime.Capabilities().Name != name {
+		return nil, fmt.Errorf("no adapter for harness %q", name)
+	}
 	return l.runtime, nil
 }
 
@@ -682,17 +704,25 @@ func TestJournalReservesByteIdenticalEffectIdentities(t *testing.T) {
 // generation is durable before the native process boundary. Replaying the
 // pending effect must acknowledge that generation without a second resume.
 func TestManualHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
+	for _, harnessName := range journalHarnesses {
+		t.Run(harnessName, func(t *testing.T) { testManualHarnessResumeDoesNotRepeat(t, harnessName) })
+	}
+}
+
+// testManualHarnessResumeDoesNotRepeat runs the manual-resume response-loss
+// boundary for one recorded harness.
+func testManualHarnessResumeDoesNotRepeat(t *testing.T, harnessName string) {
 	ctx := context.Background()
 	run := journalRunForTest()
 	invocation := store.Invocation{
-		ID: "inv-manual", RunID: run.ID, Harness: "codex", Role: "implementation",
+		ID: "inv-manual", RunID: run.ID, Harness: harnessName, Role: "implementation",
 		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
 		NativeSessionID: "native-manual",
 	}
 	runStore := &journalStoreForTest{
 		run: run, invocation: invocation, failInvocationSaveAt: 2,
 	}
-	runtime := &countingResumeHarness{}
+	runtime := &countingResumeHarness{name: harnessName}
 	journal := effect.New(effect.Adapters{
 		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
 		Projector: journalProjectorForTest{run: run},
@@ -729,15 +759,23 @@ func TestManualHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
 // one-shot recovery generation prevents a second native continuation when the
 // coordinator loses the persistence response after the first continuation.
 func TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
+	for _, harnessName := range journalHarnesses {
+		t.Run(harnessName, func(t *testing.T) { testAutomaticHarnessResumeDoesNotRepeat(t, harnessName) })
+	}
+}
+
+// testAutomaticHarnessResumeDoesNotRepeat runs the automatic-resume
+// response-loss boundary for one recorded harness.
+func testAutomaticHarnessResumeDoesNotRepeat(t *testing.T, harnessName string) {
 	ctx := context.Background()
 	run := journalRunForTest()
 	invocation := store.Invocation{
-		ID: "inv-automatic", RunID: run.ID, Harness: "codex", Role: "implementation",
+		ID: "inv-automatic", RunID: run.ID, Harness: harnessName, Role: "implementation",
 		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
 		NativeSessionID: "native-automatic",
 	}
 	runStore := &journalStoreForTest{run: run, invocation: invocation, failInvocationSaveAt: 2}
-	runtime := &countingResumeHarness{}
+	runtime := &countingResumeHarness{name: harnessName}
 	journal := effect.New(effect.Adapters{
 		Now:       func() time.Time { return time.Unix(10, 0).UTC() },
 		Projector: journalProjectorForTest{run: run},
@@ -766,10 +804,18 @@ func TestAutomaticHarnessResumeDoesNotRepeatAfterResponseLoss(t *testing.T) {
 // TestResultAcceptanceReplayDoesNotRepeatFinalization verifies a persisted
 // terminal invocation is the durable boundary for an ambiguous native finish.
 func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
+	for _, harnessName := range journalHarnesses {
+		t.Run(harnessName, func(t *testing.T) { testResultAcceptanceReplayDoesNotRepeat(t, harnessName) })
+	}
+}
+
+// testResultAcceptanceReplayDoesNotRepeat runs the accepted-completion replay
+// boundary for one recorded harness.
+func testResultAcceptanceReplayDoesNotRepeat(t *testing.T, harnessName string) {
 	ctx := context.Background()
 	run := journalRunForTest()
 	invocation := store.Invocation{
-		ID: "inv-accept", RunID: run.ID, Harness: "codex", Role: "implementation",
+		ID: "inv-accept", RunID: run.ID, Harness: harnessName, Role: "implementation",
 		Stage: store.StageImplementation, Status: store.InvocationStatusActive,
 		NativeSessionID: "native-accept",
 	}
@@ -778,7 +824,7 @@ func TestResultAcceptanceReplayDoesNotRepeatFinalization(t *testing.T) {
 	next := run
 	next.Revision++
 	runStore := &journalStoreForTest{run: run, invocation: invocation}
-	runtime := &responseLossHarness{failOnce: true}
+	runtime := &responseLossHarness{failOnce: true, name: harnessName}
 	issues := &convergedIssuesForTest{
 		issue:   tracker.Issue{Number: run.IssueNumber, Labels: []string{string(next.Status)}},
 		comment: tracker.Comment{ID: next.StatusCommentID, Body: journalPresentationForTest{}.StatusCommentBody(next)},

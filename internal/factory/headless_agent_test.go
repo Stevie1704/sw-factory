@@ -2,15 +2,19 @@ package factory_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/harness"
+	"github.com/Stevie1704/sw-factory/internal/report"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
@@ -269,6 +273,166 @@ func copilotRefreshService(t *testing.T, authentication config.AuthenticationCon
 	return service, runtime, headlessWorker, launch.Invocation.RunID
 }
 
+// TestCancelledCopilotRunStopsItsProcessAndRefusesALateReport verifies that
+// cancelling a run with an active Copilot invocation cancels exactly that
+// invocation's process, and that a report the process writes afterwards
+// cannot complete the invocation or reopen the run.
+func TestCancelledCopilotRunStopsItsProcessAndRefusesALateReport(t *testing.T) {
+	t.Parallel()
+
+	_, runStore, runtime, _ := newAgentService(t)
+	headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+	policy := validRepositoryConfig()
+	policy.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+	policy.ModelOptions["implementation"] = []string{"gpt-5.2"}
+	service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CopilotAuthPath: filepath.Join(t.TempDir(), "copilot-token")}, "internal/factory/agent.go")
+	launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+	if err != nil {
+		t.Fatalf("StartAgent() setup error = %v", err)
+	}
+
+	runStore.github.issueValue.State = "closed"
+	result, err := service.PollLifecycle(t.Context(), factory.LifecycleRequest{RunID: launch.Invocation.RunID})
+	if err != nil || result.Run.Status != store.StatusCancelled {
+		t.Fatalf("PollLifecycle() = %#v, %v; want a cancelled run", result, err)
+	}
+	if len(headlessWorker.headlessCancels) == 0 {
+		t.Fatal("cancellation left the Copilot process running")
+	}
+	for _, cancelled := range headlessWorker.headlessCancels {
+		if cancelled.InvocationID != launch.Invocation.ID || cancelled.RunID != launch.Invocation.RunID {
+			t.Fatalf("cancelled process = %#v, want only invocation %s", cancelled, launch.Invocation.ID)
+		}
+	}
+
+	late := report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: launch.Invocation.ID, RunID: launch.Invocation.RunID,
+		Harness: launch.Invocation.Harness, Role: "implementation", Stage: "implementation", Outcome: report.OutcomeCompleted,
+		Summary: "late result after cancellation",
+		Handoff: &report.Handoff{
+			ChangeSummary:          "late change",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "late evidence"}},
+			ProductionFilesChanged: []string{"internal/factory/agent.go"},
+			FocusedCommands:        []string{"go test ./internal/factory"},
+		},
+		NativeSessionID: launch.Invocation.NativeSessionID, ReportedAt: time.Now().UTC(),
+	}
+	if _, err := report.WriteAtomicForInvocation(launch.Invocation.ResultDirectory, launch.Invocation.ID, late); err != nil {
+		t.Fatalf("WriteAtomicForInvocation() error = %v", err)
+	}
+	if _, err := service.AcceptAgentReport(context.Background(), factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID}); err == nil {
+		t.Fatal("AcceptAgentReport() accepted a report of a cancelled run")
+	}
+	if runStore.current.Status != store.StatusCancelled {
+		t.Fatalf("run after late report = %s, want cancelled", runStore.current.Status)
+	}
+	if invocation := runStore.invocations[launch.Invocation.ID]; invocation.Status == store.InvocationStatusCompleted {
+		t.Fatalf("invocation after late report = %#v, want it not completed", invocation)
+	}
+}
+
+// TestCopilotReportAcceptanceAdmitsOnlyTheExactInvocationReport verifies a
+// report of a live Copilot process is accepted once and finishes the process,
+// while a missing, malformed, or wrong-identity report cannot advance the run.
+func TestCopilotReportAcceptanceAdmitsOnlyTheExactInvocationReport(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		write  func(t *testing.T, launch factory.AgentLaunchResult)
+		accept bool
+	}{
+		{name: "missing report", write: func(*testing.T, factory.AgentLaunchResult) {}},
+		{name: "malformed report", write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			if err := os.WriteFile(filepath.Join(launch.Invocation.ResultDirectory, report.ReportFileName), []byte(`{"schema_version":`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{name: "report of another harness", write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			writeCopilotImplementationReport(t, launch, func(value *report.Report) { value.Harness = string(config.HarnessCodex) })
+		}},
+		{name: "report of another invocation", write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			writeCopilotImplementationReport(t, launch, func(value *report.Report) { value.InvocationID = "inv-earlier" })
+		}},
+		{name: "report of another run", write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			writeCopilotImplementationReport(t, launch, func(value *report.Report) { value.RunID = "run-other" })
+		}},
+		{name: "report of another role", write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			writeCopilotImplementationReport(t, launch, func(value *report.Report) { value.Role, value.Stage = "test", "test" })
+		}},
+		{name: "report while the process is alive", accept: true, write: func(t *testing.T, launch factory.AgentLaunchResult) {
+			writeCopilotImplementationReport(t, launch, func(*report.Report) {})
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, runStore, runtime, _ := newAgentService(t)
+			headlessWorker := &headlessAgentWorker{agentWorker: runtime}
+			policy := validRepositoryConfig()
+			policy.RoleHarnessDefaults["implementation"] = config.HarnessCopilot
+			policy.ModelOptions["implementation"] = []string{"gpt-5.2"}
+			service := newDispatchingAgentService(t, runStore, headlessWorker, policy, config.AuthenticationConfig{CopilotAuthPath: filepath.Join(t.TempDir(), "copilot-token")}, "internal/factory/agent.go")
+			launch, err := service.StartAgent(context.Background(), factory.AgentRequest{})
+			if err != nil {
+				t.Fatalf("StartAgent() setup error = %v", err)
+			}
+			before := *runStore.current
+			test.write(t, launch)
+
+			request := factory.AgentReportRequest{RunID: launch.Invocation.RunID, InvocationID: launch.Invocation.ID}
+			_, err = service.AcceptAgentReport(context.Background(), request)
+
+			if !test.accept {
+				if err == nil {
+					t.Fatal("AcceptAgentReport() accepted an inadmissible report")
+				}
+				if runStore.current.Stage != before.Stage || runStore.current.Status != store.StatusActive || runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusActive || headlessWorker.finishes != 0 {
+					t.Fatalf("after refusal: run %s/%s invocation %s finishes %d; want the active invocation unchanged", runStore.current.Stage, runStore.current.Status, runStore.invocations[launch.Invocation.ID].Status, headlessWorker.finishes)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("AcceptAgentReport() error = %v", err)
+			}
+			if runStore.invocations[launch.Invocation.ID].Status != store.InvocationStatusCompleted || headlessWorker.finishes != 1 {
+				t.Fatalf("accepted invocation = %s with %d finishes, want completed and finished once", runStore.invocations[launch.Invocation.ID].Status, headlessWorker.finishes)
+			}
+			accepted := *runStore.current
+			if _, err := service.AcceptAgentReport(context.Background(), request); err == nil && runStore.current.Revision != accepted.Revision {
+				t.Fatalf("duplicate acceptance advanced the run from revision %d to %d", accepted.Revision, runStore.current.Revision)
+			}
+			if headlessWorker.finishes != 1 || len(headlessWorker.headlessStarts) != 1 {
+				t.Fatalf("duplicate acceptance = finishes %d launches %d, want no second process effect", headlessWorker.finishes, len(headlessWorker.headlessStarts))
+			}
+		})
+	}
+}
+
+// writeCopilotImplementationReport writes a completed implementation report
+// for the launched invocation after mutate adjusts its identity.
+func writeCopilotImplementationReport(t *testing.T, launch factory.AgentLaunchResult, mutate func(*report.Report)) {
+	t.Helper()
+	value := report.Report{
+		SchemaVersion: report.SchemaVersion, InvocationID: launch.Invocation.ID, RunID: launch.Invocation.RunID,
+		Harness: launch.Invocation.Harness, Role: "implementation", Stage: "implementation", Outcome: report.OutcomeCompleted,
+		Summary: "implementation complete",
+		Handoff: &report.Handoff{
+			ChangeSummary:          "implemented the behavior",
+			AcceptanceMapping:      []report.AcceptanceMapping{{Criterion: "behavior", Evidence: "focused test"}},
+			ProductionFilesChanged: []string{"internal/factory/agent.go"},
+			FocusedCommands:        []string{"go test ./internal/factory"},
+		},
+		NativeSessionID: launch.Invocation.NativeSessionID, ReportedAt: time.Now().UTC(),
+	}
+	mutate(&value)
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(launch.Invocation.ResultDirectory, report.ReportFileName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRefreshAuthServesCopilotAndKeepsTheRecordedHarness verifies an explicit
 // Copilot refresh reseeds only the Copilot source, --resume continues the
 // recorded Copilot session, and another harness name is refused before any
@@ -370,6 +534,8 @@ type headlessAgentWorker struct {
 	headlessStarts  []worker.HeadlessRequest
 	headlessCancels []worker.HeadlessRequest
 	resumeErr       error
+	// finishes counts accepted-completion shutdowns.
+	finishes int
 }
 
 // StartHeadless records one detached launch.
@@ -417,7 +583,10 @@ func (w *headlessAgentWorker) CancelHeadless(_ context.Context, request worker.H
 	return nil
 }
 
-// FinishHeadless implements the detached process extension.
-func (*headlessAgentWorker) FinishHeadless(context.Context, worker.HeadlessRequest) error { return nil }
+// FinishHeadless records one accepted-completion shutdown.
+func (w *headlessAgentWorker) FinishHeadless(context.Context, worker.HeadlessRequest) error {
+	w.finishes++
+	return nil
+}
 
 var _ worker.HeadlessProcessRuntime = (*headlessAgentWorker)(nil)
