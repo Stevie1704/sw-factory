@@ -691,10 +691,14 @@ func reportWritten(invocation store.SessionInvocation) bool {
 }
 
 // sessionFailureKind maps a launch or process error to the recorded failure
-// kind. It reads only typed errors, never native output.
+// kind. It reads only typed errors, never native output. A credential
+// projection error unwraps to expired authentication for run recovery, so
+// it is matched first.
 func sessionFailureKind(err error) string {
 	var projection *credentialProjectionError
 	switch {
+	case errors.As(err, &projection):
+		return SessionFailureCredentials
 	case harness.IsNativeSessionMismatch(err):
 		return SessionFailureNativeSessionMismatch
 	case harness.IsAuthenticationExpired(err):
@@ -705,8 +709,6 @@ func sessionFailureKind(err error) string {
 		return SessionFailureUnexpectedExit
 	case errors.Is(err, context.Canceled):
 		return SessionFailureCancelled
-	case errors.As(err, &projection):
-		return SessionFailureCredentials
 	default:
 		return SessionFailureLaunch
 	}

@@ -48,6 +48,10 @@ type sessionWorkerForTest struct {
 	processes map[string]worker.HeadlessInspection
 	// onLaunch optionally replaces the process state a launch produces.
 	onLaunch func(worker.HeadlessRequest) (worker.HeadlessInspection, bool)
+	// startErr is returned by every worker start.
+	startErr error
+	// seedErr is returned by every credential projection.
+	seedErr error
 }
 
 // Start records one worker start.
@@ -55,7 +59,17 @@ func (w *sessionWorkerForTest) Start(_ context.Context, request worker.StartRequ
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.starts = append(w.starts, request)
-	return nil
+	return w.startErr
+}
+
+// SeedCodexCredentials projects a Codex credential, or fails with seedErr.
+func (w *sessionWorkerForTest) SeedCodexCredentials(context.Context, worker.CredentialSeedRequest) error {
+	return w.seedErr
+}
+
+// SeedClaudeCredentials projects a Claude credential, or fails with seedErr.
+func (w *sessionWorkerForTest) SeedClaudeCredentials(context.Context, worker.CredentialSeedRequest) error {
+	return w.seedErr
 }
 
 // Resume implements the base worker seam.
@@ -156,6 +170,14 @@ func nativeEventsForTest(nativeSessionID string) string {
 		`{"type":"system","subtype":"init","session_id":"` + nativeSessionID + `"}` + "\n"
 }
 
+// rateLimitEventsForTest returns the machine events both adapters classify
+// as a capacity limit.
+func rateLimitEventsForTest() string {
+	return `{"type":"error","code":"rate_limit"}` + "\n" +
+		`{"type":"system","subtype":"api_retry","error":"rate_limit"}` + "\n" +
+		`{"type":"result","subtype":"error_during_execution","is_error":true}` + "\n"
+}
+
 // authenticationFailureEventsForTest returns the machine events both adapters
 // classify as expired authentication.
 func authenticationFailureEventsForTest() string {
@@ -210,6 +232,8 @@ type sessionFixture struct {
 	policy    config.RepositoryConfig
 	ids       int
 	validator func([]store.PlanNode) error
+	// authentication names the host credential sources of the registration.
+	authentication config.AuthenticationConfig
 }
 
 // newSessionFixture creates a session "session-1" with one user turn
@@ -261,7 +285,7 @@ func (f *sessionFixture) roles() *factory.SessionRoles {
 		Harnesses:    harness.NewHeadlessAdapters(f.worker),
 		Workers:      f.worker,
 		Snapshots:    f.snapshots,
-		Registration: config.RepositoryRegistration{Path: f.repo},
+		Registration: config.RepositoryRegistration{Path: f.repo, Authentication: f.authentication},
 		Policy:       f.policy,
 		Now:          func() time.Time { return time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC) },
 		NewInvocationID: func() (string, error) {
@@ -520,12 +544,72 @@ func TestSessionRolesAcceptAtMostOneResultPerUserTurn(t *testing.T) {
 }
 
 // TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession verifies that an
-// expired credential, a process that exits without a report, and a resume
-// that reveals another native session become visible typed failures that
-// return the session to the user, with both harness adapters.
+// expired credential, a capacity limit, a credential that cannot be
+// projected, a worker that cannot start, a process that exits without a
+// report, and a resume that reveals another native session become visible
+// typed failures that return the session to the user, and that a session
+// that moved on closes its role, with both harness adapters.
 func TestSessionRolesSurfaceTypedFailuresAndReleaseTheSession(t *testing.T) {
 	for _, harnessName := range sessionHarnesses {
-		t.Run(string(harnessName)+"/credentials", func(t *testing.T) {
+		t.Run(string(harnessName)+"/rate limited", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: rateLimitEventsForTest()}, true
+			}
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if !harness.IsRateLimited(err) {
+				t.Fatalf("StartIdeationTurn() error = %v, want a capacity limit", err)
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureRateLimited)
+		})
+		t.Run(string(harnessName)+"/credentials unavailable", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.authentication = config.AuthenticationConfig{CodexAuthPath: "/host/codex/auth.json", ClaudeAuthPath: "/host/claude/credentials.json"}
+			fixture.worker.seedErr = errors.New("credential file is unreadable")
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with an unprojectable credential succeeded")
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureCredentials)
+			if len(fixture.worker.launches) != 0 {
+				t.Fatalf("launches = %d, want no harness launch without a credential", len(fixture.worker.launches))
+			}
+		})
+		t.Run(string(harnessName)+"/launch failed", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			fixture.worker.startErr = errors.New("docker daemon unavailable")
+			invocation, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with a failing worker succeeded")
+			}
+			assertReleased(t, fixture, invocation.ID, factory.SessionFailureLaunch)
+		})
+		t.Run(string(harnessName)+"/session moved", func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			roles := fixture.roles()
+			invocation, err := roles.StartIdeationTurn(t.Context(), "session-1", "turn-1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventNoBuild, "not worth it", time.Time{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fixture.store.TransitionIdeationSession(t.Context(), write); err != nil {
+				t.Fatal(err)
+			}
+			if err := roles.Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			ended := fixture.invocation(invocation.ID)
+			if ended.Status != store.SessionInvocationCancelled || ended.FailureKind != factory.SessionFailureSessionMoved || fixture.session().State != store.IdeationStateNoBuild {
+				t.Fatalf("invocation = %#v, session = %#v; want the role closed as session_moved and the session left as no_build", ended, fixture.session())
+			}
+			if len(fixture.worker.cancelled) != 1 {
+				t.Fatalf("cancelled processes = %v, want the moved role process cancelled", fixture.worker.cancelled)
+			}
+		})
+		t.Run(string(harnessName)+"/expired authentication", func(t *testing.T) {
 			fixture := newSessionFixture(t, harnessName)
 			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
 				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1, Stdout: authenticationFailureEventsForTest()}, true
