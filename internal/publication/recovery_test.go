@@ -582,3 +582,27 @@ func TestCancelledSessionReconcilesAnAmbiguousCreate(t *testing.T) {
 		}
 	})
 }
+
+// TestInterruptDerivesTheOutcomeFromTheLedger verifies that an attempt
+// whose every operation succeeded but whose receipt write failed settles as
+// published, not incomplete, when the coordinator interrupts it.
+func TestInterruptDerivesTheOutcomeFromTheLedger(t *testing.T) {
+	t.Parallel()
+
+	h := newApprovedHarness(t)
+	faulty := &faultyStoreForTest{Store: h.store, failOn: func(store.PublicationOperation) bool { return false }, failReceipts: 1}
+	if _, err := h.publisherWith(faulty, h.fake).Publish(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}); err == nil {
+		t.Fatal("Publish() hid the receipt failure")
+	}
+	if state := h.session().State; state != store.IdeationStatePublishing {
+		t.Fatalf("session state = %s, want publishing", state)
+	}
+	session, err := h.publisher().Interrupt(t.Context(), publication.Request{SessionID: h.sessionID, AttemptID: "attempt-1"}, "the receipt write failed")
+	if err != nil {
+		t.Fatalf("Interrupt() error = %v", err)
+	}
+	recorded := h.receipt("attempt-1")
+	if session.State != store.IdeationStatePublished || recorded.Outcome != store.PublicationOutcomePublished || len(recorded.Items) != 3 || len(recorded.Relationships) != 3 {
+		t.Fatalf("session = %s, receipt = %#v; want published with three items and three links", session.State, recorded)
+	}
+}

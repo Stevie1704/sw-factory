@@ -106,9 +106,6 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return p.finishCancelled(ctx, session, attemptID, approvalID, ledger, halt)
 	}
 	receipt := receiptFromLedger(attemptID, approvalID, ledger)
-	if halt != "" {
-		receipt.Outcome = store.PublicationOutcomeIncomplete
-	}
 	event := workflow.SessionEventPublicationCompleted
 	if receipt.Outcome == store.PublicationOutcomeIncomplete {
 		event = workflow.SessionEventPublicationIncomplete
@@ -206,10 +203,14 @@ func ledgerGaps(ledger []store.PublicationOperation) string {
 }
 
 // receiptFromLedger returns the receipt id of approvalID that lists every
-// item and relationship that ledger shows as succeeded. Its outcome is
-// published only when every operation succeeded.
+// item and relationship that ledger shows as succeeded. The ledger alone
+// decides the outcome: it is published only when the ledger is not empty
+// and every operation succeeded, whatever stopped the attempt.
 func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperation) store.PublicationReceipt {
 	receipt := store.PublicationReceipt{ID: id, ApprovalID: approvalID, Outcome: store.PublicationOutcomePublished}
+	if len(ledger) == 0 {
+		receipt.Outcome = store.PublicationOutcomeIncomplete
+	}
 	for _, operation := range ledger {
 		if operation.State != store.PublicationOperationSucceeded {
 			receipt.Outcome = store.PublicationOutcomeIncomplete
@@ -228,10 +229,12 @@ func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperatio
 
 // Interrupt settles an attempt that ended without a receipt while the
 // session is publishing: a resumed attempt whose preflight failed, or one
-// that the coordinator started too often. It records an incomplete receipt
-// under the attempt ID with reason and moves the session to
+// that the coordinator started too often. The ledger decides the outcome.
+// When an operation did not succeed, it records an incomplete receipt under
+// the attempt ID with reason and moves the session to
 // publication_incomplete, where retry, reconciliation, and cancellation are
-// offered. A session in another state is returned unchanged.
+// offered. When every operation succeeded, it records the published receipt.
+// A session in another state is returned unchanged.
 func (p *Publisher) Interrupt(ctx context.Context, request Request, reason string) (store.IdeationSession, error) {
 	history, err := p.Store.IdeationHistory(ctx, request.SessionID)
 	if err != nil {
