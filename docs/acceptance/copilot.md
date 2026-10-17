@@ -10,7 +10,9 @@ evidence stay apart, and a check that did not run is `not-run`, never `pass`.
   `copilot-mixed-harness-recovery` scenario
   (`factory acceptance scenarios --json`).
 - [Spike 0003](../spikes/0003-copilot-cli-protocol.md): the pinned CLI
-  contract and the release blockers RB-1 to RB-8.
+  contract and the release blockers RB-1 to RB-8. Only the outputs that tests
+  read are committed; `scripts/probe-copilot-cli.sh <dir>` reproduces the full
+  output of every probe.
 - [Copilot operator guide](../configuration.md#github-copilot-cli): setup,
   smoke, refresh, recovery, and failure actions.
 
@@ -69,8 +71,8 @@ proved.
 Offline status: met for the documented and observed behavior. Live: blocked
 by RB-1 to RB-7.
 
-- `.:TestCopilotFixturesMatchManifest`, `.:TestCopilotPinIsConsistent`,
-  `.:TestCopilotCommandTemplatesUseObservedFlags`,
+- `.:TestCopilotFixturesMatchManifest`, `.:TestCopilotFixturesAreNamedByManifest`,
+  `.:TestCopilotPinIsConsistent`, `.:TestCopilotCommandTemplatesUseObservedFlags`,
   `.:TestCopilotFixturesAreSanitized`
 - `.:TestCopilotLiveEvidenceStaysUnresolved` keeps every live probe recorded
   as `not-run` in the fixture manifest.

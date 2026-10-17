@@ -4,8 +4,8 @@
 # and write raw observations to an output directory. The default run is
 # offline: it uses no credential, disables container networking, and never
 # reads a host Copilot, gh, or Keychain state. docs/spikes/0003-copilot-cli-protocol.md
-# records the results; docs/spikes/copilot-cli-1.0.98/ holds the sanitized
-# fixtures that `make check` validates.
+# records the results. docs/spikes/copilot-cli-1.0.98/ commits only the sanitized
+# outputs that `make check` reads; every other output comes from a run of this script.
 #
 # Usage:
 #   scripts/probe-copilot-cli.sh OUTPUT_DIRECTORY

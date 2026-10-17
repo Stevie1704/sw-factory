@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -30,11 +30,12 @@ type copilotManifest struct {
 }
 
 // copilotProbe is one offline, unauthenticated invocation and the outcome the
-// fixtures must show.
+// record holds. Fixture names the committed output file, when one is kept.
 type copilotProbe struct {
 	Name           string   `json:"name"`
 	Evidence       string   `json:"evidence"`
 	Exit           int      `json:"exit"`
+	Fixture        string   `json:"fixture"`
 	StdoutEmpty    bool     `json:"stdout_empty"`
 	StdoutContains []string `json:"stdout_contains"`
 	StdoutExcludes []string `json:"stdout_excludes"`
@@ -70,19 +71,20 @@ func readCopilotManifest(t *testing.T) copilotManifest {
 	return manifest
 }
 
-// readFixture returns one fixture file of a probe.
-func readFixture(t *testing.T, name, extension string) string {
+// readFixture returns one committed fixture file by its full name.
+func readFixture(t *testing.T, file string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(copilotFixtureDirectory, name+"."+extension))
+	data, err := os.ReadFile(filepath.Join(copilotFixtureDirectory, file))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(data)
 }
 
-// TestCopilotFixturesMatchManifest verifies that every offline probe in the
-// manifest has captured output whose exit status and text show the recorded
-// outcome, so the record cannot claim behavior the fixtures do not hold.
+// TestCopilotFixturesMatchManifest verifies that each committed fixture shows
+// the outcome its probe records, so the record cannot claim behavior the
+// fixtures do not hold. Probes without a committed fixture keep their recorded
+// outcome in the manifest only.
 func TestCopilotFixturesMatchManifest(t *testing.T) {
 	manifest := readCopilotManifest(t)
 	if len(manifest.Probes) == 0 {
@@ -92,30 +94,80 @@ func TestCopilotFixturesMatchManifest(t *testing.T) {
 		if probe.Evidence != "observed" {
 			t.Errorf("%s: offline probe evidence is %q, want observed", probe.Name, probe.Evidence)
 		}
-		exit, err := strconv.Atoi(strings.TrimSpace(readFixture(t, probe.Name, "exit")))
-		if err != nil || exit != probe.Exit {
-			t.Errorf("%s: fixture exit %d (%v), manifest says %d", probe.Name, exit, err, probe.Exit)
+		if probe.Fixture != "" {
+			checkProbeFixture(t, probe)
 		}
-		stdout := readFixture(t, probe.Name, "stdout")
-		stderr := readFixture(t, probe.Name, "stderr")
-		if probe.StdoutEmpty && stdout != "" {
-			t.Errorf("%s: stdout is not empty", probe.Name)
-		}
-		for _, text := range probe.StdoutContains {
-			if !strings.Contains(stdout, text) {
-				t.Errorf("%s: stdout lacks %q", probe.Name, text)
-			}
-		}
-		for _, text := range probe.StdoutExcludes {
-			if strings.Contains(stdout, text) {
-				t.Errorf("%s: stdout contains %q", probe.Name, text)
-			}
-		}
+	}
+}
+
+// checkProbeFixture compares one committed fixture with the expectations that
+// apply to the stream it holds. Expectations on the other stream cannot be
+// checked from this file.
+func checkProbeFixture(t *testing.T, probe copilotProbe) {
+	t.Helper()
+	content := readFixture(t, probe.Fixture)
+	switch filepath.Ext(probe.Fixture) {
+	case ".stdout":
+		checkProbeStdout(t, probe, content)
+	case ".stderr":
 		for _, text := range probe.StderrContains {
-			if !strings.Contains(stderr, text) {
+			if !strings.Contains(content, text) {
 				t.Errorf("%s: stderr lacks %q", probe.Name, text)
 			}
 		}
+	default:
+		t.Errorf("%s: fixture %s is neither stdout nor stderr", probe.Name, probe.Fixture)
+	}
+}
+
+// checkProbeStdout compares a stdout fixture with the stdout expectations.
+func checkProbeStdout(t *testing.T, probe copilotProbe, stdout string) {
+	t.Helper()
+	if probe.StdoutEmpty && stdout != "" {
+		t.Errorf("%s: stdout is not empty", probe.Name)
+	}
+	for _, text := range probe.StdoutContains {
+		if !strings.Contains(stdout, text) {
+			t.Errorf("%s: stdout lacks %q", probe.Name, text)
+		}
+	}
+	for _, text := range probe.StdoutExcludes {
+		if strings.Contains(stdout, text) {
+			t.Errorf("%s: stdout contains %q", probe.Name, text)
+		}
+	}
+}
+
+// TestCopilotFixturesAreNamedByManifest verifies that the directory holds only
+// manifest.json and the fixture files the manifest names, one probe per file,
+// so no orphan output can return without a probe that owns it.
+func TestCopilotFixturesAreNamedByManifest(t *testing.T) {
+	manifest := readCopilotManifest(t)
+	owners := map[string]string{}
+	for _, probe := range manifest.Probes {
+		if probe.Fixture == "" {
+			continue
+		}
+		if owner, claimed := owners[probe.Fixture]; claimed {
+			t.Errorf("fixture %s is named by probes %s and %s", probe.Fixture, owner, probe.Name)
+		}
+		owners[probe.Fixture] = probe.Name
+	}
+	entries, err := os.ReadDir(copilotFixtureDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "manifest.json" {
+			continue
+		}
+		if _, named := owners[entry.Name()]; !named {
+			t.Errorf("%s is not named by any probe fixture", entry.Name())
+		}
+		delete(owners, entry.Name())
+	}
+	for fixture, probe := range owners {
+		t.Errorf("probe %s names fixture %s, which is missing", probe, fixture)
 	}
 }
 
@@ -144,9 +196,20 @@ func TestCopilotPinIsConsistent(t *testing.T) {
 	if !strings.Contains(string(record), version) {
 		t.Errorf("%s does not name %s", manifest.Record, version)
 	}
-	if !strings.Contains(readFixture(t, "version", "stdout"), "GitHub Copilot CLI "+version+".") {
-		t.Errorf("version fixture does not show %s", version)
+	if !probeRecordsStdout(manifest, "version", "GitHub Copilot CLI "+version+".") {
+		t.Errorf("version probe does not record %s", version)
 	}
+}
+
+// probeRecordsStdout reports whether the named probe records the text in its
+// stdout expectations.
+func probeRecordsStdout(manifest copilotManifest, name, text string) bool {
+	for _, probe := range manifest.Probes {
+		if probe.Name == name {
+			return slices.Contains(probe.StdoutContains, text)
+		}
+	}
+	return false
 }
 
 // TestCopilotCommandTemplatesUseObservedFlags verifies that every option in
@@ -155,7 +218,7 @@ func TestCopilotPinIsConsistent(t *testing.T) {
 // way that can create a replacement.
 func TestCopilotCommandTemplatesUseObservedFlags(t *testing.T) {
 	manifest := readCopilotManifest(t)
-	help := readFixture(t, "help", "stdout")
+	help := readFixture(t, "help.stdout")
 	for _, required := range []string{"fresh", "resume"} {
 		if len(manifest.CommandTemplates[required]) == 0 {
 			t.Errorf("missing %s command template", required)

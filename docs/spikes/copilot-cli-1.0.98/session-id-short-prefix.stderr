@@ -1,6 +1,0 @@
-Error: No session or task matched '0000000'.
-The value is not a valid UUID, so a new session cannot be created.
-
-To resume an existing session or task:  copilot --session-id=<id>
-To start a new session with ID:        copilot --session-id=<valid-uuid>
-To resume by name or ID prefix:        copilot --resume=<name-or-prefix>
