@@ -624,6 +624,14 @@ and structured reports as run roles, with these differences:
   ignored. It then finishes the process, stops the worker, and removes the
   snapshot, so a session that waits for the user holds no active work. The
   next user turn resumes the recorded native session on the same harness.
+  A resumed launch records the native session only after the harness
+  revealed the one it asked for. After a coordinator restart, the supervisor
+  makes the same check before it adopts a running process; another native
+  session ends the invocation as `native_session_mismatch`, and a missing
+  process as `launch_interrupted`. A resume that ends before the harness
+  reveals a native session, for example after the role volume was removed,
+  ends as `native_session_lost`; the next launch of that role starts a fresh
+  native session with the full packet.
 - **Plan validation.** Before the coordinator accepts a planning draft, it
   checks the graph with factory-owned rules (`internal/plangraph`) on top of
   the store's identity and reference checks. Each item is a `task`, an

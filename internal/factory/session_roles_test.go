@@ -610,7 +610,7 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 			}
 
 			fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
-			adopted := persistInterruptedLaunch(t, fixture, "sinv-adopt", "turn-2")
+			adopted := persistInterruptedLaunch(t, fixture, "sinv-adopt", "turn-2", "")
 			fixture.worker.processes["sinv-adopt"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(freshNativeSessionForTest)}
 			if err := fixture.roles().Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
@@ -622,7 +622,7 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2")
+			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2", "")
 			if err := fixture.roles().Reconcile(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -631,9 +631,122 @@ func TestSessionRolesRecoverAcrossCoordinatorRestart(t *testing.T) {
 	}
 }
 
+// acceptFirstTurnForTest launches and accepts the ideation role for turn-1
+// and adds the user turn turn-2, so the next launch resumes the native
+// session of the returned invocation.
+func acceptFirstTurnForTest(t *testing.T, fixture *sessionFixture) store.SessionInvocation {
+	t.Helper()
+	first, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.report(first, ideationResultForTest())
+	if err := fixture.roles().Reconcile(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fixture.userTurn(fixture.session(), "turn-2", "Support engineers.")
+	return fixture.invocation(first.ID)
+}
+
+// TestSessionRolesVerifyAResumedLaunchAfterRestart verifies that a resumed
+// launch records the native session only after the harness revealed it, and
+// that a coordinator restart during such a launch adopts the requested
+// native session, refuses another one as a mismatch, records a missing
+// process as an interrupted launch, and types a resume that ended without a
+// native session as lost.
+func TestSessionRolesVerifyAResumedLaunchAfterRestart(t *testing.T) {
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			first := acceptFirstTurnForTest(t, fixture)
+			var persisted store.SessionInvocation
+			fixture.worker.onLaunch = func(request worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				persisted, _ = fixture.store.SessionInvocation(t.Context(), request.InvocationID)
+				return worker.HeadlessInspection{}, false
+			}
+			resumed, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ResumedFrom != first.ID || persisted.NativeSessionID != "" || resumed.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("persisted before launch = %#v, after = %#v; want the native session recorded only after the harness revealed it", persisted, resumed)
+			}
+			fixture.worker.onLaunch = nil
+			if err := fixture.roles().CancelRole(t.Context(), "session-1", "test"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.restart()
+
+			adopted := persistInterruptedLaunch(t, fixture, "sinv-same", "turn-2", first.ID)
+			fixture.worker.processes["sinv-same"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(first.NativeSessionID)}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if got := fixture.invocation(adopted.ID); got.Status != store.SessionInvocationActive || got.NativeSessionID != first.NativeSessionID {
+				t.Fatalf("resumed launch = %#v, want the requested native session adopted", got)
+			}
+			if err := fixture.roles().CancelRole(t.Context(), "session-1", "test"); err != nil {
+				t.Fatal(err)
+			}
+
+			forked := persistInterruptedLaunch(t, fixture, "sinv-fork", "turn-2", first.ID)
+			fixture.worker.processes["sinv-fork"] = worker.HeadlessInspection{Status: worker.HeadlessStatusRunning, Stdout: nativeEventsForTest(forkedNativeSessionForTest)}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, forked.ID, factory.SessionFailureNativeSessionMismatch)
+
+			gone := persistInterruptedLaunch(t, fixture, "sinv-gone", "turn-2", first.ID)
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, gone.ID, factory.SessionFailureLaunchInterrupted)
+
+			lost := persistInterruptedLaunch(t, fixture, "sinv-lost", "turn-2", first.ID)
+			fixture.worker.processes["sinv-lost"] = worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1}
+			if err := fixture.roles().Reconcile(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			assertReleased(t, fixture, lost.ID, factory.SessionFailureNativeSessionLost)
+		})
+	}
+}
+
+// TestSessionRolesStartFreshAfterALostNativeSession verifies that a resume
+// that ends before the harness reveals the native session, as after a lost
+// role volume, is typed as a lost native session, and that the next launch
+// of the turn starts a fresh native session instead of failing again.
+func TestSessionRolesStartFreshAfterALostNativeSession(t *testing.T) {
+	for _, harnessName := range sessionHarnesses {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newSessionFixture(t, harnessName)
+			acceptFirstTurnForTest(t, fixture)
+			fixture.worker.onLaunch = func(worker.HeadlessRequest) (worker.HeadlessInspection, bool) {
+				return worker.HeadlessInspection{Status: worker.HeadlessStatusExited, ExitCode: 1}, true
+			}
+			failed, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err == nil {
+				t.Fatal("StartIdeationTurn() with a lost native session succeeded")
+			}
+			assertReleased(t, fixture, failed.ID, factory.SessionFailureNativeSessionLost)
+
+			fixture.worker.onLaunch = nil
+			fresh, err := fixture.roles().StartIdeationTurn(t.Context(), "session-1", "turn-2")
+			if err != nil {
+				t.Fatalf("StartIdeationTurn() after a lost native session error = %v", err)
+			}
+			launch := fixture.worker.launches[len(fixture.worker.launches)-1]
+			if fresh.ResumedFrom != "" || launch.Mode != worker.HeadlessLaunchFresh || fresh.NativeSessionID == "" {
+				t.Fatalf("next invocation = %#v, launch mode %q; want a fresh native session", fresh, launch.Mode)
+			}
+		})
+	}
+}
+
 // persistInterruptedLaunch records an active invocation as a coordinator does
-// just before it crashes, without a native session.
-func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger string) store.SessionInvocation {
+// just before it crashes, without a native session. A non-empty resumedFrom
+// marks a resume of that invocation's native session.
+func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger, resumedFrom string) store.SessionInvocation {
 	t.Helper()
 	identity, _ := prompt.SessionContentIdentity(workflow.RoleIdeation)
 	write, err := workflow.DefaultSessionLifecycle().Write(fixture.session(), workflow.SessionEventRoleStarted, "", time.Time{})
@@ -647,7 +760,7 @@ func persistInterruptedLaunch(t *testing.T, fixture *sessionFixture, id, trigger
 	_, invocation, err := fixture.store.StartSessionInvocation(t.Context(), write, store.SessionInvocation{
 		ID: id, Role: workflow.RoleIdeation, TriggerID: trigger, ContextRevision: sessionContextRevisionForTest,
 		Harness: string(fixture.harness), Model: "model-i", PromptVersion: identity.Version, PromptSHA256: identity.SHA256,
-		ImageDigest: sessionImageDigestForTest, WorkerID: "session-1-ideation", ResultDirectory: resultDirectory,
+		ImageDigest: sessionImageDigestForTest, WorkerID: "session-1-ideation", ResultDirectory: resultDirectory, ResumedFrom: resumedFrom,
 	})
 	if err != nil {
 		t.Fatal(err)
