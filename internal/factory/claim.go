@@ -665,6 +665,10 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 
 // invocationBlocksCleanStart identifies terminal invocation history that means
 // a clean-stage launch may be the second attempt at an already accepted report.
+// A completed implementation invocation does not block: its acceptance
+// committed the declared implementation/active transition in the same step,
+// progression continues with the checkpoint, and validateLaunchHistory still
+// refuses a second implementation launch over that history.
 func invocationBlocksCleanStart(run store.Run, invocation store.Invocation) bool {
 	switch run.Stage {
 	case store.StageClaim:
@@ -672,7 +676,7 @@ func invocationBlocksCleanStart(run store.Run, invocation store.Invocation) bool
 	case store.StageTest:
 		return invocation.Stage == store.StageTest
 	case store.StageImplementation:
-		return invocation.Stage == store.StageImplementation
+		return invocation.Stage == store.StageImplementation && invocation.Status != store.InvocationStatusCompleted
 	case store.StageDraftPR:
 		return invocation.Stage == store.StageReview
 	default:

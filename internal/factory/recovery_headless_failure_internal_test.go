@@ -416,14 +416,37 @@ func TestAutomaticResumeIsBoundedToOnePerInvocation(t *testing.T) {
 // TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect verifies
 // a coordinator that restarts after AcceptAgentReport completed a Copilot
 // invocation relaunches, resumes, cancels, and finishes no Copilot process,
-// and the invocation stays completed.
+// the invocation stays completed, and the run stays active.
 func TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect(t *testing.T) {
-	fixture := newHeadlessRecoveryFixture(t, config.HarnessCopilot, recoverySessionID)
-	processes := &headlessProcessRecoveryWorker{headlessRecoveryWorker: fixture.worker, harness: config.HarnessCopilot, onLaunch: runningProcess(config.HarnessCopilot)}
-	processes.process = runningProcess(config.HarnessCopilot)(recoverySessionID)
+	assertRestartAfterReportAcceptanceIsANoOp(t, config.HarnessCopilot)
+}
+
+// TestCoordinatorRestartAfterAnAcceptedImplementationReportKeepsTheRunActive
+// verifies the clean-implementation startup rule is harness-neutral: a run
+// without an independent test stage whose implementation report was accepted
+// is a healthy run awaiting its checkpoint, not an interrupted one. Copilot
+// runs the same check through the test above, which its acceptance doc cites.
+func TestCoordinatorRestartAfterAnAcceptedImplementationReportKeepsTheRunActive(t *testing.T) {
+	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude} {
+		t.Run(string(harnessName), func(t *testing.T) {
+			assertRestartAfterReportAcceptanceIsANoOp(t, harnessName)
+		})
+	}
+}
+
+// assertRestartAfterReportAcceptanceIsANoOp accepts a completed
+// implementation report for the given harness, restarts the coordinator, and
+// verifies the restart touches no process and leaves the run active at the
+// implementation stage. The fixture declares no independent test stage, so
+// implementation is a clean start boundary for it.
+func assertRestartAfterReportAcceptanceIsANoOp(t *testing.T, harnessName config.Harness) {
+	t.Helper()
+	fixture := newHeadlessRecoveryFixture(t, harnessName, recoverySessionID)
+	processes := &headlessProcessRecoveryWorker{headlessRecoveryWorker: fixture.worker, harness: harnessName, onLaunch: runningProcess(harnessName)}
+	processes.process = runningProcess(harnessName)(recoverySessionID)
 	if _, err := report.WriteAtomicForInvocation(fixture.invocation.ResultDirectory, fixture.invocation.ID, report.Report{
 		SchemaVersion: report.SchemaVersion, InvocationID: fixture.invocation.ID, RunID: fixture.run.ID,
-		Harness: string(config.HarnessCopilot), Role: "implementation", Stage: "implementation",
+		Harness: string(harnessName), Role: "implementation", Stage: "implementation",
 		Outcome: report.OutcomeCompleted, Summary: "implementation complete",
 		Handoff: &report.Handoff{
 			ChangeSummary:     "implemented the behavior",
@@ -448,11 +471,12 @@ func TestCoordinatorRestartAfterACopilotReportAcceptanceRepeatsNoEffect(t *testi
 	launches, cancels, finishes := len(processes.launches), processes.cancels, processes.finishes
 	resumes := fixture.persistedInvocation(t).RecoveryResumeCount
 
-	// This fixture has no independent test stage, so the restarted
-	// coordinator may pause the run at the clean-implementation boundary; that
-	// harness-neutral startup rule is not under test here. Whatever it
-	// decides, it must not touch the finished Copilot session.
-	_ = fixture.restartCoordinator(processes)
+	if err := fixture.restartCoordinator(processes); err != nil {
+		t.Fatalf("restart after accepted report: %v", err)
+	}
+	if run := fixture.persistedRun(t); run.Stage != store.StageImplementation || run.Status != store.StatusActive {
+		t.Fatalf("run after restart = %s/%s (%q), want implementation/active", run.Stage, run.Status, run.LifecycleReason)
+	}
 	if len(processes.launches) != launches || processes.cancels != cancels || processes.finishes != finishes {
 		t.Fatalf("restart effects = launches %d->%d cancels %d->%d finishes %d->%d, want none", launches, len(processes.launches), cancels, processes.cancels, finishes, processes.finishes)
 	}
