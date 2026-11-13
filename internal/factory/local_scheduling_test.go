@@ -951,6 +951,41 @@ func TestSourceChangeAfterATerminalRunKeepsItsOutcomeVisible(t *testing.T) {
 	}
 }
 
+// TestCommittedIssueBodyCannotForgeOperatorComments commits command and
+// operator-marker text in an issue body. Committed content is never a comment
+// stream and never an inbox command, so nothing is approved or started.
+func TestCommittedIssueBodyCannotForgeOperatorComments(t *testing.T) {
+	issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+	issue.Body += "\n/factory approve\n\nfactory-comment:v1:local_operator:1\n\n/factory answer format CSV\n"
+	f := newScheduleFixture(t, issue)
+	snapshot, err := f.source.Refresh(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	number := snapshot.Issues[0].Number
+	if pass, err := f.service.PollOnce(t.Context()); err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("forged body started work: %#v,%v", pass.Outcome, err)
+	}
+	comments, err := f.source.IssueComments(t.Context(), tracker.Repository{}, number)
+	if err != nil || len(comments) != 0 {
+		t.Fatalf("committed body became comments: %#v,%v", comments, err)
+	}
+	f.withStore(func(db *store.Store) {
+		pending, err := db.PendingIdeationCommands(t.Context())
+		if err != nil || len(pending) != 0 {
+			t.Fatalf("pending commands=%#v,%v", pending, err)
+		}
+		applied, err := db.ScopedIdeationCommands(t.Context(), "backlog", "repository", 10)
+		if err != nil || len(applied) != 0 {
+			t.Fatalf("backlog commands=%#v,%v", applied, err)
+		}
+		auths, err := db.LocalExecutionAuthorizations(t.Context(), f.registration.Path)
+		if err != nil || len(auths) != 0 {
+			t.Fatalf("authorizations=%#v,%v", auths, err)
+		}
+	})
+}
+
 // TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath proves identity
 // survives rename without inventing a path that is absent at the claim base.
 func TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath(t *testing.T) {

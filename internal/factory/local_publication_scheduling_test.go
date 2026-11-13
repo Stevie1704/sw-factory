@@ -24,6 +24,18 @@ import (
 // role inference is a fixture, while Git publication and SQLite are real.
 func prepareSchedulingPlan(t *testing.T, f *scheduleFixture, start bool, open ...factory.StoreOpener) (string, string) {
 	t.Helper()
+	command, id, branch := schedulingPlanCommand(t, f, start, open...)
+	applied := submitExecutionCommand(t, f.sessionCommandFixture, command)
+	if applied.Outcome != store.IdeationCommandApplied && len(open) == 0 {
+		t.Fatalf("local plan approval=%#v", applied)
+	}
+	return id, branch
+}
+
+// schedulingPlanCommand drafts the one-task plan, prepares its exact preview,
+// and returns the approval command without submitting it.
+func schedulingPlanCommand(t *testing.T, f *scheduleFixture, start bool, open ...factory.StoreOpener) (store.IdeationCommand, string, string) {
+	t.Helper()
 	f.planner = localpublication.NewPublisher(f.registration, "main", f.host)
 	if len(open) > 0 {
 		f.recompose(open[0])
@@ -87,11 +99,7 @@ func prepareSchedulingPlan(t *testing.T, f *scheduleFixture, start bool, open ..
 	if err != nil {
 		t.Fatal(err)
 	}
-	applied := submitExecutionCommand(t, f.sessionCommandFixture, command)
-	if applied.Outcome != store.IdeationCommandApplied && len(open) == 0 {
-		t.Fatalf("local plan approval=%#v", applied)
-	}
-	return id, binding.Preview.Items[0].Fields["specification_branch"]
+	return command, id, binding.Preview.Items[0].Fields["specification_branch"]
 }
 
 // squashSchedulingSpecifications represents the human publishing path and uses
@@ -403,4 +411,76 @@ func TestApproveStartRefusesAParentSelectionBeforeApproval(t *testing.T) {
 			t.Fatalf("authorizations=%#v,%v", auths, err)
 		}
 	})
+}
+
+// stopAfterAuthorization models the coordinator stopping right after the
+// local authorization commits, before publication and command completion.
+type stopAfterAuthorization struct {
+	*store.Store
+	stop func()
+}
+
+// AuthorizeLocalExecution commits the authorization, then stops the process.
+func (s stopAfterAuthorization) AuthorizeLocalExecution(ctx context.Context, auth store.LocalExecutionAuthorization, completion *store.IdeationCommandResult) (store.LocalExecutionAuthorization, error) {
+	saved, err := s.Store.AuthorizeLocalExecution(ctx, auth, completion)
+	if err != nil {
+		return saved, err
+	}
+	s.stop()
+	return saved, context.Canceled
+}
+
+// TestApproveStartReplayAfterAuthorizationStopsAddsNothing stops between
+// AuthorizePlan and command completion. The replayed command must finish with
+// one authorization, one publication, and no Run.
+func TestApproveStartReplayAfterAuthorizationStopsAddsNothing(t *testing.T) {
+	f := newScheduleFixture(t, schedulingTask("local-00112233445566778899aabbccddeeff", "Baseline"))
+	ctx, stop := context.WithCancel(t.Context())
+	command, _, branch := schedulingPlanCommand(t, f, true, func(ctx context.Context, path string) (factory.OperationalStore, error) {
+		db, err := store.Open(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return stopAfterAuthorization{Store: db, stop: stop}, nil
+	})
+	if _, err := f.service.SubmitSessionCommand(t.Context(), command); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.service.DrainSessionCommandsForTest(ctx)
+	if view, err := f.service.SessionCommand(t.Context(), command.RequestID); err != nil || view.Command.State == store.IdeationCommandCompleted {
+		t.Fatalf("stop boundary was not exercised: %#v,%v", view.Command, err)
+	}
+	f.recompose(nil)
+	if err := f.service.DrainSessionCommandsForTest(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	view, err := f.service.SessionCommand(t.Context(), command.RequestID)
+	if err != nil || view.Command.Outcome != store.IdeationCommandApplied {
+		t.Fatalf("replayed command=%#v,%v", view.Command, err)
+	}
+	f.withStore(func(db *store.Store) {
+		auths, err := db.LocalExecutionAuthorizations(t.Context(), f.registration.Path)
+		if err != nil || len(auths) != 1 {
+			t.Fatalf("authorizations=%d,%v", len(auths), err)
+		}
+		history, err := db.IdeationHistory(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		published := 0
+		for _, receipt := range history.Receipts {
+			if receipt.Outcome == store.PublicationOutcomePublished {
+				published++
+			}
+		}
+		if published != 1 || len(history.Approvals) != 1 {
+			t.Fatalf("publications=%d approvals=%d", published, len(history.Approvals))
+		}
+		if run, err := db.CurrentRun(t.Context()); err != nil || run != nil {
+			t.Fatalf("replay started a Run: %#v,%v", run, err)
+		}
+	})
+	if got := scheduleGit(t, f.registration.Path, "rev-list", "--count", "main.."+branch); got != "1" {
+		t.Fatalf("specification commits=%s", got)
+	}
 }
