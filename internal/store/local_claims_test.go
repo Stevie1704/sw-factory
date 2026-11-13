@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/localissues"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -122,5 +123,43 @@ func TestLegacyGraphKeyedClaimStillGuardsItsRevision(t *testing.T) {
 				t.Fatalf("consumed legacy revision reserved again: %#v,%v", reserved, err)
 			}
 		})
+	}
+}
+
+// TestReleaseLocalClaimRefusesAConsumedRevision lets a stale reservation go
+// but never deletes the receipt of a revision that already became a Run.
+func TestReleaseLocalClaimRefusesAConsumedRevision(t *testing.T) {
+	db, _ := openIdeationStoreForTest(t)
+	claim := claimAuthorization(t, db, "authority", "Export")
+	reserved, err := db.ReserveLocalClaim(t.Context(), claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
+	run := store.Run{ID: reserved.RunID, RepositoryPath: reserved.RepositoryPath, IssueNumber: reserved.Number, Stage: store.StageClaim, Status: store.StatusActive, BaseCheckpointSHA: reserved.BaseSHA, CheckpointSHA: reserved.BaseSHA, SpecificationPacket: reserved.SpecificationPacket, CreatedAt: now, UpdatedAt: now}
+	if _, err := db.SaveLocalClaimRun(t.Context(), reserved, run); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReleaseLocalClaim(t.Context(), reserved); !errors.Is(err, store.ErrLocalClaimConflict) {
+		t.Fatalf("consumed claim released: %v", err)
+	}
+	claims, err := db.LocalClaims(t.Context(), reserved.RepositoryPath)
+	if err != nil || len(claims) != 1 || claims[0].State != "claimed" {
+		t.Fatalf("consumption receipt lost: %#v,%v", claims, err)
+	}
+}
+
+// TestReleaseLocalClaimDeletesAnUnconsumedReservation frees the slot.
+func TestReleaseLocalClaimDeletesAnUnconsumedReservation(t *testing.T) {
+	db, _ := openIdeationStoreForTest(t)
+	reserved, err := db.ReserveLocalClaim(t.Context(), claimAuthorization(t, db, "authority", "Export"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReleaseLocalClaim(t.Context(), reserved); err != nil {
+		t.Fatal(err)
+	}
+	if claims, err := db.LocalClaims(t.Context(), reserved.RepositoryPath); err != nil || len(claims) != 0 {
+		t.Fatalf("reservation retained: %#v,%v", claims, err)
 	}
 }

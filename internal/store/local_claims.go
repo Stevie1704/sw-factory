@@ -271,6 +271,27 @@ func (s *Store) SaveLocalClaimRun(ctx context.Context, claim LocalClaim, run Run
 	return normalized, nil
 }
 
+// ReleaseLocalClaim deletes a stale reservation that was never consumed, so a
+// fresh decision can admit the current source. A consumed claim, or one whose
+// Run exists, is never released.
+func (s *Store) ReleaseLocalClaim(ctx context.Context, claim LocalClaim) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `DELETE FROM local_claims WHERE claim_key=? AND repository_path=? AND run_id=? AND state='reserved' AND NOT EXISTS (SELECT 1 FROM operational_runs WHERE id=?)`, claim.Key, claim.RepositoryPath, claim.RunID, claim.RunID)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return err
+	} else if count != 1 {
+		return fmt.Errorf("%w: reservation %s is not releasable", ErrLocalClaimConflict, claim.RunID)
+	}
+	return tx.Commit()
+}
+
 // SaveLocalBacklog records a bounded non-authoritative coordinator projection.
 func (s *Store) SaveLocalBacklog(ctx context.Context, repo string, projection LocalBacklogProjection) error {
 	data, err := json.Marshal(projection)

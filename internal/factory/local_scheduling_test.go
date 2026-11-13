@@ -829,6 +829,64 @@ func TestClaimReservationRecoversWorkspaceAndAtomicRunSave(t *testing.T) {
 	}
 }
 
+// TestSourceEditAfterReservationReleasesTheStaleClaim stops between
+// reservation and Run save, edits the accepted source, and restarts. The stale
+// reservation must not become a Run on either the poll or direct-claim path.
+func TestSourceEditAfterReservationReleasesTheStaleClaim(t *testing.T) {
+	for _, path := range []string{"poll", "claim"} {
+		t.Run(path, func(t *testing.T) {
+			issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+			f := newScheduleFixture(t, issue)
+			f.authorize(t, "approve", issue.ID)
+			snapshot, err := f.source.Refresh(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			number := snapshot.Issues[0].Number
+			fail := true
+			f.recompose(func(ctx context.Context, path string) (factory.OperationalStore, error) {
+				db, err := store.Open(ctx, path)
+				if err != nil {
+					return nil, err
+				}
+				return claimSaveFault{Store: db, fail: &fail}, nil
+			})
+			if _, err := f.service.ClaimIssue(t.Context(), number); err == nil {
+				t.Fatal("failure boundary was not exercised")
+			}
+			changed := issue
+			changed.Title = "Changed export"
+			f.writeIssueCommit(t, changed)
+			f.recompose(nil)
+			if path == "poll" {
+				pass, err := f.service.PollOnce(t.Context())
+				if err != nil || pass.Outcome != factory.PollNoWork {
+					t.Fatalf("stale reservation resumed: %#v,%v", pass, err)
+				}
+			} else if result, err := f.service.ClaimIssue(t.Context(), number); err == nil || !strings.Contains(err.Error(), "stale_authorization") {
+				t.Fatalf("stale reservation claimed: %#v,%v", result.Run.ID, err)
+			}
+			f.withStore(func(db *store.Store) {
+				run, err := db.CurrentRun(t.Context())
+				if err != nil || run != nil {
+					t.Fatalf("stale reservation created Run: %#v,%v", run, err)
+				}
+				claims, err := db.LocalClaims(t.Context(), f.registration.Path)
+				if err != nil || len(claims) != 0 {
+					t.Fatalf("stale reservation retained: %#v,%v", claims, err)
+				}
+			})
+			if refs := scheduleGit(t, f.registration.Path, "for-each-ref", "--format=%(refname)", "refs/heads/factory/"); refs != "" {
+				t.Fatalf("released workspace branch remains: %s", refs)
+			}
+			view, err := f.service.LocalBacklog(t.Context())
+			if err != nil || len(view.Projection.Items) != 1 || view.Projection.Items[0].State != "stale_authorization" || !strings.Contains(view.Projection.Items[0].Reason, "approve again") {
+				t.Fatalf("waiting reason=%#v,%v", view.Projection.Items, err)
+			}
+		})
+	}
+}
+
 // TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath proves identity
 // survives rename without inventing a path that is absent at the claim base.
 func TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath(t *testing.T) {

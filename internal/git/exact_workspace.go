@@ -13,6 +13,16 @@ import (
 // It never fetches or chooses a new base on replay.
 type ExactWorktreeManager interface {
 	CreateAtRevision(context.Context, string, string, string) (Workspace, error)
+	DiscardRevision(context.Context, string, string) error
+}
+
+// DiscardRevision removes the workspace and branch that CreateAtRevision may
+// have made for runID. An absent workspace is a successful result.
+func (m *LocalWorktreeManager) DiscardRevision(ctx context.Context, repositoryPath, runID string) error {
+	if err := validateRefPart(runID); err != nil {
+		return err
+	}
+	return m.Remove(ctx, repositoryPath, Workspace{RunID: runID, Branch: "factory/" + runID, Worktree: m.worktreePath(repositoryPath, runID)})
 }
 
 // CreateAtRevision creates a factory branch at revision, or adopts an exact

@@ -32,6 +32,7 @@ type localScheduleStore interface {
 	InvalidateLocalExecution(context.Context, string, string, string, time.Time) error
 	LocalExecutionInvalidations(context.Context, string) (map[string]string, error)
 	ReserveLocalClaim(context.Context, store.LocalClaim) (store.LocalClaim, error)
+	ReleaseLocalClaim(context.Context, store.LocalClaim) error
 	SaveLocalClaimRun(context.Context, store.LocalClaim, store.Run) (store.Run, error)
 	SaveLocalBacklog(context.Context, string, store.LocalBacklogProjection) error
 	LocalBacklog(context.Context, string) (store.LocalBacklogProjection, error)
@@ -632,21 +633,24 @@ func (s *Service) claimLocalIssue(ctx context.Context, r config.RepositoryRegist
 	if current != nil {
 		return IssueResult{}, fmt.Errorf("an active Run already exists: %s", current.ID)
 	}
-	claims, err := db.LocalClaims(ctx, r.Path)
-	if err != nil {
-		return IssueResult{}, err
-	}
-	for _, claim := range claims {
-		if claim.State == "reserved" {
-			if claim.Number != number {
-				return IssueResult{}, errors.New("another local claim reserves the repository slot")
-			}
-			return s.resumeLocalClaim(ctx, r, db, claim)
-		}
-	}
 	admissions, err := s.observeLocalQueue(ctx, r, db)
 	if err != nil {
 		return IssueResult{}, err
+	}
+	claim, reserved, err := s.freshReservation(ctx, r, db)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	if reserved {
+		if claim.Number != number {
+			return IssueResult{}, errors.New("another local claim reserves the repository slot")
+		}
+		return s.resumeLocalClaim(ctx, r, db, claim)
+	}
+	if claim.RunID != "" {
+		if admissions, err = s.observeLocalQueue(ctx, r, db); err != nil {
+			return IssueResult{}, err
+		}
 	}
 	for _, admission := range admissions {
 		if admission.item.Issue.Number == number {
@@ -812,17 +816,21 @@ func (s *Service) pollLocalOnce(ctx context.Context, r config.RepositoryRegistra
 	if current != nil {
 		return PollResult{Outcome: PollActiveRun, Run: *current}, nil
 	}
-	claims, err := db.LocalClaims(ctx, r.Path)
+	claim, reserved, err := s.freshReservation(ctx, r, db)
 	if err != nil {
-		return PollResult{}, err
+		return PollResult{}, &pollingTransportError{err: err}
 	}
-	for _, claim := range claims {
-		if claim.State == "reserved" {
-			claimed, err := s.resumeLocalClaim(ctx, r, db, claim)
-			if err != nil {
-				return PollResult{}, &pollingTransportError{err: err}
-			}
-			return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
+	if reserved {
+		claimed, err := s.resumeLocalClaim(ctx, r, db, claim)
+		if err != nil {
+			return PollResult{}, &pollingTransportError{err: err}
+		}
+		return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
+	}
+	if claim.RunID != "" {
+		// The released item now projects its waiting reason; admit the rest.
+		if admissions, err = s.observeLocalQueue(ctx, r, db); err != nil {
+			return PollResult{}, err
 		}
 	}
 	if len(admissions) == 0 {
@@ -833,6 +841,66 @@ func (s *Service) pollLocalOnce(ctx context.Context, r config.RepositoryRegistra
 		return PollResult{}, &pollingTransportError{err: err}
 	}
 	return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
+}
+
+// freshReservation returns the repository's reserved claim when it may still be
+// consumed. A stale reservation is released instead: its workspace is
+// discarded, the row is deleted, and its authorization is invalidated, so the
+// backlog shows the waiting reason. It then returns that claim with reserved
+// false. Without a reservation it returns a zero claim.
+func (s *Service) freshReservation(ctx context.Context, r config.RepositoryRegistration, db localScheduleStore) (store.LocalClaim, bool, error) {
+	claims, err := db.LocalClaims(ctx, r.Path)
+	if err != nil {
+		return store.LocalClaim{}, false, err
+	}
+	for _, claim := range claims {
+		if claim.State != "reserved" {
+			continue
+		}
+		reason, err := s.staleReservationReason(ctx, r, db, claim)
+		if err != nil || reason == "" {
+			return claim, err == nil, err
+		}
+		return claim, false, s.releaseLocalClaim(ctx, r, db, claim, reason)
+	}
+	return store.LocalClaim{}, false, nil
+}
+
+// staleReservationReason reports why a reservation may no longer become a Run:
+// its authorization was invalidated, or the committed graph is no longer the
+// exact graph it reserved. An empty reason means it may resume.
+func (s *Service) staleReservationReason(ctx context.Context, r config.RepositoryRegistration, db localScheduleStore, claim store.LocalClaim) (string, error) {
+	invalidations, err := db.LocalExecutionInvalidations(ctx, r.Path)
+	if err != nil {
+		return "", err
+	}
+	if reason := invalidations[claim.AuthorizationID]; reason != "" {
+		return "authorization was invalidated: " + reason, nil
+	}
+	snapshot, err := s.refreshLocalSource(ctx, r)
+	if err != nil {
+		return "", err
+	}
+	if snapshot.Graph.Digest != claim.GraphDigest {
+		return "the committed source graph changed after the reservation", nil
+	}
+	return "", nil
+}
+
+// releaseLocalClaim discards the reservation's workspace before its row, so an
+// interruption leaves an inventoried reservation rather than an orphan branch.
+func (s *Service) releaseLocalClaim(ctx context.Context, r config.RepositoryRegistration, db localScheduleStore, claim store.LocalClaim, reason string) error {
+	exact, ok := s.worktreeManager().(gitadapter.ExactWorktreeManager)
+	if !ok {
+		return errors.New("Git workspace lacks exact claim recovery capability")
+	}
+	if err := exact.DiscardRevision(ctx, r.Path, claim.RunID); err != nil {
+		return fmt.Errorf("discard stale claim workspace: %w", err)
+	}
+	if err := db.ReleaseLocalClaim(ctx, claim); err != nil {
+		return err
+	}
+	return db.InvalidateLocalExecution(ctx, r.Path, claim.AuthorizationID, "reserved claim was released before its Run started: "+reason, s.deps.Now())
 }
 
 // recordLocalClaimFailure makes reserved Git/store ambiguity actionable without releasing its slot.
