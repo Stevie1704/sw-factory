@@ -6,6 +6,10 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
+	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/localtracker"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // TestTrackerAdapterPassesTheAzurePlanMappingToTheClient verifies that the
@@ -45,5 +49,43 @@ repositories:
 	}
 	if client.Planning == nil || len(client.Planning.Levels) != 2 || client.Planning.Levels[1].Type != "Product Backlog Item" {
 		t.Fatalf("Planning = %#v, want the configured PBI mapping", client.Planning)
+	}
+}
+
+// TestLocalCompositionSuppliesIndependentHostCapabilities exercises both
+// supported registrations without executing any remote tracker command.
+func TestLocalCompositionSuppliesIndependentHostCapabilities(t *testing.T) {
+	for _, provider := range []config.Provider{config.ProviderGitHub, config.ProviderAzureDevOps} {
+		t.Run(string(provider), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "host", "config.yaml")
+			registration := config.RepositoryRegistration{Path: "/work/service", Tracker: config.ProviderLocal, CodeHost: provider, LocalOperator: config.LocalOperatorConfig{InstallationID: "install-11111111111111111111111111111111", Name: "operator"}, AuthorizedUsers: []string{"reviewer"}, OperationalDataPath: "/private/factory/store.db", RepositoryConfigPath: "/work/service/factory.yaml", Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}}
+			if provider == config.ProviderAzureDevOps {
+				registration.AzureDevOps = config.AzureDevOpsConfig{Organization: "company", Project: "project", Repository: "service"}
+			} else {
+				registration.GitHub = config.GitHubConfig{Owner: "example", Repository: "service"}
+			}
+			if err := config.SaveHost(path, config.HostConfig{SchemaVersion: 2, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
+				t.Fatal(err)
+			}
+			dependencies := serviceDependencies(path)
+			if _, ok := dependencies.Tracker.(*localtracker.Client); !ok {
+				t.Fatalf("tracker = %T", dependencies.Tracker)
+			}
+			if separate, ok := dependencies.Tracker.(tracker.SeparateCommentStreams); !ok || !separate.SeparateIssueCommentStream() {
+				t.Fatal("local and PR comment identities share a watermark")
+			}
+			if dependencies.PullRequestComments == nil || dependencies.PullRequestCommentPublisher == nil || dependencies.PullRequestReviews == nil || dependencies.CommitStatuses == nil || dependencies.CodeHostReadiness == nil {
+				t.Fatal("independent code-host capabilities are missing")
+			}
+			if provider == config.ProviderGitHub {
+				if _, ok := dependencies.PullRequests.(*github.CodeHostClient); !ok {
+					t.Fatalf("GitHub code host = %T", dependencies.PullRequests)
+				}
+			} else {
+				if _, ok := dependencies.PullRequests.(*azuredevops.Client); !ok {
+					t.Fatalf("Azure code host = %T", dependencies.PullRequests)
+				}
+			}
+		})
 	}
 }

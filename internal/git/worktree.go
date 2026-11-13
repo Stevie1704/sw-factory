@@ -442,6 +442,10 @@ func (m *LocalWorktreeManager) runner() CommandRunner {
 	return m.Runner
 }
 
+// NewCommandRunner exposes the same bounded, hook-suppressed host Git runner
+// to other factory-owned adapters without giving them a workspace dependency.
+func NewCommandRunner() CommandRunner { return commandRunner{} }
+
 // Create fetches targetBranch from origin and creates factory/runID without
 // checking out the ordinary repository.
 func (m *LocalWorktreeManager) Create(ctx context.Context, repositoryPath, targetBranch, runID string) (Workspace, error) {

@@ -97,8 +97,9 @@ func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
 
 // repositoryIdentityResponse is the repository and project id projection.
 type repositoryIdentityResponse struct {
-	ID      string `json:"id"`
-	Project struct {
+	ID            string `json:"id"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       struct {
 		ID string `json:"id"`
 	} `json:"project"`
 }

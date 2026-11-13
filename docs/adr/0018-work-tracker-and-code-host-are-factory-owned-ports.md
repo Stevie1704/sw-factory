@@ -30,3 +30,17 @@ combined registrations and serialized tracker payloads retain their identities.
 The local adapter owns issue content/projections only; PR comments, reviews,
 and statuses use the independently supplied code-host port, even when an issue
 number happens to equal a PR number.
+
+`tracker.CommittedIssueReader` exposes complete validated immutable snapshots to
+the coordinator without importing the local provider. Source refresh may import
+content identity and revision-addressed evidence; read-only source lookup may
+not allocate mappings. `codehost.ReadinessChecker` independently diagnoses PR,
+review, and status requirements. The local source check never requests remote
+issue labels, Boards work items, or issue-account inference.
+
+Adapters declaring `tracker.SeparateCommentStreams` use a versioned pair of
+issue/PR watermarks in the existing `ProcessedCommentID` field. Numeric targets
+and comment IDs can coincide across streams without suppressing commands. The
+combined remote adapters retain raw watermark values and their stored payload
+shape. An explicitly targeted command with equal issue/PR numbers must name its
+stream; polling supplies it from the reader that returned the comment.

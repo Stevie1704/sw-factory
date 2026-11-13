@@ -292,6 +292,9 @@ func (s *Service) claimCommentWatermark(ctx context.Context, repository tracker.
 			latestCommentID = comment.ID
 		}
 	}
+	if s.separateIssueCommentStream() && latestCommentID != "" {
+		return mergeCommentWatermark("", scopedCommentID("issue", latestCommentID)), nil
+	}
 	return latestCommentID, nil
 }
 

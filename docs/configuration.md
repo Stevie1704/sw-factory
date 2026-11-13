@@ -1829,6 +1829,22 @@ local_operator:
   name: workstation-operator
 ```
 
+For a new GitHub-backed registration the CLI also accepts:
+
+```sh
+factory register --repository /path/to/repository \
+  --github-owner OWNER --github-repository NAME \
+  --tracker local --code-host github --local-operator workstation-operator \
+  --authorized-user CODE_HOST_REVIEWER
+```
+
+This generates a fresh installation identity and records the explicit local
+operator without looking up a remote tracker account. `--authorized-user` is
+required for local registration; it names trusted code-host reviewers and may
+be repeated. Azure Repos uses the private YAML route with its existing
+`azure_devops` identity. Credential-only `register --update` does not change
+provider selection or local provenance.
+
 Generate a fresh opaque 128-bit installation identity for a new installation;
 the example is illustrative. The operator name is explicit host configuration,
 not a GitHub/Boards login and never taken from an issue. `authorized_users`
@@ -1844,3 +1860,13 @@ transport requirements. Azure Repos continues to use `az`: if company policy
 blocks those operations, local Markdown alone cannot provide the full
 issue-to-PR flow. Fully local/manual completion and alternative Azure access
 are follow-up scope.
+
+The local source check reads the fetched `origin/<target_branch>` commit without
+importing content or changing approvals. Fetch that target first when the ref
+is unavailable. The coordinator's local tracker refresh validates the whole
+committed graph before it atomically indexes a revision and assigns missing
+integer mappings. Working-tree changes are ignored; invalid source or identity
+collisions leave earlier evidence intact and return an explicit error. Local
+labels and status/question comments persist in SQLite and never rewrite the
+Markdown files. Import and `agent-ready` labels alone grant no execution
+authority.

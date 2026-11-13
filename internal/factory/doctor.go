@@ -49,6 +49,9 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 	}
 
 	checks = append(checks, s.trackerReadiness(repository)...)
+	if s.deps.CodeHostReadiness != nil {
+		checks = append(checks, s.deps.CodeHostReadiness.CodeHostStartupChecks(repository)...)
+	}
 	checks = append(checks, gitadapter.StartupChecks(s.doctorGitWorkspace(), gitadapter.DoctorRequest{
 		RepositoryPath:     registration.Path,
 		RemoteName:         gitadapter.DefaultRemoteName,
