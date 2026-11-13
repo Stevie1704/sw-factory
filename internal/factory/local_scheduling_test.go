@@ -922,6 +922,35 @@ func TestAdmissionRefusalDoesNotStallTheQueue(t *testing.T) {
 	}
 }
 
+// TestSourceChangeAfterATerminalRunKeepsItsOutcomeVisible cancels a claimed
+// Run and then edits its source. The backlog must show the Run's outcome, not
+// only that the old authorization is stale.
+func TestSourceChangeAfterATerminalRunKeepsItsOutcomeVisible(t *testing.T) {
+	issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+	f := newScheduleFixture(t, issue)
+	f.authorize(t, "approve", issue.ID)
+	first, err := f.service.PollOnce(t.Context())
+	if err != nil || first.Outcome != factory.PollClaimed {
+		t.Fatalf("claim=%#v,%v", first.Outcome, err)
+	}
+	if _, err := f.service.HandleCommand(t.Context(), factory.CommandRequest{RunID: first.Run.ID, IssueNumber: first.Run.IssueNumber, Stream: "issue", Comment: tracker.Comment{ID: "1", Author: "alice", Body: "/factory cancel"}}); err != nil {
+		t.Fatal(err)
+	}
+	changed := issue
+	changed.Title = "Changed export"
+	f.writeIssueCommit(t, changed)
+	if pass, err := f.service.PollOnce(t.Context()); err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("changed source admitted: %#v,%v", pass.Outcome, err)
+	}
+	view, err := f.service.LocalBacklog(t.Context())
+	if err != nil || len(view.Projection.Items) != 1 {
+		t.Fatalf("backlog=%#v,%v", view, err)
+	}
+	if item := view.Projection.Items[0]; item.State != string(store.StatusCancelled) || item.RunID != first.Run.ID {
+		t.Fatalf("terminal outcome hidden: %s: %s", item.State, item.Reason)
+	}
+}
+
 // TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath proves identity
 // survives rename without inventing a path that is absent at the claim base.
 func TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath(t *testing.T) {

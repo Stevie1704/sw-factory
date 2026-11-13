@@ -3,8 +3,12 @@ package factory_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
 
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/localissues"
@@ -284,4 +288,40 @@ func TestCompletedPublicationAllowsHistoricalSpecRefRemovalAfterExactTargetVisib
 	if err != nil || pass.Outcome != factory.PollClaimed {
 		t.Fatalf("final publication proof lost after historical ref cleanup: %#v,%v", pass, err)
 	}
+}
+
+// batchInspectionFault fails publication inspection, as an unreadable
+// repository or an unreachable code host would.
+type batchInspectionFault struct{ *localpublication.Adapter }
+
+// FindPlanBatch returns an inspection error instead of an observation.
+func (batchInspectionFault) FindPlanBatch(context.Context, tracker.Repository, tracker.PlanPreview) (tracker.PlanBatchResult, bool, error) {
+	return tracker.PlanBatchResult{}, false, errors.New("injected inspection failure")
+}
+
+// TestPublicationInspectionFailureKeepsTheItemOutOfAdmission separates a
+// failed inspection from a removed historical ref: the item must wait.
+func TestPublicationInspectionFailureKeepsTheItemOutOfAdmission(t *testing.T) {
+	baseline := schedulingTask("local-00112233445566778899aabbccddeeff", "Baseline")
+	f := newScheduleFixture(t, baseline)
+	id, branch := prepareSchedulingPlan(t, f, true)
+	squashSchedulingSpecifications(t, f, branch)
+	f.service = factory.NewWithDependencies(f.configPath, factory.Dependencies{Tracker: batchInspectionFault{localpublication.Wrap(f.source, f.planner)}, Worktree: f.manager, GitWorkspace: f.manager, Worker: &agentWorker{}, HeadlessHarnesses: testHeadlessHarnesses(&agentHarness{}), PullRequests: f.host, CommitStatuses: f.host, PullRequestReviews: f.host, PullRequestComments: f.host, PullRequestCommentPublisher: f.host, CodeHostReadiness: f.host, LoadRepository: func(string) (config.RepositoryConfig, error) { return *f.policy, nil }, Now: func() time.Time { return sessionCommandNow }})
+	pass, err := f.service.PollOnce(t.Context())
+	if err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("uninspected publication admitted: %#v,%v", pass.Outcome, err)
+	}
+	view, err := f.service.LocalBacklog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range view.Projection.Items {
+		if item.Issue.ID == id {
+			if item.State != "publication_incomplete" || !strings.Contains(item.Reason, "could not be inspected") || strings.Contains(item.Reason, "removed") {
+				t.Fatalf("inspection failure projection=%s: %s", item.State, item.Reason)
+			}
+			return
+		}
+	}
+	t.Fatal("published item missing from the backlog")
 }

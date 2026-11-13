@@ -364,7 +364,9 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 				batch, ok := s.deps.Tracker.(tracker.PlanBatchPublisher)
 				if !ok {
 					item.State, item.Reason = "publication_incomplete", "batch publication inspection is unavailable"
-				} else if observed, found, err := batch.FindPlanBatch(ctx, registeredRepository(r), pub.preview); err != nil || !found || !observed.Complete || observed.CommitSHA != pub.commit {
+				} else if observed, found, err := batch.FindPlanBatch(ctx, registeredRepository(r), pub.preview); err != nil {
+					item.State, item.Reason = "publication_incomplete", "specification publication could not be inspected: "+err.Error()+"; the item waits until inspection succeeds"
+				} else if !found || !observed.Complete || observed.CommitSHA != pub.commit {
 					if item.State == "queued" {
 						item.Reason += "; historical specification ref/push/PR changed or was removed, but final publication evidence and exact target content remain established"
 					} else {
@@ -389,9 +391,12 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 				invalidations[auth.RequestID] = item.Reason
 			}
 			key := localClaimKey(binding, authorityIssue)
+			// A source change after consumption keeps the claim's Run outcome
+			// visible. Registration or target drift still shows the stale grant.
+			sourceStaleOnly := item.State == "stale_authorization" && s.executionBindingCurrent(r, binding) == nil
 			for _, claim := range claims {
 				if claim.RevisionKey() == key {
-					if item.State == "queued" || claim.State == "reserved" {
+					if item.State == "queued" || claim.State == "reserved" || sourceStaleOnly {
 						if err := projectLocalClaim(ctx, db, &item, claim); err != nil {
 							return nil, err
 						}
