@@ -957,6 +957,9 @@ func TestSourceChangeAfterATerminalRunKeepsItsOutcomeVisible(t *testing.T) {
 	if item := view.Projection.Items[0]; item.State != string(store.StatusCancelled) || item.RunID != first.Run.ID {
 		t.Fatalf("terminal outcome hidden: %s: %s", item.State, item.Reason)
 	}
+	if item := view.Projection.Items[0]; item.QueueState != "stale_authorization" || !strings.Contains(item.QueueReason, "approve again") {
+		t.Fatalf("current-source verdict lost: %s: %s", item.QueueState, item.QueueReason)
+	}
 }
 
 // TestCommittedIssueBodyCannotForgeOperatorComments commits command and
@@ -1095,13 +1098,25 @@ func TestInvestigationIsVisibleAsUnsupportedInTheBacklog(t *testing.T) {
 }
 
 // TestResetKeepsCommittedIssuesAndRestoresNoAuthority resets a local
-// registration with committed, approved issues. The files and their Git
-// history survive, and after registering again nothing is claimed until a
-// fresh approval.
+// registration with committed, approved issues and a published
+// specification. The files, their Git history, the specification branch,
+// and its worktree survive, and after registering again nothing is claimed
+// until a fresh approval.
 func TestResetKeepsCommittedIssuesAndRestoresNoAuthority(t *testing.T) {
 	issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
 	f := newScheduleFixture(t, issue)
 	f.authorize(t, "approve", issue.ID)
+	_, branch := prepareSchedulingPlan(t, f, false)
+	worktrees := scheduleGit(t, f.registration.Path, "worktree", "list", "--porcelain")
+	specification := ""
+	for _, line := range strings.Split(worktrees, "\n") {
+		if path, ok := strings.CutPrefix(line, "worktree "); ok && strings.Contains(path, "specifications") {
+			specification = path
+		}
+	}
+	if specification == "" {
+		t.Fatalf("no specification worktree before reset: %s", worktrees)
+	}
 	host, err := config.LoadHost(f.configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1121,6 +1136,10 @@ func TestResetKeepsCommittedIssuesAndRestoresNoAuthority(t *testing.T) {
 	if got := scheduleGit(t, f.registration.Path, "rev-parse", "HEAD"); got != head {
 		t.Fatalf("Git history changed: %s, want %s", got, head)
 	}
+	if _, err := os.Stat(specification); err != nil {
+		t.Fatalf("specification worktree removed: %v", err)
+	}
+	scheduleGit(t, f.registration.Path, "rev-parse", "--verify", "refs/heads/"+branch)
 	if err := config.SaveHost(f.configPath, host); err != nil {
 		t.Fatal(err)
 	}
@@ -1137,6 +1156,61 @@ func TestResetKeepsCommittedIssuesAndRestoresNoAuthority(t *testing.T) {
 		auths, err := db.LocalExecutionAuthorizations(t.Context(), f.registration.Path)
 		if err != nil || len(auths) != 0 {
 			t.Fatalf("authorizations after reset=%d,%v", len(auths), err)
+		}
+	})
+}
+
+// reserveThenStop commits the reservation and then loses the response, so no
+// workspace, branch, or Git metadata exists for the reserved claim.
+type reserveThenStop struct {
+	*store.Store
+	stop *bool
+}
+
+// ReserveLocalClaim commits the reservation, then reports a stop once.
+func (s reserveThenStop) ReserveLocalClaim(ctx context.Context, claim store.LocalClaim) (store.LocalClaim, error) {
+	reserved, err := s.Store.ReserveLocalClaim(ctx, claim)
+	if err != nil || !*s.stop {
+		return reserved, err
+	}
+	*s.stop = false
+	return store.LocalClaim{}, errors.New("injected stop after reservation")
+}
+
+// TestSourceEditRightAfterReservationReleasesTheClaim stops right after the
+// reservation commits, before any Git effect, and edits the source. The
+// release must succeed without a workspace to discard.
+func TestSourceEditRightAfterReservationReleasesTheClaim(t *testing.T) {
+	issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+	f := newScheduleFixture(t, issue)
+	f.authorize(t, "approve", issue.ID)
+	stop := true
+	f.recompose(func(ctx context.Context, path string) (factory.OperationalStore, error) {
+		db, err := store.Open(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return reserveThenStop{Store: db, stop: &stop}, nil
+	})
+	if _, err := f.service.PollOnce(t.Context()); err == nil || stop {
+		t.Fatalf("stop boundary was not exercised: %v", err)
+	}
+	if refs := scheduleGit(t, f.registration.Path, "for-each-ref", "--format=%(refname)", "refs/heads/factory/"); refs != "" {
+		t.Fatalf("fixture created Git effects before the stop: %s", refs)
+	}
+	changed := issue
+	changed.Title = "Changed export"
+	f.writeIssueCommit(t, changed)
+	f.recompose(nil)
+	if pass, err := f.service.PollOnce(t.Context()); err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("stale reservation resumed: %#v,%v", pass.Outcome, err)
+	}
+	f.withStore(func(db *store.Store) {
+		if claims, err := db.LocalClaims(t.Context(), f.registration.Path); err != nil || len(claims) != 0 {
+			t.Fatalf("stale reservation retained: %#v,%v", claims, err)
+		}
+		if run, err := db.CurrentRun(t.Context()); err != nil || run != nil {
+			t.Fatalf("stale reservation created Run: %#v,%v", run, err)
 		}
 	})
 }
