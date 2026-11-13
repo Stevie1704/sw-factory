@@ -20,6 +20,10 @@ import (
 // ErrLocalExecutionNotFound means no explicit preview or authorization exists.
 var ErrLocalExecutionNotFound = errors.New("local execution evidence not found")
 
+// ErrLocalIssueNotRegistered means an execution binding names an issue that
+// this store never indexed, for example after a reset or a stale preview.
+var ErrLocalIssueNotRegistered = errors.New("local issue is not registered in this store; observe the backlog and preview again")
+
 // ErrLocalExecutionConflict refuses stale or rebound execution authority.
 var ErrLocalExecutionConflict = errors.New("local execution preview or authorization conflict")
 
@@ -442,7 +446,9 @@ func validateLocalExecutionMappings(ctx context.Context, query localIdentityQuer
 	for _, issue := range binding.Issues {
 		var number int
 		var correlation string
-		if err := query.QueryRowContext(ctx, `SELECT number,correlation FROM local_issue_identities WHERE repository_path=? AND issue_id=?`, binding.RepositoryPath, issue.ID).Scan(&number, &correlation); err != nil {
+		if err := query.QueryRowContext(ctx, `SELECT number,correlation FROM local_issue_identities WHERE repository_path=? AND issue_id=?`, binding.RepositoryPath, issue.ID).Scan(&number, &correlation); errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %s", ErrLocalIssueNotRegistered, issue.ID)
+		} else if err != nil {
 			return err
 		}
 		source, err := localissues.Parse(issue.Path, issue.Bytes)

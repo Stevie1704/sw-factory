@@ -3,9 +3,11 @@ package store_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
+	"testing"
+
 	"github.com/Stevie1704/sw-factory/internal/localissues"
 	"github.com/Stevie1704/sw-factory/internal/store"
-	"testing"
 )
 
 // TestLocalExecutionAuthorizationIsSeparateAndDurable verifies explicit authority without session mutation.
@@ -90,5 +92,27 @@ func TestAuthorizationCannotOutliveARefusedOrMissingCommand(t *testing.T) {
 				t.Fatalf("unapplied authority retained: %v", err)
 			}
 		})
+	}
+}
+
+// TestUnregisteredLocalIssueHasATypedRefusal records a preview whose issue was
+// never indexed. The caller gets a named error, not a bare sql.ErrNoRows.
+func TestUnregisteredLocalIssueHasATypedRefusal(t *testing.T) {
+	db, _ := openIdeationStoreForTest(t)
+	issue := localissues.Issue{SchemaVersion: 1, ID: "local-00112233445566778899aabbccddeeff", Title: "Export", Kind: localissues.KindTask, Correlation: "import/1/export", Body: "## Problem\n\nExport.\n\n## Scope and non-goals\n\nCSV.\n\n## Acceptance criteria\n\nDownload CSV.\n"}
+	data, err := localissues.Render(issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, err := localissues.Validate([]localissues.File{{Path: "docs/issues/export.md", Data: data}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := strings.TrimPrefix(localissues.Digest(data), "sha256:")[:40]
+	binding := store.LocalExecutionBinding{SourceKind: "target", RepositoryPath: "/repos/service", InstallationID: "install-00112233445566778899aabbccddeeff", OperatorName: "operator", CodeHostProvider: "github", CodeHostRepository: "example/service", TargetBranch: "main", PublicationPolicy: "target_visible", SourceRevision: revision, GraphDigest: graph.Digest, Payload: []byte(`{}`), RelationshipMapping: []byte(`[]`), SelectedIssueIDs: []string{issue.ID}, Issues: []store.LocalExecutionIssue{{ID: issue.ID, Number: 1, Path: "docs/issues/export.md", ContentDigest: graph.Issues[0].ContentDigest, Bytes: data, Kind: issue.Kind}}}
+	binding.PayloadSHA256, binding.RelationshipMappingSHA256 = localissues.Digest(binding.Payload), localissues.Digest(binding.RelationshipMapping)
+	_, err = db.RecordLocalExecutionPreview(t.Context(), store.LocalExecutionPreview{ID: "preview", Binding: binding})
+	if !errors.Is(err, store.ErrLocalIssueNotRegistered) || !strings.Contains(err.Error(), issue.ID) {
+		t.Fatalf("unregistered issue error=%v", err)
 	}
 }
