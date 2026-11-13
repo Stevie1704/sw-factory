@@ -21,3 +21,12 @@ Only the composition root in `internal/cli` selects the GitHub adapter. `interna
 - Versioned payloads that read the old GitHub shape. Rejected: the shape does not change, so a reader for an old version adds code without a use.
 - A required lease. Rejected: a tracker without a fitting resource would need a workaround for a diagnostic value.
 - A message broker between the coordinator and the adapters. Rejected: the pending-effect journal already owns ordering and replay, and a broker adds at-least-once delivery that the journal would have to reconcile.
+
+## Local tracker extension
+
+[ADR 0029](0029-local-markdown-content-and-local-execution-authority.md) adds a
+committed Markdown tracker with independent code-host selection. Existing
+combined registrations and serialized tracker payloads retain their identities.
+The local adapter owns issue content/projections only; PR comments, reviews,
+and statuses use the independently supplied code-host port, even when an issue
+number happens to equal a PR number.
