@@ -211,6 +211,35 @@ func localAuthorizationOutcome(auth store.LocalExecutionAuthorization) sessionco
 	return sessioncommand.Outcome{Code: store.IdeationCommandApplied, Detail: "local execution authorized; queue remains subject to source visibility, dependencies and the active Run slot"}
 }
 
+// validateLocalStartSelection refuses an empty selection or one that names
+// anything but a task of the displayed local plan. It runs before the
+// approval is recorded and only reads the current preview.
+func (s *Service) validateLocalStartSelection(ctx context.Context, commandStore sessionCommandStore, registration config.RepositoryRegistration, command store.IdeationCommand, selected []string) error {
+	if len(selected) == 0 {
+		return errors.New("approve-and-start needs at least one selected task")
+	}
+	planner, ok := s.deps.Tracker.(tracker.PlanPublisher)
+	if !ok {
+		return errors.New("local publication capability unavailable")
+	}
+	binding, err := (&publication.Publisher{Store: commandStore, Tracker: planner, Repository: registeredRepository(registration)}).Preview(ctx, command.SessionID)
+	if err != nil {
+		return err
+	}
+	tasks := map[string]bool{}
+	for _, item := range binding.Preview.Items {
+		if item.Type == string(localissues.KindTask) {
+			tasks[item.Fields["local_id"]] = true
+		}
+	}
+	for _, id := range selected {
+		if !tasks[id] {
+			return fmt.Errorf("approve-and-start selection %q is not a task of the displayed plan; select only tasks", id)
+		}
+	}
+	return nil
+}
+
 // authorizeLocalPlan records authority separately after exact content approval.
 func (s *Service) authorizeLocalPlan(ctx context.Context, commandStore sessionCommandStore, command store.IdeationCommand, selected []string) error {
 	persistence, ok := commandStore.(localExecutionStore)

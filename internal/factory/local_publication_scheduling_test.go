@@ -325,3 +325,82 @@ func TestPublicationInspectionFailureKeepsTheItemOutOfAdmission(t *testing.T) {
 	}
 	t.Fatal("published item missing from the backlog")
 }
+
+// TestApproveStartRefusesAParentSelectionBeforeApproval selects a grouping
+// parent for execution. The refused command must leave no approval behind,
+// so the session is not approved by a command that failed.
+func TestApproveStartRefusesAParentSelectionBeforeApproval(t *testing.T) {
+	f := newScheduleFixture(t, schedulingTask("local-00112233445566778899aabbccddeeff", "Existing content"))
+	f.planner = localpublication.NewPublisher(f.registration, "main", f.host)
+	f.recompose(nil)
+	contextRevision := scheduleGit(t, f.registration.Path, "rev-parse", "main")
+	f.withStore(func(db *store.Store) {
+		session, err := db.IdeationSession(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		write := func(event workflow.SessionEvent) store.IdeationWrite {
+			w, err := workflow.DefaultSessionLifecycle().Write(session, event, "", sessionCommandNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return w
+		}
+		session, brief, err := db.SaveBriefRevision(t.Context(), write(workflow.SessionEventEdited), store.Brief{Problem: "Add local output."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if session, err = db.TransitionIdeationSession(t.Context(), write(workflow.SessionEventRoleStarted)); err != nil {
+			t.Fatal(err)
+		}
+		nodes := []store.PlanNode{{ID: "group", Kind: "parent", Title: "Output", Body: "Group the output work.", AcceptanceCriteria: []string{"All output tasks are done."}}, {ID: "new-output", Kind: "task", Title: "New output", Body: "Add output.", AcceptanceCriteria: []string{"Output is visible."}, ParentID: "group"}, {ID: "output-help", Kind: "task", Title: "Output help", Body: "Document output.", AcceptanceCriteria: []string{"Help describes output."}, ParentID: "group"}}
+		if _, _, err = db.SavePlanRevision(t.Context(), write(workflow.SessionEventPlanDrafted), store.PlanRevision{SourceBriefRevision: brief.Revision, ContextRevision: contextRevision, Nodes: nodes}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	var binding publication.Binding
+	var revision int64
+	f.withStore(func(db *store.Store) {
+		p := publication.Publisher{Store: db, Tracker: localpublication.Wrap(f.source, f.planner), Repository: tracker.Repository{Owner: "example", Name: "project"}, Lifecycle: workflow.DefaultSessionLifecycle()}
+		if err := p.Prepare(t.Context(), "session-1"); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if binding, err = p.Preview(t.Context(), "session-1"); err != nil {
+			t.Fatal(err)
+		}
+		session, err := db.IdeationSession(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		revision = session.Revision
+	})
+	parentID := ""
+	for _, item := range binding.Preview.Items {
+		if item.NodeID == "group" {
+			parentID = item.Fields["local_id"]
+		}
+	}
+	payload := sessioncommand.ApproveStartPayload{ApprovePayload: sessioncommand.ApprovePayload{PlanRevision: binding.PlanRevision, PayloadSHA256: strings.TrimPrefix(localissues.Digest(binding.Payload), "sha256:"), RelationshipMappingSHA256: strings.TrimPrefix(localissues.Digest(binding.RelationshipMapping), "sha256:")}, SelectedIssueIDs: []string{parentID}}
+	data, _ := json.Marshal(map[string]any{"request_id": "parent-start", "session_id": "session-1", "kind": sessioncommand.KindApproveStart, "expected_revision": revision, "payload": payload})
+	command, err := sessioncommand.ParseRequest(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome := submitExecutionCommand(t, f.sessionCommandFixture, command)
+	if outcome.Outcome == store.IdeationCommandApplied {
+		t.Fatalf("parent selection applied: %#v", outcome)
+	}
+	f.withStore(func(db *store.Store) {
+		history, err := db.IdeationHistory(t.Context(), "session-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(history.Approvals) != 0 || history.Session.State == store.IdeationStateApproved {
+			t.Fatalf("refused command approved the session: %s, %d approvals", history.Session.State, len(history.Approvals))
+		}
+		if auths, err := db.LocalExecutionAuthorizations(t.Context(), f.registration.Path); err != nil || len(auths) != 0 {
+			t.Fatalf("authorizations=%#v,%v", auths, err)
+		}
+	})
+}

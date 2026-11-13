@@ -378,6 +378,9 @@ func (s *Service) sessionCommandEnv(commandStore sessionCommandStore, registrati
 		env.AuthorizePlan = func(ctx context.Context, command store.IdeationCommand, selected []string) error {
 			return s.authorizeLocalPlan(ctx, commandStore, command, selected)
 		}
+		env.ValidateStartSelection = func(ctx context.Context, command store.IdeationCommand, selected []string) error {
+			return s.validateLocalStartSelection(ctx, commandStore, registration, command, selected)
+		}
 	}
 	if planner, ok := s.deps.Tracker.(tracker.PlanPublisher); ok {
 		env.Publisher = &publication.Publisher{

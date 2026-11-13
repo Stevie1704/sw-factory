@@ -37,6 +37,11 @@ func approveStart(ctx context.Context, env Env, command store.IdeationCommand) (
 		if history.Session.Revision != command.ExpectedRevision {
 			return Outcome{}, &store.IdeationRevisionConflictError{SessionID: command.SessionID, Expected: command.ExpectedRevision, Actual: history.Session.Revision}
 		}
+		if env.ValidateStartSelection != nil {
+			if err := env.ValidateStartSelection(ctx, command, sortedSelection(payload.SelectedIssueIDs)); err != nil {
+				return Outcome{}, err
+			}
+		}
 		if _, err = recordApproval(ctx, env, history.Session, command, &payload.ApprovePayload); err != nil {
 			return Outcome{}, err
 		}

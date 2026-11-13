@@ -66,6 +66,9 @@ type Env struct {
 	Operator OperatorCommands
 	// AuthorizePlan records separate local authority after publication approval.
 	AuthorizePlan func(context.Context, store.IdeationCommand, []string) error
+	// ValidateStartSelection, when set, refuses an approve-and-start selection
+	// before the approval is recorded, so a refused command approves nothing.
+	ValidateStartSelection func(context.Context, store.IdeationCommand, []string) error
 	// Store is the operational store.
 	Store Store
 	// Lifecycle resolves every session state change.
