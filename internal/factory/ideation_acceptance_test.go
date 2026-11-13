@@ -171,6 +171,8 @@ type ideationJourney struct {
 	service  *factory.Service
 	ui       http.Handler
 	token    string
+	// compose adds journey-specific coordinator dependencies at each restart.
+	compose func(*factory.Dependencies)
 }
 
 // newIdeationJourney composes the coordinator and the UI over a fresh store
@@ -199,7 +201,7 @@ func (j *ideationJourney) restartCoordinator() {
 		j.restart()
 	}
 	ids := 0
-	j.service = factory.NewWithDependencies("/host/config.yaml", factory.Dependencies{
+	dependencies := factory.Dependencies{
 		Config:            &fakeConfig{value: j.host},
 		OpenStore:         func(ctx context.Context, path string) (factory.OperationalStore, error) { return store.Open(ctx, path) },
 		LoadRepository:    func(string) (config.RepositoryConfig, error) { return j.policy, nil },
@@ -212,7 +214,11 @@ func (j *ideationJourney) restartCoordinator() {
 			ids++
 			return "journey-" + strconv.Itoa(len(j.worker.launches)) + "-" + strconv.Itoa(ids), nil
 		},
-	})
+	}
+	if j.compose != nil {
+		j.compose(&dependencies)
+	}
+	j.service = factory.NewWithDependencies("/host/config.yaml", dependencies)
 	if err := j.store.SaveSupervisorHeartbeat(j.t.Context(), store.SupervisorHeartbeat{
 		Coordinator: "coordinator-journey", PID: 4242, StartedAt: journeyNow, RenewedAt: journeyNow, ExpiresAt: journeyNow.Add(time.Hour),
 	}); err != nil {
