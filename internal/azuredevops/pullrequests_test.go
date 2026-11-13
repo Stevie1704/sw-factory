@@ -288,3 +288,22 @@ func TestPullRequestCommentIsCreatedFoundAndEdited(t *testing.T) {
 		t.Fatalf("edit = %#v", edit)
 	}
 }
+
+// TestFindPullRequestReadsOnlyTheFirstExactMatch keeps the run lookup at one
+// detail read; only the specification publisher needs every candidate.
+func TestFindPullRequestReadsOnlyTheFirstExactMatch(t *testing.T) {
+	t.Parallel()
+
+	second := strings.Replace(activePullRequest, `"pullRequestId":17`, `"pullRequestId":19`, 1)
+	az := newFakeAz(t).
+		on("GET "+repositoryPath+"/pullrequests", `{"value":[`+activePullRequest+`,`+second+`]}`).
+		on("GET "+repositoryPath+"/pullrequests/17", activePullRequest)
+
+	pullRequest, err := newClient(az).FindPullRequest(context.Background(), repository, "factory/run-1", "main")
+	if err != nil || pullRequest.Number != 17 {
+		t.Fatalf("FindPullRequest() = %#v/%v, want pull request 17", pullRequest, err)
+	}
+	if calls := az.called("GET " + repositoryPath + "/pullrequests/19"); len(calls) != 0 {
+		t.Fatalf("FindPullRequest() read %d later matches, want none", len(calls))
+	}
+}

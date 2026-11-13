@@ -108,18 +108,33 @@ func pullRequestURL(repository tracker.Repository, number int) string {
 // target branch pair in any status, so a retry cannot create a duplicate. It
 // reads the match by id to get the complete description.
 func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
-	matches, err := c.FindPullRequestCandidates(ctx, repository, headBranch, baseBranch)
-	if err != nil {
+	ids, err := c.exactPullRequestIDs(ctx, repository, headBranch, baseBranch)
+	if err != nil || len(ids) == 0 {
 		return codehost.PullRequest{}, err
 	}
-	if len(matches) > 0 {
-		return matches[0], nil
-	}
-	return codehost.PullRequest{}, nil
+	return c.pullRequestByID(ctx, repository, ids[0])
 }
 
 // FindPullRequestCandidates returns all exact branch matches in every status.
 func (c *Client) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
+	ids, err := c.exactPullRequestIDs(ctx, repository, headBranch, baseBranch)
+	if err != nil {
+		return nil, err
+	}
+	var matches []codehost.PullRequest
+	for _, id := range ids {
+		pr, err := c.pullRequestByID(ctx, repository, id)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, pr)
+	}
+	return matches, nil
+}
+
+// exactPullRequestIDs lists, in host order, the pull requests in every status
+// whose source and target refs match the exact branch pair.
+func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]int, error) {
 	if err := validateRepository(repository); err != nil {
 		return nil, err
 	}
@@ -138,17 +153,13 @@ func (c *Client) FindPullRequestCandidates(ctx context.Context, repository track
 	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/pullrequests", query)}, &response); err != nil {
 		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
-	var matches []codehost.PullRequest
+	var ids []int
 	for _, candidate := range response.Value {
 		if candidate.SourceRefName == branchRef(headBranch) && candidate.TargetRefName == branchRef(baseBranch) {
-			pr, err := c.pullRequestByID(ctx, repository, candidate.PullRequestID)
-			if err != nil {
-				return nil, err
-			}
-			matches = append(matches, pr)
+			ids = append(ids, candidate.PullRequestID)
 		}
 	}
-	return matches, nil
+	return ids, nil
 }
 
 // pullRequestByID reads one pull request. The list endpoint truncates the
