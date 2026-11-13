@@ -626,5 +626,7 @@ scenarios:
       - "internal/factory:TestRegisterLocalTrackerNeverInfersARemoteAccount"
       - "internal/factory:TestCodeHostUnavailablePreventsDirectLocalClaim"
     gaps:
-      - issue: 291
-        summary: Completion without any code-host adapter (fully local or manual), browser automation, and another Azure authentication mechanism are follow-up scope outside #291.
+      - issue: 300
+        summary: A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped.
+      - issue: 301
+        summary: Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped.

@@ -60,7 +60,7 @@ the test on any issue read, label, or comment call.
 | GitHub/Azure regression, report, `make check`, live runs separate | `make check` passed, including every GitHub and Azure DevOps execution and publication test and the ideation journeys. Live scenarios are `not-run` below. |
 | Documentation | [Local Markdown issue contract](../local-markdown-issues.md) (operator workflow and code-host limitation), [configuration](../configuration.md#local-tracker-and-independent-code-host), [ideation](../ideation.md#local-markdown-issue-review), [agent runtime](../agent-runtime.md), [repository initialization](../repository-initialization.md), `factory guide` topics, and the README. |
 | Azure Repos still needs `az`; diagnosis and an explicit unsupported result | `local-backlog-code-host-access`; doctor conditions `azure_devops.code_host.access.unavailable` and `github.code_host.access.unavailable`. |
-| Fully local/manual completion and alternative Azure access are follow-up scope | Recorded as a gap of `local-backlog-code-host-access` and under "Not delivered" below. |
+| Fully local/manual completion and alternative Azure access are follow-up scope | Recorded as gaps #300 and #301 of `local-backlog-code-host-access` and under "Not delivered" below. |
 
 Regression: `make check` (formatting, vet, all tests, build) passed. The three
 journeys and the ideation journeys also passed with the race detector.
@@ -87,9 +87,10 @@ unverified scenario:
 ## Not delivered (follow-up scope)
 
 - Completion without any code-host adapter (fully local or manual review and
-  merge).
-- Browser automation, or an Azure authentication route other than `az`.
-- A change to corporate access restrictions.
+  merge): #300.
+- An Azure Repos access route other than `az`: #301.
+- Browser automation, and a change to corporate access restrictions: not
+  planned.
 
 The local tracker removes Azure Boards and GitHub Issues access only. If
 company policy also blocks Azure Repos through `az`, a local tracker alone

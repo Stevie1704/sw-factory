@@ -383,8 +383,8 @@ browser automation.
 These are follow-up scope. This feature does not deliver them:
 
 - completion without any code-host adapter (a fully local or manual review
-  and merge);
-- browser automation, or an Azure authentication route other than `az`;
-- a change to corporate access restrictions.
+  and merge), tracked by #300;
+- an Azure Repos access route other than `az`, tracked by #301;
+- browser automation, or a change to corporate access restrictions.
 
 Acceptance evidence: [local Markdown backlog acceptance](acceptance/local-markdown-backlog.md).
