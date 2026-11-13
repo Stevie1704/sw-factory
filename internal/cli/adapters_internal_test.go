@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
@@ -98,5 +99,38 @@ func TestLocalCompositionSuppliesIndependentHostCapabilities(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLocalCompositionReportsAnUnreadableRepositoryConfiguration keeps the
+// load error of the repository configuration visible in source reads and in
+// the readiness check, instead of a generic missing-target message.
+func TestLocalCompositionReportsAnUnreadableRepositoryConfiguration(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "host", "config.yaml")
+	repositoryConfig := filepath.Join(root, "factory.yaml")
+	if err := os.WriteFile(repositoryConfig, []byte("target_branch: [unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registration := config.RepositoryRegistration{Path: root, Tracker: config.ProviderLocal, CodeHost: config.ProviderGitHub, GitHub: config.GitHubConfig{Owner: "example", Repository: "service"}, LocalOperator: config.LocalOperatorConfig{InstallationID: "install-11111111111111111111111111111111", Name: "operator"}, AuthorizedUsers: []string{"reviewer"}, OperationalDataPath: filepath.Join(root, "private", "store.db"), RepositoryConfigPath: repositoryConfig, Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}}
+	if err := config.SaveHost(path, config.HostConfig{SchemaVersion: 2, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
+		t.Fatal(err)
+	}
+	_, loadErr := config.LoadRepository(repositoryConfig)
+	if loadErr == nil {
+		t.Fatal("fixture repository configuration loaded")
+	}
+	adapter, ok := trackerAdapter(path).(*localpublication.Adapter)
+	if !ok {
+		t.Fatalf("tracker = %T", trackerAdapter(path))
+	}
+	client := adapter.Client.(*localtracker.Client)
+	if _, err := client.Refresh(t.Context()); err == nil || !strings.Contains(err.Error(), loadErr.Error()) {
+		t.Fatalf("Refresh() error = %v, want the load error %v", err, loadErr)
+	}
+	for _, check := range client.StartupChecks(tracker.Repository{}) {
+		if result := check(t.Context()); !strings.Contains(result.Problem, loadErr.Error()) {
+			t.Fatalf("readiness = %#v, want the load error", result)
+		}
 	}
 }

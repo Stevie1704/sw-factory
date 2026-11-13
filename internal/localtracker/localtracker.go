@@ -27,10 +27,13 @@ import (
 type Client struct {
 	Registration config.RepositoryRegistration
 	TargetBranch string
-	Runner       gitadapter.CommandRunner
-	OpenStore    func(context.Context, string) (*store.Store, error)
-	Now          func() time.Time
-	mu           sync.Mutex
+	// TargetError, when set, is why the target branch is unknown, for example
+	// an unreadable repository configuration. Source reads report it.
+	TargetError error
+	Runner      gitadapter.CommandRunner
+	OpenStore   func(context.Context, string) (*store.Store, error)
+	Now         func() time.Time
+	mu          sync.Mutex
 }
 
 // Snapshot is a fully validated immutable target/source revision. Issues carries
@@ -155,6 +158,9 @@ func (c *Client) Snapshot(ctx context.Context, revision string) (Snapshot, error
 func (c *Client) Refresh(ctx context.Context) (Snapshot, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.TargetError != nil {
+		return Snapshot{}, fmt.Errorf("local tracker target branch is unknown: %w", c.TargetError)
+	}
 	if c.TargetBranch == "" || strings.HasPrefix(c.TargetBranch, "-") || strings.ContainsAny(c.TargetBranch, "\x00\r\n") {
 		return Snapshot{}, errors.New("local tracker target branch is required")
 	}
@@ -388,6 +394,9 @@ func (c *Client) SeparateIssueCommentStream() bool { return true }
 // StartupChecks validates committed source without importing or allocating IDs.
 func (c *Client) StartupChecks(_ tracker.Repository) []doctor.Check {
 	return []doctor.Check{func(ctx context.Context) doctor.Result {
+		if c.TargetError != nil {
+			return doctor.Failure(doctor.Condition{Code: "local_tracker.source.unavailable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "setup", Unobserved: true}, "local Markdown source", "the target branch is unknown: "+c.TargetError.Error(), "repair the repository configuration file named in the registration")
+		}
 		output, err := c.run(ctx, "rev-parse", "--verify", "refs/remotes/origin/"+c.TargetBranch+"^{commit}")
 		if err == nil {
 			_, err = c.Snapshot(ctx, strings.TrimSpace(string(output)))

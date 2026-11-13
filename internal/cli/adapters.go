@@ -67,11 +67,10 @@ func trackerAdapter(configPath string) tracker.Client {
 	}
 	registration := host.Repositories[0]
 	if registration.EffectiveTracker() == config.ProviderLocal {
-		target := ""
-		if policy, err := config.LoadRepository(registration.RepositoryConfigPath); err == nil {
-			target = policy.TargetBranch
-		}
-		client := localtracker.NewClient(registration, target)
+		policy, err := config.LoadRepository(registration.RepositoryConfigPath)
+		client := localtracker.NewClient(registration, policy.TargetBranch)
+		client.TargetError = err
+		target := policy.TargetBranch
 		return localpublication.Wrap(client, localpublication.NewPublisher(registration, target, codeHostAdapter(registration)))
 	}
 	if azure := registration.AzureDevOps; !azure.IsZero() {
