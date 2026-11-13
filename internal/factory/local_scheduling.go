@@ -394,6 +394,10 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 			// A source change after consumption keeps the claim's Run outcome
 			// visible. Registration or target drift still shows the stale grant.
 			sourceStaleOnly := item.State == "stale_authorization" && s.executionBindingCurrent(r, binding) == nil
+			if sourceStaleOnly {
+				// The current source keeps its own verdict next to the Run outcome.
+				item.QueueState, item.QueueReason = item.State, item.Reason
+			}
 			for _, claim := range claims {
 				if claim.RevisionKey() == key {
 					if item.State == "queued" || claim.State == "reserved" || sourceStaleOnly {
@@ -416,7 +420,9 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 				admissions = append(admissions, localAdmission{item: item, auth: auth, snapshot: snapshot})
 			}
 		}
-		item.QueueState, item.QueueReason = item.State, item.Reason
+		if item.QueueState == "" {
+			item.QueueState, item.QueueReason = item.State, item.Reason
+		}
 		projection.Items = append(projection.Items, item)
 	}
 	linkActiveLocalRun(&projection, active)
