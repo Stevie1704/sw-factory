@@ -296,7 +296,11 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 		return 2
 	}
 	service := newService(*configPath)
-	handler := webui.NewHandler(service, webui.Options{RefreshInterval: *refresh, Sessions: service})
+	options := webui.Options{RefreshInterval: *refresh, Sessions: service}
+	if host, err := config.LoadHost(*configPath); err == nil && len(host.Repositories) > 0 && host.Repositories[0].EffectiveTracker() == config.ProviderLocal {
+		options.Local = service
+	}
+	handler := webui.NewHandler(service, options)
 	writeFailed := false
 	ready := func(url string) {
 		writeFailed = !writeOutput(output, errorsOutput, "factory ui listening on %s\n", url)

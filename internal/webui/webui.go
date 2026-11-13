@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -48,6 +49,9 @@ type Options struct {
 	// Sessions enables the session command API. Nil serves only the
 	// read-only run pages.
 	Sessions Sessions
+	// Local enables local issue pages and supported protected operator forms.
+	// Composition supplies it only for a registered local work tracker.
+	Local LocalOperator
 }
 
 // page names one template set: the layout plus one page body.
@@ -78,7 +82,8 @@ type layoutData struct {
 	// session command API is off.
 	CSRFToken string
 	// Page is the page model; it has a Supervisor field.
-	Page any
+	Page  any
+	Local bool
 }
 
 // server renders the UI pages from one Reader.
@@ -111,6 +116,10 @@ func NewHandler(reader Reader, options Options) http.Handler {
 		mux.HandleFunc("GET /sessions/{id}", ui.sessionDetail)
 		(&planRoutes{ui: ui, sessions: options.Sessions}).register(mux)
 	}
+	if options.Local != nil {
+		mux.HandleFunc("GET /issues", ui.localIssues)
+		mux.HandleFunc("GET /issues/{id}", ui.localIssues)
+	}
 	return protect(mux)
 }
 
@@ -127,9 +136,10 @@ func parsePages() map[page]*template.Template {
 		"briefLists":    briefLists,
 		"editableBrief": editableBrief,
 		"reasonForm":    reasonForm,
+		"hasAction":     slices.Contains[[]string, string],
 	}
 	pages := map[page]*template.Template{}
-	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pagePlan, pageSessions, pageSession} {
+	for _, name := range []page{pageRuns, pageRun, pageEvaluation, pageError, pagePlan, pageSessions, pageSession, pageLocal} {
 		pages[name] = template.Must(template.New("").Funcs(functions).ParseFS(templateFiles, "templates/layout.html", "templates/"+string(name)+".html"))
 	}
 	return pages
@@ -161,7 +171,18 @@ func (ui *server) runDetail(w http.ResponseWriter, r *http.Request) {
 		ui.renderStoreError(w, err)
 		return
 	}
-	ui.render(w, http.StatusOK, pageRun, detail)
+	model := localRunPage{RunDetail: detail}
+	if ui.options.Local != nil {
+		view, err := ui.options.Local.LocalRunOperator(r.Context(), runID)
+		if err != nil {
+			model.OperatorError = err.Error()
+		} else if view.RunID != detail.Run.ID || view.Revision != detail.Run.Revision || detail.Inspection.Policy.PacketVersion > 0 && view.PacketVersion != detail.Inspection.Policy.PacketVersion {
+			model.OperatorError = "The Run changed while this page was read; refresh and review the displayed revision before sending input."
+		} else {
+			model.Operator = &view
+		}
+	}
+	ui.render(w, http.StatusOK, pageRun, model)
 }
 
 // runEvaluation renders one run's evaluation summary. It shows the summary
@@ -195,7 +216,7 @@ func (ui *server) renderStoreError(w http.ResponseWriter, err error) {
 // clean 500 instead of a half-written page.
 func (ui *server) render(w http.ResponseWriter, status int, name page, data any) {
 	var body bytes.Buffer
-	if err := ui.pages[name].ExecuteTemplate(&body, "layout", layoutData{RefreshSeconds: refreshSeconds(ui.options.RefreshInterval), CSRFToken: ui.csrfToken, Page: data}); err != nil {
+	if err := ui.pages[name].ExecuteTemplate(&body, "layout", layoutData{RefreshSeconds: refreshSeconds(ui.options.RefreshInterval), CSRFToken: ui.csrfToken, Page: data, Local: ui.options.Local != nil}); err != nil {
 		http.Error(w, "render page: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -1507,7 +1507,7 @@ Store use:
 
 - Each page request opens the operational store read-only, reads, and closes
   it. The UI never creates or migrates the store, and it does not probe the
-  coordinator lock. Its only write is to append a session command to the
+  coordinator lock. Its only write is to append a validated operator command to the
   command inbox (see below). Thus the UI works while `factory start` runs, and
   its pages also work while the coordinator is stopped.
 - The read-only open requires the current store schema. After an upgrade, normal
@@ -1521,8 +1521,8 @@ Data and network:
 - The UI sends no request to GitHub, Azure DevOps, a remote Git host, or any
   other service, and it sends no telemetry (ADR 0001). Pages and assets load
   only from the UI server; the Content-Security-Policy blocks all other
-  origins. The pull-request link on a run page is the only external URL, and
-  the browser opens it only when you click it.
+  origins. Published tracker-item and specification/implementation PR links open an
+  external URL only when you click them. Local issue links stay on this UI.
 - Run pages show repository content: issue titles, pending questions, the last
   command message, and gate failure diagnostics. This content stays on the
   host; the UI serves it only on the loopback interface.
@@ -1535,6 +1535,8 @@ Pages:
 | `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
 | `/sessions` | Ideation sessions, newest update first, with state and reason, and a form that starts a session from an idea. Only with the session command API. |
 | `/sessions/{id}` | One session: the conversation in rounds, pending questions with one answer field each, corrections and the decisions they affect, the brief, the readiness proposal with its brief revision, role progress and failures, and the user's decisions. |
+| `/issues` | Local tracker only: last observed accepted source, queue reasons, publication/authorization evidence, exact fresh execution preview and selected task approval. Reads no Git or network. |
+| `/issues/{stable-id}` | Local tracker only: exact Markdown source, identity, relationships and evidence, with separate current-source and frozen-Run state. Local Run pages add only supported bound operator forms; remote Run pages remain read-only. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
 | `/sessions/{id}/plan` | Plan review of one ideation session (only with the session command API): the current plan items with validation problems, the draft editor, the tracker publication preview, approve-and-publish, and publication progress. See "Plan review" below. |
 
@@ -1545,6 +1547,26 @@ shows a warning that names the run; run `factory start` to continue it. While th
 the banner again after each `--refresh` interval; with `--refresh 0` the page
 changes only when you reload it. When the UI server does not answer, the page
 shows that the server is unreachable.
+
+Local tracker operator controls use the same protected inbox. Session
+`approve_start` includes the exact publication digests plus `selected_issue_ids`;
+existing `approve` stays publication-only. Backlog commands use
+`scope: "backlog"`, `subject_id: "repository"`, and no `session_id`:
+`preview_execution` selects committed task IDs; `authorize_execution` binds the
+returned preview ID/revision, complete graph digest and selected subset. Run
+commands use `scope: "run"`, the displayed Run ID as `subject_id`, its exact
+revision, `packet_version`, and for `answer_run` the displayed `question_id` and
+`question_digest`. Only supported `answer_run`, `cancel_run`, `retry_run`, and
+`resume_run` forms are offered. Plan digests retain their existing raw hexadecimal
+wire format; fresh backlog digests use `sha256:<hex>`. Source content remains
+read-only and no form grants merge authority.
+
+Automatic refresh waits for unsent input and pending commands, including input
+entered while a page read is in flight. Completing one form never discards
+another form's edits. A stale/rejected request retains its text and shows the
+outcome; it does not silently update the expected revision or reapprove content.
+When a Run changes between page reads, its controls are withheld until a fresh
+coherent revision is displayed.
 
 Session commands (ADR 0021, ADR 0024):
 

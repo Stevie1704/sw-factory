@@ -126,13 +126,14 @@ type LocalRunQuestion struct{ ID, Prompt, Digest string }
 
 // LocalRunOperatorView exposes supported actions and bound structured input.
 type LocalRunOperatorView struct {
-	Supervisor    SupervisorView
-	RunID         string
-	Revision      int64
-	PacketVersion int
-	Questions     []LocalRunQuestion
-	Actions       []string
-	Commands      []store.IdeationCommand
+	IssueID, SourceRevision, ContentDigest string
+	Supervisor                             SupervisorView
+	RunID                                  string
+	Revision                               int64
+	PacketVersion                          int
+	Questions                              []LocalRunQuestion
+	Actions                                []string
+	Commands                               []store.IdeationCommand
 }
 
 // LocalRunOperator reads a Run without requiring a live supervisor or session.
@@ -176,6 +177,11 @@ func (s *Service) LocalRunOperator(ctx context.Context, runID string) (LocalRunO
 		return LocalRunOperatorView{}, err
 	}
 	view := LocalRunOperatorView{Supervisor: supervisor, RunID: run.ID, Revision: run.Revision, PacketVersion: packet.Version, Actions: []string{}, Questions: []LocalRunQuestion{}}
+	if packet.LocalSource != nil {
+		view.IssueID = packet.LocalSource.IssueID
+		view.SourceRevision = packet.LocalSource.Revision
+		view.ContentDigest = packet.LocalSource.ContentDigest
+	}
 	for _, question := range run.PendingQuestions {
 		view.Questions = append(view.Questions, LocalRunQuestion{ID: question.ID, Prompt: question.Prompt, Digest: LocalQuestionDigest(run.ID, packet.Version, question)})
 	}

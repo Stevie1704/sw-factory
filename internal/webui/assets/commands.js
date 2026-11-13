@@ -157,6 +157,44 @@
     return payload;
   }
 
+  // touch records a changed draft independently of a pending command's bytes.
+  function touch(form) {
+    form.dataset.dirty = "true";
+    form.dataset.editVersion = String(Number(form.dataset.editVersion || 0) + 1);
+  }
+
+  // editing includes in-flight commands and typing that began during a read.
+  function editing(submitted) {
+    var dirty = Array.prototype.some.call(document.querySelectorAll("form[data-dirty], form[data-command-pending]"), function (form) {
+      return form.dataset.dirty || form.dataset.commandPending;
+    });
+    var active = document.activeElement;
+    var focused = active && active.closest && active.closest("form");
+    return Boolean(dirty || focused && focused !== submitted);
+  }
+
+  // refresh reveals new state only after every unsent form is safe to replace.
+  function refresh(submitted, destination) {
+    if (editing(submitted)) {
+      var notice = document.getElementById("revision-status");
+      if (notice) { notice.hidden = false; }
+      return false;
+    }
+    if (destination) { window.location.href = destination; }
+    else { window.location.reload(); }
+    return true;
+  }
+
+  // invalidatePlan withdraws old preview actions as soon as draft edits exist.
+  function invalidatePlan() {
+    Array.prototype.forEach.call(document.querySelectorAll("[data-plan-approval-action] button"), function (control) {
+      control.disabled = true;
+      control.dataset.draftBlocked = "true";
+    });
+    var notice = document.getElementById("plan-unsaved");
+    if (notice) { notice.hidden = false; }
+  }
+
   // wire connects one command form.
   function wire(form) {
     if (form.dataset.commandWired) {
@@ -164,7 +202,7 @@
     }
     form.dataset.commandWired = "true";
     form.addEventListener("input", function () {
-      form.dataset.dirty = "true";
+      touch(form);
     });
     form.addEventListener("submit", function (event) {
       event.preventDefault();
@@ -177,13 +215,16 @@
       if (!form.dataset.requestId) {
         form.dataset.requestId = newRequestID();
       }
-      send({
-        request_id: form.dataset.requestId,
-        session_id: form.dataset.sessionId,
-        kind: form.dataset.sessionCommand,
-        expected_revision: Number(form.dataset.expectedRevision),
-        payload: payloadOf(form)
-      }, 1).then(function (answer) {
+      if (!form.factoryPendingCommand) {
+        var command = { request_id: form.dataset.requestId, kind: form.dataset.sessionCommand,
+          expected_revision: Number(form.dataset.expectedRevision), payload: payloadOf(form) };
+        if (form.dataset.commandScope) { command.scope = form.dataset.commandScope; command.subject_id = form.dataset.subjectId; }
+        else { command.session_id = form.dataset.sessionId; }
+        form.factoryPendingCommand = command;
+        form.factorySubmittedVersion = form.dataset.editVersion || "0";
+      }
+      form.dataset.commandPending = "true";
+      send(form.factoryPendingCommand, 1).then(function (answer) {
         if (status && pending(answer)) {
           status.textContent = "accepted; waits for the coordinator";
         }
@@ -192,12 +233,17 @@
         if (status) {
           status.textContent = describe(answer) + (isFinal(answer) ? "" : "; submit again to retry the same request");
         }
+        delete form.dataset.commandPending;
         if (isFinal(answer)) {
-          delete form.dataset.dirty;
+          if (answer.outcome === "applied" && (form.dataset.editVersion || "0") === form.factorySubmittedVersion) { delete form.dataset.dirty; }
+          else { form.dataset.dirty = "true"; }
           delete form.dataset.requestId;
-        }
+          delete form.factoryPendingCommand;
+        } else { form.dataset.dirty = "true"; }
         form.dispatchEvent(new CustomEvent("factory:command", { bubbles: true, detail: answer }));
       }, function () {
+        delete form.dataset.commandPending;
+        form.dataset.dirty = "true";
         if (status) {
           status.textContent = "UI server unreachable: submit again to retry the same request";
         }
@@ -212,7 +258,11 @@
     Array.prototype.forEach.call(document.querySelectorAll("form[data-session-command]"), wire);
   }
 
-  window.factoryCommands = { submit: submit, newRequestID: newRequestID, isAnswer: isAnswer, isFinal: isFinal };
+  document.addEventListener("factory:command", function (event) {
+    if (event.detail && event.detail.outcome === "applied") { refresh(event.target); }
+  });
+  window.factoryCommands = { submit: submit, newRequestID: newRequestID, isAnswer: isAnswer, isFinal: isFinal,
+    refresh: refresh, editing: editing, touch: touch, invalidatePlan: invalidatePlan };
   wireAll();
   new MutationObserver(wireAll).observe(document.body, { childList: true, subtree: true });
 })();
