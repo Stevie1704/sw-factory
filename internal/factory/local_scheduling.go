@@ -654,7 +654,14 @@ func (s *Service) claimLocalIssue(ctx context.Context, r config.RepositoryRegist
 	}
 	for _, admission := range admissions {
 		if admission.item.Issue.Number == number {
-			return s.reserveLocalAdmission(ctx, r, db, admission)
+			result, err := s.reserveLocalAdmission(ctx, r, db, admission)
+			var refusal *localAdmissionRefusal
+			if errors.As(err, &refusal) {
+				if recordErr := recordLocalAdmissionRefusal(ctx, db, r.Path, admission.item.Issue.ID, refusal); recordErr != nil {
+					return IssueResult{}, errors.Join(err, recordErr)
+				}
+			}
+			return result, err
 		}
 	}
 	projection, _ := db.LocalBacklog(ctx, r.Path)
@@ -681,10 +688,10 @@ func (s *Service) reserveLocalAdmission(ctx context.Context, r config.Repository
 		return IssueResult{}, err
 	}
 	if policy.TargetBranch != binding.TargetBranch {
-		return IssueResult{}, store.ErrLocalExecutionConflict
+		return IssueResult{}, &localAdmissionRefusal{cause: fmt.Errorf("%w: repository policy targets %q but the authorization targets %q", store.ErrLocalExecutionConflict, policy.TargetBranch, binding.TargetBranch)}
 	}
 	if err := harness.ValidateNativeResumeCapabilities(policy, s.deps.HarnessCapabilities); err != nil {
-		return IssueResult{}, err
+		return IssueResult{}, &localAdmissionRefusal{cause: err}
 	}
 	source := localissues.Issue{}
 	for _, candidate := range admission.snapshot.Graph.Issues {
@@ -694,11 +701,11 @@ func (s *Service) reserveLocalAdmission(ctx context.Context, r config.Repository
 		}
 	}
 	if source.ID == "" || source.ContentDigest != admission.item.Issue.ContentDigest || !bytes.Equal(source.Bytes, admission.item.Issue.Bytes) {
-		return IssueResult{}, errors.New("claim source changed from exact admitted snapshot")
+		return IssueResult{}, &localAdmissionRefusal{cause: errors.New("claim source changed from exact admitted snapshot")}
 	}
 	route, err := resolveClaimRoute(source.Body, policy)
 	if err != nil {
-		return IssueResult{}, err
+		return IssueResult{}, &localAdmissionRefusal{cause: err}
 	}
 	cutoff, err := s.claimCommentWatermark(ctx, registeredRepository(r), admission.item.Issue.Number)
 	if err != nil {
@@ -833,14 +840,51 @@ func (s *Service) pollLocalOnce(ctx context.Context, r config.RepositoryRegistra
 			return PollResult{}, err
 		}
 	}
-	if len(admissions) == 0 {
-		return PollResult{Outcome: PollNoWork}, nil
+	for _, admission := range admissions {
+		claimed, err := s.reserveLocalAdmission(ctx, r, db, admission)
+		var refusal *localAdmissionRefusal
+		if errors.As(err, &refusal) {
+			if err := recordLocalAdmissionRefusal(ctx, db, r.Path, admission.item.Issue.ID, refusal); err != nil {
+				return PollResult{}, &pollingTransportError{err: err}
+			}
+			continue
+		}
+		if err != nil {
+			return PollResult{}, &pollingTransportError{err: err}
+		}
+		return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
 	}
-	claimed, err := s.reserveLocalAdmission(ctx, r, db, admissions[0])
+	return PollResult{Outcome: PollNoWork}, nil
+}
+
+// localAdmissionRefusal is a per-item policy refusal found before any claim
+// effect, such as an unavailable route, a missing harness capability, or a
+// target mismatch. It keeps that item waiting without stalling the queue;
+// every other admission error stays a transport failure.
+type localAdmissionRefusal struct{ cause error }
+
+// Error returns the refusal cause unchanged.
+func (e *localAdmissionRefusal) Error() string { return e.cause.Error() }
+
+// Unwrap exposes the cause to errors.Is and errors.As.
+func (e *localAdmissionRefusal) Unwrap() error { return e.cause }
+
+// recordLocalAdmissionRefusal projects the refusal on its item, so the backlog
+// shows why it waits instead of a stale queued state.
+func recordLocalAdmissionRefusal(ctx context.Context, db localScheduleStore, repo, issueID string, refusal *localAdmissionRefusal) error {
+	projection, err := db.LocalBacklog(ctx, repo)
 	if err != nil {
-		return PollResult{}, &pollingTransportError{err: err}
+		return err
 	}
-	return PollResult{Outcome: PollClaimed, IssueNumber: claimed.Run.IssueNumber, Run: claimed.Run}, nil
+	for i := range projection.Items {
+		if projection.Items[i].Issue.ID == issueID {
+			item := &projection.Items[i]
+			item.State, item.QueueState = "admission_refused", "admission_refused"
+			item.Reason = "admission refused before any claim effect: " + refusal.Error()
+			item.QueueReason = item.Reason
+		}
+	}
+	return db.SaveLocalBacklog(ctx, repo, projection)
 }
 
 // freshReservation returns the repository's reserved claim when it may still be

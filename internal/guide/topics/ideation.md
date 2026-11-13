@@ -105,6 +105,7 @@ use its run page; they are human decisions.
 | `blocked_by_dependencies` | A prerequisite has no merged pull request on the target. |
 | `active_run` | Another run holds the repository's run slot. |
 | `code_host_unavailable` | The code host check failed; see `factory doctor`. |
+| `admission_refused` | Repository policy refuses this task before any claim effect, for example its route, a harness capability, or the target branch. Other tasks continue. Fix the policy or the task. |
 | `unsupported_investigation` | Investigations have no executable route. |
 
 The contract is `docs/local-markdown-issues.md` in the release resources.

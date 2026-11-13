@@ -887,6 +887,41 @@ func TestSourceEditAfterReservationReleasesTheStaleClaim(t *testing.T) {
 	}
 }
 
+// TestAdmissionRefusalDoesNotStallTheQueue authorizes a task whose route the
+// policy refuses, ahead of an eligible task. The refusal is projected on its
+// item, and the next eligible item is still claimed in the same pass.
+func TestAdmissionRefusalDoesNotStallTheQueue(t *testing.T) {
+	refused := schedulingTask("local-00112233445566778899aabbccddeeff", "Bad route")
+	refused.Body += "\n<!-- factory-route: no-such-route -->\n"
+	eligible := schedulingTask("local-112233445566778899aabbccddeeff00", "Export")
+	f := newScheduleFixture(t, refused, eligible)
+	f.authorize(t, "approve", refused.ID, eligible.ID)
+	pass, err := f.service.PollOnce(t.Context())
+	if err != nil || pass.Outcome != factory.PollClaimed {
+		t.Fatalf("refusal stalled the queue: %#v,%v", pass.Outcome, err)
+	}
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(pass.Run.SpecificationPacket), &packet); err != nil || packet.LocalSource == nil || packet.LocalSource.IssueID != eligible.ID {
+		t.Fatalf("claimed the wrong item: %#v,%v", packet.LocalSource, err)
+	}
+	view, err := f.service.LocalBacklog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range view.Projection.Items {
+		if item.Issue.ID == refused.ID {
+			found = true
+			if item.State != "admission_refused" || !strings.Contains(item.Reason, "route") {
+				t.Fatalf("refusal projection=%s: %s", item.State, item.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("refused item missing from the backlog")
+	}
+}
+
 // TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath proves identity
 // survives rename without inventing a path that is absent at the claim base.
 func TestRenamePreservesApprovalAndFreezesTheActualSnapshotPath(t *testing.T) {

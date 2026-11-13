@@ -53,6 +53,7 @@ tasks on `/issues`, review the fresh exact execution preview, and approve it.
 | A specification changes after its claim | The Run keeps its frozen Specification packet. | Finish or cancel the Run; approve the new revision for new work. |
 | A publication is incomplete or ambiguous | No item of the batch is released. | Retry, or reconcile on the plan page after you inspect Git and the code host. |
 | A dependency failed, was cancelled, or is not merged | The dependent stays `blocked_by_dependencies`. | Complete the prerequisite through a merged pull request, or change the plan and approve again. |
+| Repository policy refuses a task at admission (route, harness capability, target branch) | The task shows `admission_refused` with the reason. Other eligible tasks are still claimed. | Fix the repository policy or the task, then approve again if the content changes. |
 | `factory cleanup` or `factory reset` | Cleanup keeps completion proof. Reset removes approvals, authorizations, and Run records. Markdown files and Git history stay. | After reset, register again and approve again; a new store never starts committed files by itself. |
 
 ## Version 1 format
