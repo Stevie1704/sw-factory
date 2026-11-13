@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "manifest_schema_version": 1,
-  "generated_at": "2026-11-13T17:27:26.243035Z",
+  "generated_at": "2026-11-13T17:39:13.069136Z",
   "release": {
     "schema_version": 1,
     "version": "development",
     "build": "development",
-    "revision": "8100193d4f61c1036cca9826a400b8e64a694057",
+    "revision": "7a39a566dbb05b6f443cf0ce7b59259463eba5b0",
     "modified": false,
     "worker_base_image": "",
     "platform": "darwin/arm64"
@@ -287,8 +287,12 @@
       },
       "gaps": [
         {
-          "issue": 291,
-          "summary": "Completion without any code-host adapter (fully local or manual), browser automation, and another Azure authentication mechanism are follow-up scope outside"
+          "issue": 300,
+          "summary": "A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped."
+        },
+        {
+          "issue": 301,
+          "summary": "Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped."
         }
       ]
     }

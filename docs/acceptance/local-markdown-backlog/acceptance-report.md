@@ -1,10 +1,10 @@
 # Factory acceptance report
 
-- Release: development (development), revision 8100193d4f61c1036cca9826a400b8e64a694057, modified false
+- Release: development (development), revision 7a39a566dbb05b6f443cf0ce7b59259463eba5b0, modified false
 - Platform: darwin/arm64
 - Host harness: not observed
 - Worker digest: not observed
-- Generated: 2026-11-13T17:27:26Z
+- Generated: 2026-11-13T17:39:13Z
 - Recorded duration: 0s
 
 A deterministic pass uses fake adapters. It is not evidence that an agent can use the release; only a live pass is.
@@ -36,7 +36,7 @@ A deterministic pass uses fake adapters. It is not evidence that an agent can us
 | `local-backlog-publish-and-start` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
 | `local-backlog-authorize-committed` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
 | `local-backlog-recovery` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
-| `local-backlog-code-host-access` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass: covers diagnosis and claim refusal; completion without a code host is follow-up scope | #291 |
+| `local-backlog-code-host-access` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass: covers diagnosis and claim refusal; completion without a code host is follow-up scope | #300, #301 |
 
 ## Interventions by cause
 
