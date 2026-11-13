@@ -152,6 +152,16 @@ func TestInvalidGraphsAreRejectedAsAWhole(t *testing.T) {
 			t.Fatal("task parent accepted")
 		}
 	})
+	for _, kind := range []localissues.Kind{localissues.KindParent, localissues.KindInvestigation} {
+		t.Run("dependency on "+string(kind), func(t *testing.T) {
+			target, dependent := first, second
+			target.Kind, target.Parent, dependent.Parent = kind, "", ""
+			dependent.Dependencies = []string{target.ID}
+			if _, err := localissues.Validate([]localissues.File{fileFor(t, target), fileFor(t, dependent)}); err == nil || !strings.Contains(err.Error(), "must reference a task") {
+				t.Fatalf("dependency on a %s: %v", kind, err)
+			}
+		})
+	}
 	t.Run("parent cycle", func(t *testing.T) {
 		first.Kind = localissues.KindParent
 		second.Kind = localissues.KindParent
@@ -197,5 +207,21 @@ func TestCaseInsensitivePathCollisionsAreRejected(t *testing.T) {
 	a.Path, b.Path = "docs/issues/Export.md", "docs/issues/export.md"
 	if _, err := localissues.Validate([]localissues.File{a, b}); err == nil {
 		t.Fatal("case-fold filename collision accepted")
+	}
+}
+
+// TestDirectoryPreflightRefusesANestedDirectory keeps docs/issues flat: a
+// subdirectory is not an issue file, so the whole graph is refused.
+func TestDirectoryPreflightRefusesANestedDirectory(t *testing.T) {
+	root := t.TempDir()
+	file := fileFor(t, acceptedIssue("local-00112233445566778899aabbccddeeff", "session/1/first"))
+	if err := os.MkdirAll(filepath.Join(root, "docs", "issues", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(file.Path)), file.Data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := localissues.ReadDirectory(root); err == nil {
+		t.Fatal("nested directory accepted")
 	}
 }

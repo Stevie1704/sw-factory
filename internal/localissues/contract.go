@@ -232,6 +232,11 @@ func Validate(files []File) (Graph, error) {
 			if !ids[dependency] {
 				return Graph{}, errors.New("dangling local issue dependency")
 			}
+			// Only a task can complete through a merged implementation; a
+			// dependency on a parent or an investigation could never be met.
+			if byID[dependency].Kind != KindTask {
+				return Graph{}, fmt.Errorf("local issue dependency %s must reference a task, not a %s", dependency, byID[dependency].Kind)
+			}
 			edges[issue.ID] = append(edges[issue.ID], dependency)
 		}
 	}

@@ -115,6 +115,9 @@ Identity is read from front matter, never inferred from a title or path. Nested
 paths, traversal, backslashes, symlinks, non-regular files, and exact or
 case-insensitive filename collisions are validation errors. Committed-source
 readers also reject symlink/submodule modes and unavailable source refs.
+Every entry directly in `docs/issues/` must be a valid issue file. A
+`README.md`, a `.gitkeep`, or a subdirectory there makes the whole graph
+invalid, so keep other files outside `docs/issues/`.
 
 Tracker interfaces retain their existing integer payload fields. SQLite maps
 `(repository path, stable ID)` and `(repository path, publication correlation)`
@@ -135,7 +138,10 @@ content, and oversized input are errors, never silently truncated.
 
 Validate the complete graph before exposing any of it: reject duplicate IDs or
 correlations, duplicate/self dependencies, dangling references, parents that
-are not grouping parents, and any cycle across parent/dependency edges.
+are not grouping parents, and any cycle across parent/dependency edges. A
+dependency must reference a `task`: only a task completes through a merged
+implementation, so a dependency on a `parent` or an `investigation` could never
+be met and is a validation error.
 Removing or declining an item requires repairing all incoming references.
 Grouping does not create an implicit scheduling dependency.
 
