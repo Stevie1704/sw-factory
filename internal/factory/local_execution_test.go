@@ -35,6 +35,11 @@ func (t *executionTracker) RefreshCommittedIssues(context.Context) (tracker.Comm
 	return t.snapshot, nil
 }
 
+// RefreshCommittedIssuesAt models a target-aware source adapter at the public port.
+func (t *executionTracker) RefreshCommittedIssuesAt(_ context.Context, _ string, _ string) (tracker.CommittedSnapshot, error) {
+	return t.snapshot, nil
+}
+
 // ReadCommittedIssues resolves only the scripted immutable source revision.
 func (t *executionTracker) ReadCommittedIssues(_ context.Context, revision string) (tracker.CommittedSnapshot, error) {
 	if revision != t.snapshot.Revision {
@@ -243,6 +248,7 @@ func TestLocalAnswerRecoveryContinuesWithOneNewPacketThroughNormalProgression(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	markLocalRunFixture(t, &run)
 	if err := db.SaveRun(t.Context(), run); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +353,7 @@ func TestLocalCancellationRetryAndUnsupportedResumeUseOrdinaryRunSemantics(t *te
 	run.Revision = 1
 	source.statusComment = tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	f.withStore(func(db *store.Store) {
+		markLocalRunFixture(t, &run)
 		if err := db.SaveRun(t.Context(), run); err != nil {
 			t.Fatal(err)
 		}
@@ -455,6 +462,7 @@ func TestRejectedLocalRunCommandKeepsItsOutcomeAfterLostCompletion(t *testing.T)
 	run.Revision = 1
 	source.statusComment = tracker.Comment{ID: run.StatusCommentID, Body: factory.StatusCommentBody(run)}
 	f.withStore(func(db *store.Store) {
+		markLocalRunFixture(t, &run)
 		if err := db.SaveRun(t.Context(), run); err != nil {
 			t.Fatal(err)
 		}
@@ -481,4 +489,27 @@ func TestRejectedLocalRunCommandKeepsItsOutcomeAfterLostCompletion(t *testing.T)
 	if err != nil || view.Command.Outcome != store.IdeationCommandRefused {
 		t.Fatalf("lost refusal became %#v,%v", view, err)
 	}
+}
+
+// markLocalRunFixture makes preexisting trusted Run fixtures explicit about their tracker.
+func markLocalRunFixture(t *testing.T, run *store.Run) {
+	t.Helper()
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(run.SpecificationPacket), &packet); err != nil {
+		t.Fatal(err)
+	}
+	packet.Issue.Number = run.IssueNumber
+	packet.LocalSource = &factory.LocalSpecificationSource{SchemaVersion: 1, InstallationID: "install-00112233445566778899aabbccddeeff", CodeHostProvider: "github", CodeHostRepository: "example/project", TargetBranch: packet.RepositoryConfig.TargetBranch, IssueID: "local-00112233445566778899aabbccddeeff"}
+	data, err := json.Marshal(packet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.SpecificationPacket = string(data)
+}
+
+// ProjectIssue supplies the mutable local state of the scripted Run fixture.
+func (t *executionTracker) ProjectIssue(_ context.Context, _ tracker.Repository, frozen tracker.Issue) (tracker.Issue, error) {
+	frozen.State = t.issue.State
+	frozen.Labels = append([]string(nil), t.issue.Labels...)
+	return frozen, nil
 }

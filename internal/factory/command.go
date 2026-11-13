@@ -207,6 +207,10 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 		rejection := &PolicyRejection{Code: PolicyRejectionMalformed, Problem: parseErr.Error()}
 		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
 	}
+	if packet, err := decodeSpecificationPacket(run.SpecificationPacket); err == nil && packet.LocalSource != nil && (parsed.Command.Kind == commandlanguage.Refresh || parsed.Command.Kind == commandlanguage.Revision) {
+		rejection := &PolicyRejection{Code: PolicyRejectionCode("local_source_frozen"), Problem: "local accepted source stays frozen for this Run; preview and explicitly authorize changed source as a new local revision"}
+		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
+	}
 	if published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run); publicationErr != nil {
 		return CommandResult{Outcome: CommandRejected, Command: parsed.Command, Run: published}, publicationErr
 	} else {
@@ -301,7 +305,7 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
@@ -487,7 +491,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for maintainer repair: %w", err)
 	}
@@ -527,7 +531,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("decode specification packet for refresh: %w", err)
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for refresh: %w", err)
 	}
@@ -612,7 +616,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 		return CommandResult{}, fmt.Errorf("decode specification packet for revision: %w", err)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for revision: %w", err)
 	}
@@ -1225,7 +1229,7 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for cancellation: %w", err)
 	}
@@ -1408,7 +1412,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		run = updated
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, err
 	}

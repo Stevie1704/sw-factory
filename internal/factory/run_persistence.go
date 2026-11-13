@@ -56,7 +56,7 @@ func (s *Service) persistAgentRunState(ctx context.Context, registration config.
 		return saveRunWithRetry(ctx, runStore, next)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, next.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, next)
 	if err != nil {
 		return fmt.Errorf("read issue for agent state transition: %w", err)
 	}

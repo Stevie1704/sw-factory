@@ -1534,7 +1534,7 @@ func (s *Service) completePendingCheckRepair(ctx context.Context, registration c
 	if s.deps.Tracker == nil {
 		return run, errors.New("GitHub client is required to complete check-repair reservation")
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return run, fmt.Errorf("read issue while completing check-repair reservation: %w", err)
 	}
@@ -1635,7 +1635,7 @@ func (s *Service) pauseForRecovery(ctx context.Context, registration config.Repo
 		}
 		return next, nil
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), next.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), next)
 	if err != nil {
 		if saveErr := saveRunWithRetry(ctx, runStore, next); saveErr != nil {
 			return next, errors.Join(fmt.Errorf("read issue while pausing for reconciliation: %w", err), saveErr)
@@ -1954,7 +1954,7 @@ func inspectGitHubProjection(ctx context.Context, diagnosis *RecoveryDiagnosis, 
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "client", Expected: "read-only GitHub client", Observed: "client unavailable"})
 		return
 	}
-	issue, err := client.Issue(ctx, repository, run.IssueNumber)
+	issue, err := frozenRunIssue(ctx, client, repository, run)
 	if err != nil {
 		addRecoveryDiscrepancy(diagnosis, RecoveryDiscrepancy{Source: "github", Field: "issue", Expected: fmt.Sprintf("issue #%d", run.IssueNumber), Observed: observedFailure(err)})
 	} else {

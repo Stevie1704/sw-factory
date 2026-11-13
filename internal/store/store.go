@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 50
+const CurrentSchemaVersion = 51
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -3567,6 +3567,10 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 50:
 			if err := migrateLocalExecution(ctx, tx); err != nil {
 				return fmt.Errorf("apply store migration 50: %w", err)
+			}
+		case 51:
+			if err := migrateLocalClaims(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 51: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

@@ -239,6 +239,19 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 		}
 	}()
 
+	if claims, ok := resetStore.(interface {
+		LocalClaims(context.Context, string) ([]store.LocalClaim, error)
+	}); ok {
+		pending, err := claims.LocalClaims(ctx, registration.Path)
+		if err != nil {
+			return ResetResult{}, err
+		}
+		for _, claim := range pending {
+			if claim.State == "reserved" {
+				return ResetResult{}, fmt.Errorf("pending local claim %s owns reserved Git artifacts; resume/reconcile that claim before reset so all managed targets are inventoried", claim.RunID)
+			}
+		}
+	}
 	plan, blockers, err := s.buildResetPlan(ctx, registration, resetStore, lockPath, operationalDataTarget)
 	if err != nil {
 		return ResetResult{}, err

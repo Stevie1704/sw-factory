@@ -38,9 +38,14 @@ type Clarification struct {
 // SpecificationPacket is the versioned issue snapshot and resolved repository
 // configuration captured when a run is claimed or intentionally refreshed.
 type SpecificationPacket struct {
-	Version          int                     `json:"version"`
-	Issue            tracker.Issue           `json:"issue"`
-	RepositoryConfig config.RepositoryConfig `json:"repository_config"`
+	// ClaimCommentCutoff freezes the preclaim command boundary in local intent.
+	ClaimCommentCutoff string `json:"claim_comment_cutoff,omitempty"`
+	// LocalSource freezes local accepted source and its admission provenance.
+	// Nil preserves existing remote packet behavior and persisted JSON shape.
+	LocalSource      *LocalSpecificationSource `json:"local_source,omitempty"`
+	Version          int                       `json:"version"`
+	Issue            tracker.Issue             `json:"issue"`
+	RepositoryConfig config.RepositoryConfig   `json:"repository_config"`
 	// RepositoryGuidance contains checked-in guidance captured at the run's
 	// immutable base checkpoint and later presented as untrusted prompt input.
 	RepositoryGuidance string `json:"repository_guidance,omitempty"`
@@ -145,6 +150,9 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, fmt.Errorf("validate harness capabilities before claim: %w", err)
 	}
 	repository := registeredRepository(registration)
+	if registration.EffectiveTracker() == config.ProviderLocal {
+		return s.claimLocalIssue(ctx, registration, runStore, current, issueNumber)
+	}
 	if current != nil {
 		return IssueResult{}, fmt.Errorf("an active run already exists: %s", current.ID)
 	}
@@ -349,7 +357,7 @@ func (s *Service) Transition(ctx context.Context, request TransitionRequest) (st
 		return store.Run{}, err
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, *run)
 	if err != nil {
 		return store.Run{}, err
 	}
@@ -493,6 +501,9 @@ func (s *Service) drainPendingEffect(ctx context.Context, registration config.Re
 	if run == nil {
 		return nil
 	}
+	if err := validateRunAdapter(registration, *run); err != nil {
+		return err
+	}
 	journal, journaled := runStore.(PendingEffectStore)
 	if !journaled {
 		return nil
@@ -513,6 +524,14 @@ func (s *Service) drainPendingEffect(ctx context.Context, registration config.Re
 // progression seams. A production store consumes one pending effect, verifies
 // the external projections, and permits continuation only after they agree.
 func (s *Service) ensureProgressionStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run) error {
+	if run != nil {
+		if err := validateRunAdapter(registration, *run); err != nil {
+			return err
+		}
+	}
+	if err := s.recoverLocalClaimProjection(ctx, registration, runStore, run); err != nil {
+		return err
+	}
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
 	if s.startupChecked {
@@ -529,6 +548,20 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 	}
 	if run == nil {
 		return nil
+	}
+	if err := validateRunAdapter(registration, *run); err != nil {
+		if store.IsTerminalStatus(run.Status) {
+			if journal, ok := runStore.(PendingEffectStore); ok {
+				pending, pendingErr := journal.PendingEffect(ctx, run.ID)
+				if pendingErr != nil {
+					return pendingErr
+				}
+				if pending == nil {
+					return nil
+				}
+			}
+		}
+		return err
 	}
 	updated, _, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
 	if err != nil {
@@ -552,6 +585,14 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 // runs have already passed reconciliation before this seam is reached; legacy
 // stores retain the typed #24 refusal.
 func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
+	if run != nil {
+		if err := validateRunAdapter(registration, *run); err != nil {
+			return err
+		}
+	}
+	if err := s.recoverLocalClaimProjection(ctx, registration, runStore, run); err != nil {
+		return err
+	}
 	s.startupMu.Lock()
 	defer s.startupMu.Unlock()
 	if s.startupChecked {

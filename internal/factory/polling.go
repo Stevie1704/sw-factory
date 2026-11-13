@@ -561,6 +561,9 @@ func (s *Service) PollOnce(ctx context.Context) (PollResult, error) {
 // pollOnce checks the operational store before reading GitHub, ensuring an
 // active run suppresses queue work and that the oldest eligible issue wins.
 func (s *Service) pollOnce(ctx context.Context, registration config.RepositoryRegistration) (PollResult, error) {
+	if registration.EffectiveTracker() == config.ProviderLocal {
+		return s.pollLocalOnce(ctx, registration)
+	}
 	if err := ctx.Err(); err != nil {
 		return PollResult{}, err
 	}

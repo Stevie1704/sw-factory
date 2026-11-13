@@ -885,7 +885,7 @@ func (s *Service) acceptTestStageReport(ctx context.Context, registration config
 	checkpoint := gitadapter.CheckpointResult{}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		repository := registeredRepository(registration)
-		issue, issueErr := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+		issue, issueErr := s.runIssue(ctx, repository, *run)
 		if issueErr != nil {
 			return AgentResult{}, fmt.Errorf("read issue for test handoff checkpoint: %w", issueErr)
 		}
@@ -1078,7 +1078,7 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	checkpoint := gitadapter.CheckpointResult{}
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		repository := registeredRepository(registration)
-		issue, issueErr := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+		issue, issueErr := s.runIssue(ctx, repository, *run)
 		if issueErr != nil {
 			return s.pauseTestRevisionForHuman(ctx, registration, runStore, run, invocation, value, store.TestRevisionVerificationFailed, "revised test checkpoint issue context could not be read")
 		}

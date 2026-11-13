@@ -48,7 +48,7 @@ func (h labelTransitionHandler) apply(ctx context.Context, payload labelTransiti
 	if h.issues == nil {
 		return errors.New("GitHub client is required for label effect")
 	}
-	issue, err := h.issues.Issue(ctx, payload.Repository, payload.IssueNumber)
+	issue, err := observeIssueProjection(ctx, h.issues, payload.Repository, tracker.Issue{Number: payload.IssueNumber})
 	if err != nil {
 		return fmt.Errorf("read issue for label replay: %w", err)
 	}
