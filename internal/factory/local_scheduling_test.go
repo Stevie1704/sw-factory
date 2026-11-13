@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1091,4 +1092,51 @@ func TestInvestigationIsVisibleAsUnsupportedInTheBacklog(t *testing.T) {
 	if item := view.Projection.Items[0]; item.Issue.ID != investigation.ID || item.State != "unsupported_investigation" {
 		t.Fatalf("investigation projection=%s: %s", item.State, item.Reason)
 	}
+}
+
+// TestResetKeepsCommittedIssuesAndRestoresNoAuthority resets a local
+// registration with committed, approved issues. The files and their Git
+// history survive, and after registering again nothing is claimed until a
+// fresh approval.
+func TestResetKeepsCommittedIssuesAndRestoresNoAuthority(t *testing.T) {
+	issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+	f := newScheduleFixture(t, issue)
+	f.authorize(t, "approve", issue.ID)
+	host, err := config.LoadHost(f.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := scheduleGit(t, f.registration.Path, "rev-parse", "HEAD")
+	result, err := f.service.Reset(t.Context(), factory.ResetRequest{Confirm: true})
+	if err != nil {
+		t.Fatalf("reset=%#v,%v", result, err)
+	}
+	if !slices.Contains(result.Plan.Retained, "committed local issue Markdown under docs/issues and its Git history") {
+		t.Fatalf("retained=%v", result.Plan.Retained)
+	}
+	name, _ := localissues.DefaultPath(issue.ID)
+	if _, err := os.Stat(filepath.Join(f.registration.Path, name)); err != nil {
+		t.Fatalf("committed issue file removed: %v", err)
+	}
+	if got := scheduleGit(t, f.registration.Path, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("Git history changed: %s, want %s", got, head)
+	}
+	if err := config.SaveHost(f.configPath, host); err != nil {
+		t.Fatal(err)
+	}
+	f.recompose(nil)
+	f.heartbeat(sessionCommandNow.Add(time.Hour))
+	if pass, err := f.service.PollOnce(t.Context()); err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("re-registration started work: %#v,%v", pass.Outcome, err)
+	}
+	f.withStore(func(db *store.Store) {
+		claims, err := db.LocalClaims(t.Context(), f.registration.Path)
+		if err != nil || len(claims) != 0 {
+			t.Fatalf("claims after reset=%#v,%v", claims, err)
+		}
+		auths, err := db.LocalExecutionAuthorizations(t.Context(), f.registration.Path)
+		if err != nil || len(auths) != 0 {
+			t.Fatalf("authorizations after reset=%d,%v", len(auths), err)
+		}
+	})
 }
