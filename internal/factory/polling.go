@@ -207,6 +207,11 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 		}
 		consecutiveLeaseFailures = 0
 
+		if registration.EffectiveTracker() == config.ProviderLocal {
+			if _, err := s.currentLocalRegistration(registration); err != nil {
+				return err
+			}
+		}
 		if err := s.retryWaitingForHarness(pollContext, registration); err != nil {
 			s.observeCoordinatorStageFromStore(pollContext, registration, events)
 			if pollingContextDone(err) {

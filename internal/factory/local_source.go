@@ -20,6 +20,23 @@ type LocalSpecificationSource struct {
 	Bytes                                                                                []byte
 }
 
+// currentLocalRegistration rejects use of adapters or an opened store after
+// private registration drift. Recomposition is required because the service's
+// Git/code-host adapters and supervisor ownership captured the earlier context.
+func (s *Service) currentLocalRegistration(expected config.RepositoryRegistration) (config.RepositoryRegistration, error) {
+	current, err := s.registration()
+	if err != nil {
+		return config.RepositoryRegistration{}, err
+	}
+	if expected.EffectiveTracker() != config.ProviderLocal || current.EffectiveTracker() != config.ProviderLocal ||
+		current.Path != expected.Path || current.OperationalDataPath != expected.OperationalDataPath ||
+		current.RepositoryConfigPath != expected.RepositoryConfigPath || current.LocalOperator != expected.LocalOperator ||
+		current.EffectiveCodeHost() != expected.EffectiveCodeHost() || registeredRepository(current) != registeredRepository(expected) {
+		return config.RepositoryRegistration{}, errors.New("private local registration changed; restart and recompose supported adapters before observation or claim")
+	}
+	return current, nil
+}
+
 // refreshLocalSource uses current policy for every coordinator observation,
 // including fresh preview, authorization and queue admission.
 func (s *Service) refreshLocalSource(ctx context.Context, registration config.RepositoryRegistration) (tracker.CommittedSnapshot, error) {

@@ -68,6 +68,10 @@ func (s *Service) executionHostBinding(registration config.RepositoryRegistratio
 
 // executionBindingCurrent rejects changed host identities or target policy.
 func (s *Service) executionBindingCurrent(registration config.RepositoryRegistration, binding store.LocalExecutionBinding) error {
+	registration, err := s.currentLocalRegistration(registration)
+	if err != nil {
+		return err
+	}
 	current, err := s.executionHostBinding(registration)
 	if err != nil {
 		return err

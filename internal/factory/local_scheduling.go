@@ -206,6 +206,10 @@ func (s *Service) localHostReady(ctx context.Context, r config.RepositoryRegistr
 
 // observeLocalQueue validates authority and retains reasons for every item.
 func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegistration, db localScheduleStore) ([]localAdmission, error) {
+	r, err := s.currentLocalRegistration(r)
+	if err != nil {
+		return nil, err
+	}
 	prior, err := db.LocalBacklog(ctx, r.Path)
 	if err != nil {
 		return nil, err
@@ -656,6 +660,10 @@ func (s *Service) claimLocalIssue(ctx context.Context, r config.RepositoryRegist
 
 // reserveLocalAdmission freezes source, policy, guidance and base before Git IO.
 func (s *Service) reserveLocalAdmission(ctx context.Context, r config.RepositoryRegistration, db localScheduleStore, admission localAdmission) (IssueResult, error) {
+	r, err := s.currentLocalRegistration(r)
+	if err != nil {
+		return IssueResult{}, err
+	}
 	binding := admission.auth.Binding
 	if err := s.executionBindingCurrent(r, binding); err != nil {
 		return IssueResult{}, err
@@ -726,6 +734,10 @@ func (s *Service) resumeLocalClaim(ctx context.Context, r config.RepositoryRegis
 			_ = recordLocalClaimFailure(context.WithoutCancel(ctx), db, r.Path, claim, resultErr)
 		}
 	}()
+	r, err := s.currentLocalRegistration(r)
+	if err != nil {
+		return IssueResult{}, err
+	}
 	auth, err := db.LocalExecutionAuthorization(ctx, claim.AuthorizationID)
 	if err != nil {
 		return IssueResult{}, err
@@ -769,6 +781,10 @@ func (s *Service) resumeLocalClaim(ctx context.Context, r config.RepositoryRegis
 
 // pollLocalOnce retains queue reasons and advances only explicitly eligible work.
 func (s *Service) pollLocalOnce(ctx context.Context, r config.RepositoryRegistration) (PollResult, error) {
+	r, err := s.currentLocalRegistration(r)
+	if err != nil {
+		return PollResult{}, err
+	}
 	opened, err := s.deps.OpenStore(ctx, r.OperationalDataPath)
 	if err != nil {
 		return PollResult{}, err

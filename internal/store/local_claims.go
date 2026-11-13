@@ -97,7 +97,8 @@ func scanLocalClaim(row localExecutionScanner) (LocalClaim, error) {
 }
 
 // ReserveLocalClaim atomically reserves one exact authorized revision before
-// workspace creation. Duplicate authorizations adopt the same intent.
+// workspace creation. New intents require the latest selected authorization;
+// already admitted intents remain adoptable after a newer decision.
 func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalClaim, error) {
 	if claim.Key == "" || claim.RunID == "" || !validLocalRevision(claim.BaseSHA) || claim.SpecificationPacket == "" || len(claim.SpecificationPacket) > 32<<20 {
 		return claim, ErrLocalClaimConflict
@@ -141,6 +142,18 @@ func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalC
 		return existing, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
+		return claim, err
+	}
+	// The write lock acquired above serializes this observation with authority
+	// writers. A queue observation cannot reserve an older decision after a newer
+	// decision selecting this issue committed, even if its graph is different.
+	var newer string
+	if err := tx.QueryRowContext(ctx, `SELECT request_id FROM local_execution_authorizations AS authority
+		WHERE repository_path=? AND sequence>? AND EXISTS (
+			SELECT 1 FROM json_each(authority.binding, '$.SelectedIssueIDs') WHERE value=?
+		) ORDER BY sequence DESC LIMIT 1`, claim.RepositoryPath, auth.Sequence, claim.IssueID).Scan(&newer); err == nil {
+		return claim, fmt.Errorf("%w: selected issue has newer execution authorization %s; observe the queue again", ErrLocalClaimConflict, newer)
+	} else if !errors.Is(err, sql.ErrNoRows) {
 		return claim, err
 	}
 	var invalid string
