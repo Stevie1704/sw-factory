@@ -108,11 +108,23 @@ func pullRequestURL(repository tracker.Repository, number int) string {
 // target branch pair in any status, so a retry cannot create a duplicate. It
 // reads the match by id to get the complete description.
 func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
-	if err := validateRepository(repository); err != nil {
+	matches, err := c.FindPullRequestCandidates(ctx, repository, headBranch, baseBranch)
+	if err != nil {
 		return codehost.PullRequest{}, err
 	}
+	if len(matches) > 0 {
+		return matches[0], nil
+	}
+	return codehost.PullRequest{}, nil
+}
+
+// FindPullRequestCandidates returns all exact branch matches in every status.
+func (c *Client) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
+	if err := validateRepository(repository); err != nil {
+		return nil, err
+	}
 	if err := validateBranches(headBranch, baseBranch); err != nil {
-		return codehost.PullRequest{}, err
+		return nil, err
 	}
 	query := url.Values{
 		"searchCriteria.sourceRefName": {branchRef(headBranch)},
@@ -124,14 +136,19 @@ func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Reposit
 		Value []pullRequestResponse `json:"value"`
 	}
 	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/pullrequests", query)}, &response); err != nil {
-		return codehost.PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
+		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
+	var matches []codehost.PullRequest
 	for _, candidate := range response.Value {
 		if candidate.SourceRefName == branchRef(headBranch) && candidate.TargetRefName == branchRef(baseBranch) {
-			return c.pullRequestByID(ctx, repository, candidate.PullRequestID)
+			pr, err := c.pullRequestByID(ctx, repository, candidate.PullRequestID)
+			if err != nil {
+				return nil, err
+			}
+			matches = append(matches, pr)
 		}
 	}
-	return codehost.PullRequest{}, nil
+	return matches, nil
 }
 
 // pullRequestByID reads one pull request. The list endpoint truncates the

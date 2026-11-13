@@ -75,6 +75,9 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	if err != nil {
 		return Result{}, err
 	}
+	if _, ok := p.Tracker.(tracker.PlanBatchPublisher); ok {
+		planned = append([]store.PublicationOperation{{ID: "git/batch", Kind: store.PublicationOperationGitBatch}}, planned...)
+	}
 	if session.State != store.IdeationStatePublishing {
 		if session, err = p.transition(ctx, session, workflow.SessionEventPublicationStarted, ""); err != nil {
 			return Result{}, err
@@ -119,6 +122,9 @@ func (p *Publisher) finish(ctx context.Context, sessionID, attemptID, approvalID
 		return p.finishCancelled(ctx, session, attemptID, approvalID, ledger, halt)
 	}
 	receipt := receiptFromLedger(attemptID, approvalID, ledger)
+	if halt != "" && len(ledger) > 0 && ledger[0].Kind == store.PublicationOperationGitBatch {
+		receipt.Outcome = store.PublicationOutcomeIncomplete
+	}
 	event := workflow.SessionEventPublicationCompleted
 	if receipt.Outcome == store.PublicationOutcomeIncomplete {
 		event = workflow.SessionEventPublicationIncomplete
@@ -231,7 +237,7 @@ func receiptFromLedger(id, approvalID string, ledger []store.PublicationOperatio
 		}
 		if operation.Kind == store.PublicationOperationCreateItem {
 			receipt.Items = append(receipt.Items, store.PublishedItem{NodeID: operation.NodeID, ExternalID: operation.ExternalID, URL: operation.URL})
-		} else {
+		} else if operation.Kind == store.PublicationOperationCreateRelationship {
 			receipt.Relationships = append(receipt.Relationships, store.PublishedRelationship{
 				FromNodeID: operation.FromNodeID, ToNodeID: operation.ToNodeID, Kind: operation.RelationshipKind,
 			})
@@ -281,12 +287,13 @@ type execution struct {
 	relationships map[string]tracker.PlanRelationshipMapping
 	refs          map[string]tracker.PlanItemRef
 	ledger        []store.PublicationOperation
+	approved      tracker.PlanPreview
 }
 
 // newExecution indexes the approved preview for one pass over ledger.
 func newExecution(publisher *Publisher, sessionID string, approved tracker.PlanPreview, ledger []store.PublicationOperation) *execution {
 	run := &execution{
-		publisher: publisher, sessionID: sessionID, ledger: ledger,
+		publisher: publisher, sessionID: sessionID, ledger: ledger, approved: approved,
 		items:         make(map[string]tracker.RenderedPlanItem, len(approved.Items)),
 		relationships: make(map[string]tracker.PlanRelationshipMapping, len(approved.Relationships)),
 		refs:          make(map[string]tracker.PlanItemRef, len(approved.Items)),
@@ -304,6 +311,9 @@ func newExecution(publisher *Publisher, sessionID string, approved tracker.PlanP
 // non-empty halt reason when an operation stopped the pass, and an error only
 // for a local store failure.
 func (e *execution) execute(ctx context.Context) (string, error) {
+	if batch, ok := e.publisher.Tracker.(tracker.PlanBatchPublisher); ok {
+		return e.executeBatch(ctx, batch)
+	}
 	for index, operation := range e.ledger {
 		if operation.State == store.PublicationOperationSucceeded {
 			if operation.Kind == store.PublicationOperationCreateItem {

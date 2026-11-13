@@ -72,6 +72,12 @@ type PullRequestClient interface {
 	UpdatePullRequest(context.Context, tracker.Repository, int, PullRequestRequest) (PullRequest, error)
 }
 
+// PullRequestCandidateReader lists every exact source/target match so a
+// publication can refuse ambiguous duplicate effects rather than pick one.
+type PullRequestCandidateReader interface {
+	FindPullRequestCandidates(context.Context, tracker.Repository, string, string) ([]PullRequest, error)
+}
+
 // PullRequestReviewState is the bounded review decision vocabulary. Each
 // adapter maps its provider's review values to it. Only a submitted review
 // carries a decision; an unsubmitted draft is `PENDING`.

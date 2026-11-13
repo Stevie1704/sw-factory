@@ -124,6 +124,49 @@ completion, normally PR merge. Parents do not execute; investigations need an
 explicitly supported route. Imported files and restored Git history need fresh
 local registration and authorization.
 
+### Exact preview and publication recovery
+
+The rendered item body is the complete Markdown file, including front matter.
+The displayed fields include `path`, `local_id`, the installation-local tracker
+`number`, `content_digest`, immutable `source_revision`, `base_graph_digest`,
+`graph_digest`, `specification_branch`, `target_branch`, and `publication_policy`.
+The resulting graph digest covers **all original committed issues plus every
+approved addition**, excluding mutable paths. This deliberately binds existing
+prerequisites as well as the new batch. Unrelated accepted-source changes can
+require a fresh exact preview and approval; they never silently widen authority.
+
+Policies are `local_commit` (default), `push`, and `pull_request`. Each policy is
+part of the approved payload. The standard local UI uses local-commit publication
+and presents the manual publishing path. Optional host integrations may select a
+push or draft specification PR policy before preview, which must then be
+explicitly approved. No policy includes merge authority. PR publication requires
+the configured code host's unambiguous source/target lookup capability.
+
+The factory branch is `factory/specifications/<full SHA-256 of session/revision>`.
+Its separate worktree contains only approved issue changes; publication refuses
+foreign worktrees, unsafe directories, unrelated staged paths, transformed Git
+filter bytes, or a conflicting branch/remote ref. A successful commit is
+identified by its exact parent, complete changed-file set, content/graph digests,
+and publication marker. Retrying adopts that commit rather than creating another.
+Commit signing and Git transport use the host's normal configuration, with
+repository hooks and fsmonitor disabled as required by ADR 0015.
+
+The publication ledger's `git/batch` entry records each commit, push, and optional
+PR intent and its evidence before the next external effect. Later item/link rows
+are evidence about the same atomic batch. A partial or ambiguous batch leaves an
+incomplete receipt and releases none of its items for execution. A lost response
+is recovered by inspecting the branch and optional remote effects. If an attempted
+effect is absent or several PRs match, publication stops; inspect Git/code-host
+history before explicitly confirming the pending effect absent or adopting the
+complete matching commit. If a previously recorded commit ref moved or vanished,
+restore it before retrying; absence does not permit manufacturing a replacement.
+
+A successful local commit can still be **waiting for specification merge**.
+Publish its displayed branch using your ordinary Git/code-host review process,
+then merge it through the target branch's policy. Factory never bypasses that
+policy. Exact byte/graph comparison against one fetched target snapshot accepts
+identical squash/cherry-pick content and rejects altered specifications.
+
 Operational approvals, queue state, commands, local labels/comments, and recovery
 evidence live only in SQLite. Cleanup/reset retain committed Markdown and Git
 history; reset removes operational authority. Recreating the store never

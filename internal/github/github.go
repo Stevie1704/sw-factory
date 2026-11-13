@@ -229,8 +229,20 @@ func (c *GhClient) EditIssueComment(ctx context.Context, repository tracker.Repo
 // FindPullRequest finds the pull request for one exact source/target branch
 // pair, including closed pull requests so a retry cannot create a duplicate.
 func (c *GhClient) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
-	if err := validatePullRequestBranches(headBranch, baseBranch); err != nil {
+	matches, err := c.FindPullRequestCandidates(ctx, repository, headBranch, baseBranch)
+	if err != nil {
 		return codehost.PullRequest{}, err
+	}
+	if len(matches) > 0 {
+		return matches[0], nil
+	}
+	return codehost.PullRequest{}, nil
+}
+
+// FindPullRequestCandidates returns all matching PRs in every state.
+func (c *GhClient) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
+	if err := validatePullRequestBranches(headBranch, baseBranch); err != nil {
+		return nil, err
 	}
 	args := []string{
 		"api", fmt.Sprintf("repos/%s/pulls", repository.String()),
@@ -242,19 +254,20 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository tracker.Repos
 	}
 	output, err := c.callBytes(ctx, args, nil)
 	if err != nil {
-		return codehost.PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
+		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
 	responses, err := decodeJSONPages[pullRequestResponse](output)
 	if err != nil {
-		return codehost.PullRequest{}, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
+		return nil, fmt.Errorf("decode pull requests for %q: %w", headBranch, err)
 	}
+	var matches []codehost.PullRequest
 	for _, response := range responses {
 		pullRequest := response.pullRequest()
 		if pullRequest.HeadBranch == headBranch && pullRequest.BaseBranch == baseBranch {
-			return pullRequest, nil
+			matches = append(matches, pullRequest)
 		}
 	}
-	return codehost.PullRequest{}, nil
+	return matches, nil
 }
 
 // CreatePullRequest creates one draft pull request from a pushed run branch.
