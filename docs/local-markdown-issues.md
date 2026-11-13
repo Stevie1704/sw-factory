@@ -192,10 +192,11 @@ prerequisites as well as the new batch. Unrelated accepted-source changes can
 require a fresh exact preview and approval; they never silently widen authority.
 
 Policies are `local_commit` (default), `push`, and `pull_request`. Each policy is
-part of the approved payload. The standard local UI uses local-commit publication
-and presents the manual publishing path. Optional host integrations may select a
-push or draft specification PR policy before preview, which must then be
-explicitly approved. No policy includes merge authority. PR publication requires
+part of the approved payload. Only `local_commit` is selectable today: no
+composition path sets another policy, so the local UI always publishes a local
+commit and presents the manual publishing path. The publisher supports `push`
+and `pull_request` for a future integration that selects one before preview,
+which must then be explicitly approved. No policy includes merge authority. PR publication requires
 the configured code host's unambiguous source/target lookup capability.
 
 The factory branch is `factory/specifications/<full SHA-256 of session/revision>`.
