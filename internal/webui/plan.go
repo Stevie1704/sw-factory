@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/plangraph"
@@ -26,6 +27,8 @@ const pagePlan page = "plan"
 // follow the session lifecycle, and the coordinator checks every command
 // again.
 type planPage struct {
+	Local   bool
+	Changes []planChange
 	// Supervisor is the coordinator liveness at the read.
 	Supervisor *factory.SupervisorView
 	// Session is the reviewed session.
@@ -73,6 +76,7 @@ type planItemView struct {
 
 // planDraft is the editor model the page hands to plan.js as JSON.
 type planDraft struct {
+	Local            bool                          `json:"local,omitempty"`
 	SessionID        string                        `json:"session_id"`
 	ExpectedRevision int64                         `json:"expected_revision"`
 	PlanRevision     int64                         `json:"plan_revision"`
@@ -83,6 +87,9 @@ type planDraft struct {
 // publicationView is one rendered publication: a preview or the approved
 // payload.
 type publicationView struct {
+	Local                        bool
+	Executable                   bool
+	Policy, Branch, TargetBranch string
 	// RequestID is the preview command that rendered it, or the approval ID.
 	RequestID string
 	// PlanRevision is the rendered plan revision.
@@ -120,6 +127,7 @@ type fieldView struct {
 
 // publicationProgress is the ledger of one approval with its receipts.
 type publicationProgress struct {
+	Batches int
 	// ApprovalID identifies the approval.
 	ApprovalID string
 	// Operations are the ledger rows in execution order.
@@ -144,6 +152,7 @@ type publicationProgress struct {
 
 // operationView is one ledger row.
 type operationView struct {
+	Batch *publication.BatchOperationDetail
 	store.PublicationOperation
 	// Title is the rendered item title of an item create.
 	Title string
@@ -206,7 +215,12 @@ func (routes *planRoutes) review(w http.ResponseWriter, r *http.Request) {
 		routes.ui.renderStoreError(w, err)
 		return
 	}
-	routes.ui.render(w, http.StatusOK, pagePlan, newPlanPage(activity))
+	model := newPlanPage(activity)
+	if routes.ui.options.Local != nil {
+		model.Local = true
+		model.Draft.Local = true
+	}
+	routes.ui.render(w, http.StatusOK, pagePlan, model)
 }
 
 // newPlanPage builds the review page model from the session activity.
@@ -231,6 +245,11 @@ func newPlanPage(activity factory.SessionActivity) planPage {
 		model.Preview, model.PreviewRefusal = currentPreview(activity.Commands, model.Plan)
 	}
 	model.Approval, model.Approved = currentApproval(history)
+	model.Local = model.Preview != nil && model.Preview.Local || model.Approved != nil && model.Approved.Local
+	model.Draft.Local = model.Local
+	if len(history.Plans) > 1 {
+		model.Changes = planRevisionChanges(history.Plans[len(history.Plans)-2], history.Plans[len(history.Plans)-1])
+	}
 	inFlight := len(model.Pending) > 0 && history.Session.State == store.IdeationStatePublishing
 	model.Progress = newProgress(history, inFlight)
 	model.Actions = newPlanActions(model)
@@ -331,10 +350,19 @@ func newPublicationView(requestID string, planRevision int64, payload, mapping [
 		return nil, err
 	}
 	view := &publicationView{
+		Local:     strings.HasPrefix(preview.Target, "local:"),
 		RequestID: requestID, PlanRevision: planRevision, Target: preview.Target,
 		PayloadSHA256: digestOf(payload), RelationshipMappingSHA256: digestOf(mapping), Relationships: preview.Relationships,
 	}
 	for _, item := range preview.Items {
+		if view.Local && view.Policy == "" {
+			view.Policy = item.Fields["publication_policy"]
+			view.Branch = item.Fields["specification_branch"]
+			view.TargetBranch = item.Fields["target_branch"]
+		}
+		if view.Local && item.Type == "task" && item.Fields["local_id"] != "" {
+			view.Executable = true
+		}
 		rendered := renderedItemView{RenderedPlanItem: item, Intermediate: !hasNode(nodes, item.NodeID)}
 		for name, value := range item.Fields {
 			rendered.FieldList = append(rendered.FieldList, fieldView{Name: name, Value: value})
@@ -398,11 +426,21 @@ func newProgress(history store.IdeationHistory, inFlight bool) *publicationProgr
 			continue
 		}
 		view := operationView{PublicationOperation: operation}
+		if operation.Kind == store.PublicationOperationGitBatch {
+			view.Title = "Atomic specification batch"
+			var detail publication.BatchOperationDetail
+			if json.Unmarshal([]byte(operation.Detail), &detail) == nil {
+				view.Batch = &detail
+			}
+		}
 		if operation.Kind == store.PublicationOperationCreateItem {
 			view.Title = approved[operation.NodeID]
 			view.Intermediate = !hasNode(nodes, operation.NodeID)
 			view.Reconcilable = reconcilableState(history.Session, approvalID) &&
 				(operation.State == store.PublicationOperationAmbiguous || operation.State == store.PublicationOperationAttempted)
+		}
+		if operation.Kind == store.PublicationOperationGitBatch {
+			view.Reconcilable = reconcilableState(history.Session, approvalID) && (operation.State == store.PublicationOperationAmbiguous || operation.State == store.PublicationOperationAttempted)
 		}
 		view.Label = progress.count(operation, inFlight, history.Session.State == store.IdeationStateCancelled)
 		progress.Operations = append(progress.Operations, view)
@@ -426,8 +464,10 @@ func (progress *publicationProgress) count(operation store.PublicationOperation,
 	case operation.State == store.PublicationOperationSucceeded:
 		if operation.Kind == store.PublicationOperationCreateItem {
 			progress.Created++
-		} else {
+		} else if operation.Kind == store.PublicationOperationCreateRelationship {
 			progress.Linked++
+		} else if operation.Kind == store.PublicationOperationGitBatch {
+			progress.Batches++
 		}
 	case operation.State == store.PublicationOperationFailed:
 		progress.Failed++
@@ -446,6 +486,49 @@ func (progress *publicationProgress) count(operation store.PublicationOperation,
 		progress.Pending++
 	}
 	return string(operation.State)
+}
+
+// planFieldChange shows exact operator-visible values between draft revisions.
+type planFieldChange struct{ Field, Before, After string }
+
+// planChange is a retained addition, decline or changed field set.
+type planChange struct {
+	Decision, NodeID, Title string
+	Fields                  []planFieldChange
+}
+
+// planRevisionChanges reports exact decisions between retained draft revisions.
+func planRevisionChanges(before, after store.PlanRevision) []planChange {
+	old := map[string]store.PlanNode{}
+	current := map[string]bool{}
+	var changes []planChange
+	for _, node := range before.Nodes {
+		old[node.ID] = node
+	}
+	for _, node := range after.Nodes {
+		current[node.ID] = true
+		prior, found := old[node.ID]
+		decision := "Changed"
+		if !found {
+			decision = "Added"
+		}
+		fields := []planFieldChange{{"Kind", prior.Kind, node.Kind}, {"Title", prior.Title, node.Title}, {"Body", prior.Body, node.Body}, {"Acceptance criteria", strings.Join(prior.AcceptanceCriteria, "\n"), strings.Join(node.AcceptanceCriteria, "\n")}, {"Parent", prior.ParentID, node.ParentID}, {"Dependencies", strings.Join(prior.DependsOn, ", "), strings.Join(node.DependsOn, ", ")}, {"Brief references", strings.Join(prior.BriefRefs, ", "), strings.Join(node.BriefRefs, ", ")}}
+		var changed []planFieldChange
+		for _, field := range fields {
+			if field.Before != field.After {
+				changed = append(changed, field)
+			}
+		}
+		if len(changed) > 0 {
+			changes = append(changes, planChange{Decision: decision, NodeID: node.ID, Title: node.Title, Fields: changed})
+		}
+	}
+	for _, node := range before.Nodes {
+		if !current[node.ID] {
+			changes = append(changes, planChange{Decision: "Declined", NodeID: node.ID, Title: node.Title, Fields: []planFieldChange{{Field: "Body", Before: node.Body}, {Field: "Acceptance criteria", Before: strings.Join(node.AcceptanceCriteria, "\n")}}})
+		}
+	}
+	return changes
 }
 
 // approvedItems returns the rendered item titles of one approval by node and
