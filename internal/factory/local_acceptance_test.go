@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/sessioncommand"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
+	"github.com/Stevie1704/sw-factory/internal/webui"
 )
 
 // The integrated acceptance scenarios of spec #291 (issue #298). Each journey
@@ -142,6 +145,79 @@ func (j *localJourney) compose(dependencies *factory.Dependencies) {
 	dependencies.PullRequestComments = j.codeHost
 	dependencies.PullRequestCommentPublisher = j.codeHost
 	dependencies.CodeHostReadiness = j.codeHost
+}
+
+// reconnectBrowser starts a new UI handler with the local issue pages and
+// reads its command token, as a reloaded tab of a restarted factory ui does.
+func (j *localJourney) reconnectBrowser() {
+	j.t.Helper()
+	j.ui = webui.NewHandler(j.service, webui.Options{Sessions: j.service, Local: j.service})
+	page := j.get("/issues")
+	match := journeyCSRF.FindStringSubmatch(page.Body.String())
+	if match == nil {
+		j.t.Fatalf("local issue page has no command token:\n%s", page.Body.String())
+	}
+	j.token = match[1]
+}
+
+// restart replaces the coordinator and the browser, as a process restart
+// and a reloaded tab do. Only Git and the store survive it.
+func (j *localJourney) restart() {
+	j.t.Helper()
+	j.restartCoordinator()
+	j.reconnectBrowser()
+}
+
+// postScoped sends one backlog or Run command as the local issue and Run
+// pages do, with its own subject instead of a session.
+func (j *localJourney) postScoped(requestID, scope, subject string, kind sessioncommand.Kind, revision int64, payload any) (int, commandAnswer) {
+	j.t.Helper()
+	body, err := json.Marshal(map[string]any{
+		"request_id": requestID, "scope": scope, "subject_id": subject, "kind": kind, "expected_revision": revision, "payload": payload,
+	})
+	if err != nil {
+		j.t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/commands", strings.NewReader(string(body)))
+	request.Host = "127.0.0.1:8765"
+	request.Header.Set("Origin", "http://127.0.0.1:8765")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Factory-CSRF", j.token)
+	recorder := httptest.NewRecorder()
+	j.ui.ServeHTTP(recorder, request)
+	var answer commandAnswer
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		j.t.Fatalf("command answer %q: %v", recorder.Body.String(), err)
+	}
+	return recorder.Code, answer
+}
+
+// applyScoped submits one new scoped command, lets the coordinator apply it,
+// and requires the applied outcome.
+func (j *localJourney) applyScoped(requestID, scope, subject string, kind sessioncommand.Kind, revision int64, payload any) commandAnswer {
+	j.t.Helper()
+	if status, answer := j.postScoped(requestID, scope, subject, kind, revision, payload); status != http.StatusAccepted {
+		j.t.Fatalf("%s %s: status %d, answer %#v; want accepted", kind, requestID, status, answer)
+	}
+	j.coordinate()
+	answer := j.command(requestID)
+	if answer.Outcome != string(store.IdeationCommandApplied) {
+		j.t.Fatalf("%s %s: outcome %q (%s), want applied", kind, requestID, answer.Outcome, answer.Detail)
+	}
+	return answer
+}
+
+// pageState returns the disposition that the local issue list shows for
+// one stable issue identity.
+func (j *localJourney) pageState(id string) string {
+	j.t.Helper()
+	page := j.get("/issues").Body.String()
+	match := regexp.MustCompile(`data-local-issue="` + id + `" data-state="([a-z_]+)"`).FindStringSubmatch(page)
+	if match == nil {
+		j.t.Fatalf("local issue page lacks %s:\n%s", id, page)
+	}
+	return match[1]
 }
 
 // localPlanItem is one previewed local item as the plan page shows it.
@@ -389,8 +465,10 @@ func TestLocalBacklogJourneyStartsOneIssueAfterTheHumanSpecificationMerge(t *tes
 	if item := journey.backlogItem(id); item.State != "waiting_for_specification_merge" || item.AuthorizationID == "" {
 		t.Fatalf("backlog item = %#v, want an authorized wait for the specification merge", item)
 	}
-	journey.restartCoordinator()
-	journey.reconnectBrowser()
+	if state := journey.pageState(id); state != "waiting_for_specification_merge" {
+		t.Fatalf("local issue page shows %q, want the specification merge wait", state)
+	}
+	journey.restart()
 	if status, replay := resend(); status != http.StatusOK || replay.Outcome != string(store.IdeationCommandApplied) {
 		t.Fatalf("approve and start resent after a restart = %d %#v, want the stored outcome", status, replay)
 	}
@@ -403,7 +481,7 @@ func TestLocalBacklogJourneyStartsOneIssueAfterTheHumanSpecificationMerge(t *tes
 	if claimed.Run.BaseCheckpointSHA != target || journey.backlogItem(id).RunID != claimed.Run.ID {
 		t.Fatalf("claim = %#v, want the Run frozen at the squash commit %s", claimed, target)
 	}
-	journey.restartCoordinator()
+	journey.restart()
 	ready := journey.reviewReady(claimed.Run, 91)
 	journey.poll(factory.PollActiveRun)
 	if item := journey.backlogItem(id); item.RunID != ready.ID {
@@ -416,4 +494,141 @@ func TestLocalBacklogJourneyStartsOneIssueAfterTheHumanSpecificationMerge(t *tes
 		t.Fatalf("local claims = %#v, %v; want exactly one Run for the approved revision", claims, err)
 	}
 	journey.requireCheckoutUntouched()
+}
+
+// featureWithPDFDraft is a planning result with a parent and three tasks; the
+// documentation depends on the export and on a PDF export.
+func featureWithPDFDraft() report.Report {
+	return planReportForTest(
+		journeyNode("n-1", "parent", "Run history export", ""),
+		journeyNode("n-2", "task", "Add the export command", "n-1"),
+		journeyNode("n-3", "task", "Document the export", "n-1", "n-2", "n-4"),
+		journeyNode("n-4", "task", "Export to PDF", "n-1", "n-2"),
+	)
+}
+
+// TestLocalBacklogJourneyRunsAParentsTasksInDependencyOrder covers a parent
+// with dependent tasks: a change request and a revised draft, a decline that
+// must repair the dependency on the declined task, one specification commit
+// for the whole batch, a restart after every durable transition, and claims
+// in dependency order. Review-ready does not release the dependent; only the
+// human merge of the prerequisite on the fetched target does. The parent
+// never starts a Run.
+func TestLocalBacklogJourneyRunsAParentsTasksInDependencyOrder(t *testing.T) {
+	journey := newLocalJourney(t)
+	journey.reachLocalPlan(featureWithPDFDraft())
+
+	journey.apply("revise-1", sessioncommand.KindRegenerateDraft, sessioncommand.PlanRevisionPayload{PlanRevision: journey.journeySession().PlanRevision})
+	revised := featureWithPDFDraft()
+	revised.PlanDraft.Nodes[1].Title = "Add the factory export command"
+	journey.respond(revised)
+	nodes := sessioncommand.PlanNodesFromStore(journey.history().Plans[len(journey.history().Plans)-1].Nodes)
+	if nodes[1].Title != "Add the factory export command" {
+		t.Fatalf("revised draft = %#v, want the revised title", nodes)
+	}
+	declined := slices.DeleteFunc(slices.Clone(nodes), func(node sessioncommand.PlanNodeJSON) bool { return node.ID == "n-4" })
+	if answer := journey.submit("decline-dangling", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: declined}); answer.Outcome == string(store.IdeationCommandApplied) {
+		t.Fatalf("a decline that leaves a dangling dependency was applied: %#v", answer)
+	}
+	declined[2].DependsOn = []string{"n-2"}
+	journey.apply("decline-pdf", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: declined})
+	journey.restart()
+
+	approval, items := journey.localPreview("preview-1")
+	if len(items) != 3 || items["n-1"].Type != "parent" {
+		t.Fatalf("preview items = %#v, want the parent and two tasks without the declined task", items)
+	}
+	parent, export, docs := items["n-1"].Fields["local_id"], items["n-2"].Fields["local_id"], items["n-3"].Fields["local_id"]
+	branch := items["n-2"].Fields["specification_branch"]
+	journey.approveStart("approve-start-1", approval, export, docs)
+	journey.restart()
+	journey.requireReceipt(store.PublicationOutcomePublished)
+	journey.requireSpecificationCommit(branch, items["n-1"], items["n-2"], items["n-3"])
+	journey.poll(factory.PollNoWork)
+
+	journey.humanMergesSpecification(branch)
+	journey.restart()
+	first := journey.poll(factory.PollClaimed)
+	if item := journey.backlogItem(export); item.RunID != first.Run.ID {
+		t.Fatalf("first claim = %#v, want the export task before its dependent", item)
+	}
+	if state := journey.pageState(docs); state != "blocked_by_dependencies" {
+		t.Fatalf("dependent shows %q, want blocked_by_dependencies", state)
+	}
+
+	journey.restart()
+	ready := journey.reviewReady(first.Run, 91)
+	journey.restart()
+	journey.poll(factory.PollActiveRun)
+	if state := journey.pageState(docs); state != "blocked_by_dependencies" {
+		t.Fatalf("dependent shows %q while its prerequisite is only review-ready", state)
+	}
+
+	merged := journey.humanMergesImplementation("export.txt")
+	journey.restart()
+	journey.mergeImplementation(ready, merged)
+	journey.restart()
+	second := journey.poll(factory.PollClaimed)
+	if second.Run.BaseCheckpointSHA != merged || journey.backlogItem(docs).RunID != second.Run.ID {
+		t.Fatalf("second claim = %#v, want the dependent frozen at the merge %s", second.Run, merged)
+	}
+
+	journey.restart()
+	journey.mergeImplementation(journey.reviewReady(second.Run, 92), journey.humanMergesImplementation("docs.txt"))
+	journey.restart()
+	journey.poll(factory.PollNoWork)
+	if item := journey.backlogItem(parent); item.RunID != "" {
+		t.Fatalf("parent = %#v, want a grouping item without a Run", item)
+	}
+	claims, err := journey.store.LocalClaims(t.Context(), journey.repo)
+	if err != nil || len(claims) != 2 {
+		t.Fatalf("local claims = %#v, %v; want one Run per authorized task", claims, err)
+	}
+}
+
+// TestLocalBacklogJourneyAuthorizesCommittedWorkAfterTheSessionEnded covers
+// commit-only acceptance: publication starts nothing, the published session
+// is terminal, and a later exact execution preview and approval on the local
+// issue page start the work. A replayed approval adds no Run, and the Run
+// page's cancellation uses the ordinary Run semantics.
+func TestLocalBacklogJourneyAuthorizesCommittedWorkAfterTheSessionEnded(t *testing.T) {
+	journey := newLocalJourney(t)
+	journey.reachLocalPlan(planReportForTest(journeyNode("n-1", "task", "Add the factory export command", "")))
+	approval, items := journey.localPreview("preview-1")
+	id, branch := items["n-1"].Fields["local_id"], items["n-1"].Fields["specification_branch"]
+	journey.apply("approve-1", sessioncommand.KindApprove, approval)
+	if session := journey.journeySession(); session.State != store.IdeationStatePublished {
+		t.Fatalf("session = %s, want published", session.State)
+	}
+	journey.humanMergesSpecification(branch)
+	journey.restart()
+	journey.poll(factory.PollNoWork)
+	if state := journey.pageState(id); state != "missing_execution_approval" {
+		t.Fatalf("committed-only issue shows %q, want missing_execution_approval", state)
+	}
+
+	journey.applyScoped("execution-preview-1", "backlog", "repository", sessioncommand.KindPreviewExecution, 0, sessioncommand.ExecutionPreviewPayload{SelectedIssueIDs: []string{id}})
+	view, err := journey.service.LocalExecution(t.Context())
+	if err != nil || view.Preview == nil {
+		t.Fatalf("execution preview = %#v, %v", view, err)
+	}
+	preview := *view.Preview
+	journey.applyScoped("authorize-1", "backlog", "repository", sessioncommand.KindAuthorizeExecution, preview.Revision, authorizePreview(preview))
+	if status, replay := journey.postScoped("authorize-1", "backlog", "repository", sessioncommand.KindAuthorizeExecution, preview.Revision, authorizePreview(preview)); status != http.StatusOK || replay.Replayed == nil || !*replay.Replayed {
+		t.Fatalf("replayed authorization = %d %#v, want the stored command", status, replay)
+	}
+	journey.restart()
+	run := journey.poll(factory.PollClaimed).Run
+
+	controls, err := journey.service.LocalRunOperator(t.Context(), run.ID)
+	if err != nil || !slices.Contains(controls.Actions, string(sessioncommand.KindCancelRun)) {
+		t.Fatalf("Run controls = %#v, %v; want cancellation offered", controls, err)
+	}
+	journey.applyScoped("cancel-1", "run", run.ID, sessioncommand.KindCancelRun, controls.Revision, sessioncommand.RunOperatorPayload{PacketVersion: 1})
+	journey.restart()
+	journey.poll(factory.PollNoWork)
+	claims, err := journey.store.LocalClaims(t.Context(), journey.repo)
+	if err != nil || len(claims) != 1 {
+		t.Fatalf("local claims = %#v, %v; want the cancelled Run only", claims, err)
+	}
 }
