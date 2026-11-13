@@ -585,6 +585,8 @@ scenarios:
       - "internal/localpublication:TestUnobservablePRWriteRequiresReconciliation"
       - "internal/localpublication:TestMultipleMatchingSpecificationPRsStopPublication"
       - "internal/localpublication:TestPublicationRefusesGitFilterChangesBeforeCommit"
+      - "internal/localpublication:TestRejectedPushReleasesNothingAndRetryPushesOnce"
+      - "internal/localpublication:TestFailedSpecificationWriteRetriesIntoOneExactCommit"
       - "internal/factory:TestCancelledPublicationCannotReleaseItsOriginalAuthorizationEvenWithAllEffects"
       - "internal/factory:TestDeletedBaselineIsStaleRatherThanAProtectedTargetMergeWait"
       - "internal/factory:TestClaimReservationRecoversWorkspaceAndAtomicRunSave"
