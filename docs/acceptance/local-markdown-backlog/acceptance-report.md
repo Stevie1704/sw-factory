@@ -1,10 +1,10 @@
 # Factory acceptance report
 
-- Release: development (development), revision 7a39a566dbb05b6f443cf0ce7b59259463eba5b0, modified false
+- Release: development (development), revision fba38c575bd0debd9bf4a34aa97a52009fcf87cf, modified false
 - Platform: darwin/arm64
 - Host harness: not observed
 - Worker digest: not observed
-- Generated: 2026-11-13T17:39:13Z
+- Generated: 2026-11-13T18:42:32Z
 - Recorded duration: 0s
 
 A deterministic pass uses fake adapters. It is not evidence that an agent can use the release; only a live pass is.
@@ -33,7 +33,7 @@ A deterministic pass uses fake adapters. It is not evidence that an agent can us
 | `ideation-without-backlog` | not-run | not-run | none |
 | `ideation-recovery` | not-run | not-run | #265 |
 | `copilot-mixed-harness-recovery` | not-run | not-run | #281 |
-| `local-backlog-publish-and-start` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
+| `local-backlog-publish-and-start` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass: Gate and review are not driven for local issues; the journeys reach review-ready through a direct store write | none |
 | `local-backlog-authorize-committed` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
 | `local-backlog-recovery` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass | none |
 | `local-backlog-code-host-access` | not-run: not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized | pass: covers diagnosis and claim refusal; completion without a code host is follow-up scope | #300, #301 |
@@ -50,6 +50,7 @@ None recorded.
 
 ### `local-backlog-publish-and-start` (deterministic): pass
 
+- Reason: Gate and review are not driven for local issues; the journeys reach review-ready through a direct store write
 
 ### `local-backlog-authorize-committed` (live): not-run
 
