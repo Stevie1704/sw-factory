@@ -186,6 +186,10 @@ func (t *cleanupTransaction) Delete(ctx context.Context) (CleanupDeletionResult,
 		return result, nil
 	}
 	var err error
+	// Preserve local consumption and normal lifecycle proof after Run retention.
+	if _, err = t.tx.ExecContext(ctx, `UPDATE local_claims SET terminal_status=(SELECT status FROM operational_runs WHERE id=?),merge_sha=(SELECT merge_commit_sha FROM operational_runs WHERE id=?) WHERE run_id=?`, t.runID, t.runID, t.runID); err != nil {
+		return result, fmt.Errorf("retain local issue disposition: %w", err)
+	}
 	if result.PendingEffects, err = deleteCleanupRows(ctx, t.tx, "pending_effects", t.runID); err != nil {
 		return result, fmt.Errorf("delete pending effects for run %q: %w", t.runID, err)
 	}

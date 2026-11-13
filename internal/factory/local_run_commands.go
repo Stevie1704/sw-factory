@@ -41,6 +41,9 @@ func (s *Service) applyLocalRunCommand(ctx context.Context, registration config.
 	if command.Sequence < 1 {
 		return sessioncommand.Outcome{}, errors.New("local Run command requires durable inbox sequence")
 	}
+	if err := validateRunAdapter(registration, *run); err != nil {
+		return sessioncommand.Outcome{}, err
+	}
 	comment := tracker.Comment{ID: scopedCommentID("local_operator", strconv.FormatInt(command.Sequence, 10)), Author: registration.LocalOperator.Name, UpdatedAt: command.AcceptedAt}
 	// Ordinary effect recovery wins over revision validation: a packet transition
 	// may have crossed its durable boundary before the previous process stopped.
@@ -160,6 +163,9 @@ func (s *Service) LocalRunOperator(ctx context.Context, runID string) (LocalRunO
 	}
 	if run == nil || run.RepositoryPath != registration.Path {
 		return LocalRunOperatorView{}, errors.New("Run not found")
+	}
+	if err := validateRunAdapter(registration, *run); err != nil {
+		return LocalRunOperatorView{}, err
 	}
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {

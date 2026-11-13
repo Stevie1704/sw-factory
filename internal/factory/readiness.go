@@ -154,7 +154,7 @@ func (s *Service) finalizeReviewReadiness(ctx context.Context, registration conf
 // review. Only the PR-writer section changes.
 func (s *Service) publishPullRequestSummary(ctx context.Context, runStore RunStore, repository tracker.Repository, run store.Run, packet SpecificationPacket, existing codehost.PullRequest) (codehost.PullRequest, error) {
 	section := ""
-	if pullRequestSummarySettled(run) && run.PullRequestSummary.Status == store.PullRequestSummaryWritten {
+	if pullRequestSummarySettled(run) && run.PullRequestSummary.Status == store.PullRequestSummaryWritten && (packet.LocalSource == nil || !generatedRemoteReference.MatchString(run.PullRequestSummary.Body)) {
 		section = renderPullRequestSummarySection(*run.PullRequestSummary)
 	}
 	body := mergePullRequestSummarySection(existing.Body, section)
@@ -162,7 +162,7 @@ func (s *Service) publishPullRequestSummary(ctx context.Context, runStore RunSto
 		return existing, nil
 	}
 	request := codehost.PullRequestRequest{
-		Title:      defaultString(existing.Title, defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number))),
+		Title:      defaultString(existing.Title, localPullRequestTitle(packet)),
 		Body:       body,
 		HeadBranch: run.Branch,
 		BaseBranch: packet.RepositoryConfig.TargetBranch,

@@ -90,11 +90,7 @@ func (s *Service) previewLocalExecution(ctx context.Context, commandStore sessio
 	}
 	selected := slices.Clone(payload.(*sessioncommand.ExecutionPreviewPayload).SelectedIssueIDs)
 	slices.Sort(selected)
-	reader, ok := s.deps.Tracker.(tracker.CommittedIssueReader)
-	if !ok {
-		return sessioncommand.Outcome{}, errors.New("tracker cannot read immutable local source")
-	}
-	snapshot, err := reader.RefreshCommittedIssues(ctx)
+	snapshot, err := s.refreshLocalSource(ctx, registration)
 	if err != nil {
 		return sessioncommand.Outcome{}, err
 	}
@@ -193,11 +189,7 @@ func (s *Service) authorizeLocalExecution(ctx context.Context, commandStore sess
 	if err := s.executionBindingCurrent(registration, preview.Binding); err != nil {
 		return sessioncommand.Outcome{}, err
 	}
-	reader, ok := s.deps.Tracker.(tracker.CommittedIssueReader)
-	if !ok {
-		return sessioncommand.Outcome{}, errors.New("tracker cannot revalidate committed local source")
-	}
-	snapshot, err := reader.RefreshCommittedIssues(ctx)
+	snapshot, err := s.refreshLocalSource(ctx, registration)
 	if err != nil {
 		return sessioncommand.Outcome{}, err
 	}

@@ -127,6 +127,9 @@ func (s *Service) observeLifecycle(ctx context.Context, registration config.Repo
 	if store.IsTerminalStatus(run.Status) {
 		return LifecycleResult{Outcome: LifecycleUnchanged, Run: *run, Reason: run.LifecycleReason}, nil
 	}
+	if err := validateRunAdapter(registration, *run); err != nil {
+		return LifecycleResult{}, err
+	}
 
 	observation, err := s.observeGitHubLifecycle(ctx, registration, *run)
 	if err != nil {
@@ -174,7 +177,7 @@ type lifecycleObservation struct {
 // Classification is deliberately left to the caller, because a transition and a
 // read-only refusal report an uninterpretable lifecycle differently.
 func (s *Service) observeGitHubLifecycle(ctx context.Context, registration config.RepositoryRegistration, run store.Run) (lifecycleObservation, error) {
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return lifecycleObservation{}, fmt.Errorf("read issue lifecycle for run %q: %w", run.ID, err)
 	}

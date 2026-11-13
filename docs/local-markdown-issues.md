@@ -227,3 +227,73 @@ progression owns the subsequent invocation, so restart or a lost inbox response
 cannot append the answer twice or launch another invocation. Remote comment
 answer behavior is preserved. A changed source file never changes an active
 Run's frozen packet through this command surface.
+
+## Scheduling, claims, and recovery
+
+Every local queue observation fetches the **current** configured target through
+an isolated Git ref and retains its immutable commit. The same current-policy
+reader supplies fresh execution previews and authorization revalidation. Queue
+order is deterministic by stable issue ID. Labels never grant execution.
+
+The coordinator retains a read-only backlog projection with the observed commit,
+complete graph digest, timestamp, current source, authorization/publication
+evidence, and separate queue and Run dispositions. Reading it while stopped does
+no Git or network work. Its waiting reasons distinguish missing execution
+approval, incomplete/cancelled publication, specification merge wait, stale
+authorization, unmet dependencies, an occupied Run slot, unsupported
+investigations, unavailable committed source, and code-host unavailability.
+Parents remain visible grouping items. Publication-only items remain visible
+without an execution grant; session and branch links come from actual approval
+and publication ledger evidence rather than a file's correlation string.
+
+A publication grant requires the whole batch's successful ledger **and** final
+published receipt/session disposition. Successful Git effects followed by a
+cancelled or incomplete receipt release no work. Missing newly approved files
+can mean waiting for specification merge; deleting a pre-existing approved
+baseline item invalidates the grant. Once publication is durably complete and
+the exact complete graph is on target, normal deletion of its historical
+specification branch does not revoke target visibility. The projection reports
+that historical-ref drift. Incomplete effects still require reconciliation.
+
+An observed content, kind, relationship, complete-graph, or host/target policy
+change permanently invalidates pending authorization. Restoring old bytes does
+not revive it: preview and explicitly approve again. A byte-identical rename
+keeps content identity; the admitted packet records its actual path at the claim
+commit. A temporary transport failure blocks observation without inventing a
+source change. Every claim, including direct CLI claims, requires the supported
+PR/status/review/comment capabilities and successful independent code-host
+readiness before workspace or worker creation.
+
+Dependencies require the exact approved prerequisite revision's successful
+normal lifecycle completion and merge commit ancestry in the **same immutable
+target commit used for this claim**. Review-ready, human/input waits, failures,
+cancellations, closed-unmerged PRs, a host-only merge ahead of the fetched
+target, and unavailable ancestry do not release dependents. Cleanup retains the
+successful terminal/merge proof. Its identity includes installation, repository,
+code-host provider/repository, target branch, issue content, and full graph;
+completion on another target cannot satisfy a new target's authorization.
+
+Before creating a claim worktree, SQLite reserves a deterministic claim/Run
+identity with the exact base and packet. Retry adopts an owned clean worktree at
+that base; conflicting or dirty artifacts require inspection. Saving the Run
+and consuming the revision is one transaction. A lost response adopts that Run,
+including any later state, without repeating the claim. Fresh authorization for
+the same consumed revision/context cannot create a second Run. A reserved claim
+whose Run has not yet been saved blocks reset: resume or reconcile that claim
+first so reset cannot orphan its branch/worktree. Committed issue and
+specification history remain outside operational reset.
+
+Active local Runs use retained source bytes plus mutable local lifecycle
+projections. Deleting or invalidating the current source does not prevent
+cancellation or answering the frozen question. Local source refresh/revision
+commands are refused; new source needs a new explicit decision. Changing tracker
+registration cannot reinterpret an old remote Run's integer as a local issue or
+replay its effects; recovery requires restoring its original registration.
+
+Generated local PR content links the stable local identity, actual frozen path,
+commit, and content/graph digests. Unsafe issue-number references in generated
+titles use a stable-identity fallback. The generated body contains bounded
+provenance and a Gate count; detailed Gate/review evidence remains in Factory.
+Advisory PR-writer text containing remote work-item references is omitted with
+a visible failure reason. Human-authored PR sections remain preserved. Existing
+remote tracker PR rendering keeps its normal remote issue links.

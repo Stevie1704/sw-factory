@@ -74,6 +74,21 @@ and infrastructure retries. Changed content or relationships before claim requir
 fresh approval; an active Run keeps its frozen Specification packet. A changed
 prerequisite cannot release a dependent authorized against the old graph.
 
+Admission reserves the exact claim packet and target base durably before Git
+worktree creation, then atomically saves the Run and consumes the authorized
+revision. Deterministic recovery adopts matching owned artifacts and cannot
+reclaim a consumed issue/content/graph in the same installation, repository,
+code-host and target context. Retained cleanup proof includes the actual merge
+commit, which must be an ancestor of the same target snapshot as a dependent
+claim. Observed preclaim source/graph/policy drift permanently invalidates that
+grant; restoring old content requires a fresh explicit decision.
+
+Active local packets retain exact source bytes and provenance independently of
+the current graph; mutable lifecycle reads project against that frozen issue.
+Local refresh/revision cannot replace the accepted source. Generated code-host
+PR text uses local identities without remote integer-closing syntax, and unsafe
+advisory generated references are omitted while human-owned sections survive.
+
 Cleanup and reset retain committed source files and Git history. Reset removes
 operational authorization, identity projections, commands, and execution records.
 Recreating the store imports content only and never auto-runs retained files.

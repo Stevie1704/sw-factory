@@ -686,6 +686,11 @@ func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, n
 		// The test-stage policy owns its run transition after commitment.
 	case AcceptanceOutcomePullRequestSummary:
 		summary := pullRequestSummaryFromReport(snapshot.Invocation, snapshot.Report, previous.CheckpointSHA)
+		if packet, err := decodeSpecificationPacket(previous.SpecificationPacket); err == nil && packet.LocalSource != nil && generatedRemoteReference.MatchString(summary.Body) {
+			summary.Status = store.PullRequestSummaryFailed
+			summary.Body = ""
+			summary.Reason = "local PR advisory summary contained a remote work-item reference; use frozen local source identity"
+		}
 		next.PullRequestSummary = &summary
 		next.UpdatedAt = now
 	default:

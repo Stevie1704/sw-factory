@@ -48,8 +48,15 @@ func (s *Service) Doctor(ctx context.Context) (DoctorResult, error) {
 		}
 	}
 
-	checks = append(checks, s.trackerReadiness(repository)...)
-	if s.deps.CodeHostReadiness != nil {
+	adapterErr := s.runAdapterMismatch(ctx, registration)
+	if adapterErr != nil {
+		checks = append(checks, func(context.Context) doctor.Result {
+			return doctor.Failure(doctor.Condition{Code: "run.tracker.binding_changed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}, "persisted Run tracker binding", adapterErr.Error(), "restore the original tracker/installation/code-host registration before recovery; persisted effects were not replayed")
+		})
+	} else {
+		checks = append(checks, s.trackerReadiness(repository)...)
+	}
+	if s.deps.CodeHostReadiness != nil && adapterErr == nil {
 		checks = append(checks, s.deps.CodeHostReadiness.CodeHostStartupChecks(repository)...)
 	}
 	checks = append(checks, gitadapter.StartupChecks(s.doctorGitWorkspace(), gitadapter.DoctorRequest{

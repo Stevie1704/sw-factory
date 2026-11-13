@@ -84,7 +84,7 @@ func (h resultAcceptanceHandler) accept(ctx context.Context, runStore RunStore, 
 	// Keep the issue snapshot in the payload so replay does not have to infer
 	// it from the mutable repository configuration.
 	if h.issues != nil {
-		if issue, err := h.issues.Issue(ctx, payload.Repository, next.IssueNumber); err == nil {
+		if issue, err := observeIssueProjection(ctx, h.issues, payload.Repository, payload.Issue); err == nil {
 			payload.Issue = issue
 		}
 	}

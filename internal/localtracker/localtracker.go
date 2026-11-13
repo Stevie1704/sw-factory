@@ -166,7 +166,7 @@ func (c *Client) Refresh(ctx context.Context) (Snapshot, error) {
 	}
 	snapshot, err := c.Snapshot(ctx, revision)
 	if err != nil {
-		return Snapshot{}, err
+		return Snapshot{}, fmt.Errorf("%w: %w", tracker.ErrInvalidCommittedSource, err)
 	}
 	opened, err := c.open(ctx)
 	if err != nil {
@@ -192,6 +192,37 @@ func (c *Client) RefreshCommittedIssues(ctx context.Context) (tracker.CommittedS
 		result.Issues = append(result.Issues, tracker.CommittedIssue{Number: source.Number, Source: source.Issue})
 	}
 	return result, nil
+}
+
+// RefreshCommittedIssuesAt uses the current target without mutating adapter
+// configuration. Changing the registered checkout requires recomposition.
+func (c *Client) RefreshCommittedIssuesAt(ctx context.Context, repositoryPath, targetBranch string) (tracker.CommittedSnapshot, error) {
+	if repositoryPath != c.Registration.Path {
+		return tracker.CommittedSnapshot{}, errors.New("registered checkout changed; restart the coordinator to recompose adapters")
+	}
+	current := NewClient(c.Registration, targetBranch)
+	current.Runner, current.OpenStore, current.Now = c.Runner, c.OpenStore, c.Now
+	return current.RefreshCommittedIssues(ctx)
+}
+
+// ProjectIssue preserves frozen accepted content while reading operational
+// status. Missing or changed Git source cannot prevent Run recovery.
+func (c *Client) ProjectIssue(ctx context.Context, _ tracker.Repository, frozen tracker.Issue) (tracker.Issue, error) {
+	opened, err := store.OpenReadOnly(ctx, c.Registration.OperationalDataPath)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	defer opened.Close()
+	mapping, err := opened.LocalIssueIdentityByNumber(ctx, c.Registration.Path, frozen.Number)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	projection, err := opened.LocalIssueProjection(ctx, c.Registration.Path, mapping.ID)
+	if err != nil {
+		return tracker.Issue{}, err
+	}
+	frozen.State, frozen.Labels = projection.State, slices.Clone(projection.Labels)
+	return frozen, nil
 }
 
 // ReadCommittedIssues revalidates exact Git bytes and reads existing mappings;
@@ -364,8 +395,35 @@ func (c *Client) StartupChecks(_ tracker.Repository) []doctor.Check {
 			_, err = c.Snapshot(ctx, strings.TrimSpace(string(output)))
 		}
 		if err != nil {
+			if c.hasActiveClaim(ctx) {
+				return doctor.Warning(doctor.Condition{Code: "local_tracker.source.changed_with_frozen_run", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}, "local Markdown source", "current source cannot be validated; the active Run retains its frozen accepted source", "repair the committed graph before approving further work; supported recovery for the existing Run remains available")
+			}
 			return doctor.Failure(doctor.Condition{Code: "local_tracker.source.unavailable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "setup", Unobserved: true}, "local Markdown source", "the committed local issue graph or target ref cannot be validated", "fetch the configured target branch and repair docs/issues schema, paths, and relationships; no remote issue login is required")
 		}
 		return doctor.Success("local_tracker.source.ready", "local Markdown source")
 	}}
+}
+
+// hasActiveClaim recognizes durable coordinator-created local claim evidence;
+// a file or label cannot make invalid source pass startup diagnosis.
+func (c *Client) hasActiveClaim(ctx context.Context) bool {
+	opened, err := store.OpenReadOnly(ctx, c.Registration.OperationalDataPath)
+	if err != nil {
+		return false
+	}
+	defer opened.Close()
+	run, err := opened.CurrentRun(ctx)
+	if err != nil || run == nil {
+		return false
+	}
+	claims, err := opened.LocalClaims(ctx, c.Registration.Path)
+	if err != nil {
+		return false
+	}
+	for _, claim := range claims {
+		if claim.RunID == run.ID && claim.State == "claimed" {
+			return true
+		}
+	}
+	return false
 }

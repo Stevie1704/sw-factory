@@ -26,6 +26,24 @@ type Adapter struct {
 	*Publisher
 }
 
+// RefreshCommittedIssuesAt keeps current-target observation behind its port.
+func (a *Adapter) RefreshCommittedIssuesAt(ctx context.Context, path, target string) (tracker.CommittedSnapshot, error) {
+	reader, ok := a.Client.(tracker.TargetCommittedIssueReader)
+	if !ok {
+		return tracker.CommittedSnapshot{}, errors.New("local tracker cannot observe current target policy")
+	}
+	return reader.RefreshCommittedIssuesAt(ctx, path, target)
+}
+
+// ProjectIssue keeps frozen Run content independent of live source validity.
+func (a *Adapter) ProjectIssue(ctx context.Context, repo tracker.Repository, frozen tracker.Issue) (tracker.Issue, error) {
+	reader, ok := a.Client.(tracker.IssueProjectionReader)
+	if !ok {
+		return tracker.Issue{}, errors.New("local tracker cannot read lifecycle projection")
+	}
+	return reader.ProjectIssue(ctx, repo, frozen)
+}
+
 // Wrap preserves tracker capabilities while adding content-only publication.
 func Wrap(client tracker.Client, publisher *Publisher) *Adapter {
 	return &Adapter{Client: client, Publisher: publisher}
