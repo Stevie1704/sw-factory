@@ -214,17 +214,27 @@ func (d *Dispatcher) takeFailures() error {
 	return errors.Join(failed...)
 }
 
+// commandSubjectKey gives claim and release the same scope-qualified owner.
+func commandSubjectKey(command store.IdeationCommand) string {
+	scope := EffectiveScope(command)
+	subject := command.SubjectID
+	if scope == "session" {
+		subject = command.SessionID
+	}
+	return scope + ":" + subject
+}
+
 // claim reserves command for this dispatcher. A running command, or tracker
 // work for a session that already has tracker work, is not claimed.
 func (d *Dispatcher) claim(command store.IdeationCommand, background bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running[command.RequestID] || (background && d.busy[EffectiveScope(command)+":"+command.SessionID+command.SubjectID]) {
+	if d.running[command.RequestID] || (background && d.busy[commandSubjectKey(command)]) {
 		return false
 	}
 	d.running[command.RequestID] = true
 	if background {
-		d.busy[EffectiveScope(command)+":"+command.SessionID+command.SubjectID] = true
+		d.busy[commandSubjectKey(command)] = true
 	}
 	return true
 }
@@ -235,7 +245,7 @@ func (d *Dispatcher) release(command store.IdeationCommand, background bool) {
 	defer d.mu.Unlock()
 	delete(d.running, command.RequestID)
 	if background {
-		delete(d.busy, command.SessionID)
+		delete(d.busy, commandSubjectKey(command))
 	}
 }
 
