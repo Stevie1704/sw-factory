@@ -39,6 +39,9 @@ type executionPreviewView struct {
 	store.LocalExecutionPreview
 	Issues []executionIssueView
 	Stale  bool
+	// Approved reports an existing authorization of this exact preview; a
+	// second approval needs a new preview.
+	Approved bool
 }
 
 // localPage holds only retained coordinator projections, including while stopped.
@@ -88,6 +91,7 @@ func (ui *server) localIssues(w http.ResponseWriter, r *http.Request) {
 	if preview := execution.Preview; preview != nil && (id == "" || slices.Contains(preview.Binding.SelectedIssueIDs, id)) {
 		view := executionPreviewView{LocalExecutionPreview: *preview}
 		view.Stale = backlog.Projection.Error != "" || backlog.Projection.GraphDigest != "" && backlog.Projection.GraphDigest != preview.Binding.GraphDigest
+		view.Approved = slices.ContainsFunc(execution.Authorizations, func(auth store.LocalExecutionAuthorization) bool { return auth.PreviewID == preview.ID })
 		for _, issue := range preview.Binding.Issues {
 			title := issue.ID
 			if parsed, err := localissues.Parse(issue.Path, issue.Bytes); err == nil {

@@ -182,6 +182,27 @@ func TestFreshExecutionPreviewShowsExactBindingAndSuppressesStaleApproval(t *tes
 	}
 }
 
+// TestApprovedPreviewOffersNoSecondApproval hides the approve form once an
+// authorization exists for the displayed preview, so one preview cannot be
+// approved twice. A new preview offers the form again.
+func TestApprovedPreviewOffersNoSecondApproval(t *testing.T) {
+	ui := newSessionUI(t, false)
+	views := localFixtureViews(t)
+	issue := views.backlog.Projection.Items[0].Issue
+	binding := store.LocalExecutionBinding{SourceRevision: baseSHA, GraphDigest: views.backlog.Projection.GraphDigest, PublicationPolicy: "target_visible", OperatorName: "operator", Issues: []store.LocalExecutionIssue{issue}, SelectedIssueIDs: []string{localID}}
+	views.execution.Preview = &store.LocalExecutionPreview{ID: "preview-1", Revision: 3, Binding: binding}
+	views.execution.Authorizations = []store.LocalExecutionAuthorization{{RequestID: "approval-1", PreviewID: "preview-1", Binding: binding}}
+	service := factory.NewWithDependencies(ui.configPath, factory.Dependencies{})
+	page := get(t, webui.NewHandler(service, webui.Options{Sessions: service, Local: views}), "/issues/"+localID).Body.String()
+	assertContains(t, page, `data-execution-preview="preview-1"`, "already approved")
+	if strings.Contains(page, `data-session-command="authorize_execution"`) {
+		t.Fatal("approved preview offered a second approval")
+	}
+	views.execution.Preview = &store.LocalExecutionPreview{ID: "preview-2", Revision: 4, Binding: binding}
+	page = get(t, webui.NewHandler(service, webui.Options{Sessions: service, Local: views}), "/issues/"+localID).Body.String()
+	assertContains(t, page, `data-session-command="authorize_execution"`)
+}
+
 // TestScopedLocalSubmissionUsesProtectedInboxAndStoppedReplay uses the real
 // admission/store seam: accepted once, unavailable when stopped, replay retained.
 func TestScopedLocalSubmissionUsesProtectedInboxAndStoppedReplay(t *testing.T) {
