@@ -525,7 +525,7 @@ func planRevisionChanges(before, after store.PlanRevision) []planChange {
 	}
 	for _, node := range before.Nodes {
 		if !current[node.ID] {
-			changes = append(changes, planChange{Decision: "Declined", NodeID: node.ID, Title: node.Title, Fields: []planFieldChange{{Field: "Body", Before: node.Body}, {Field: "Acceptance criteria", Before: strings.Join(node.AcceptanceCriteria, "\n")}}})
+			changes = append(changes, planChange{Decision: "Removed", NodeID: node.ID, Title: node.Title, Fields: []planFieldChange{{Field: "Body", Before: node.Body}, {Field: "Acceptance criteria", Before: strings.Join(node.AcceptanceCriteria, "\n")}}})
 		}
 	}
 	return changes

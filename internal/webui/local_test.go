@@ -58,7 +58,7 @@ func TestLocalPlanSeparatesCommitAcceptanceFromExplicitSelectedExecution(t *test
 	ui.send(t, "preview-local", sessioncommand.KindPreviewPlan, ui.history(t).Session.Revision, `{"plan_revision":1}`)
 	ui.drain(t)
 	page := ui.page(t)
-	assertContains(t, page, "Accept and commit", "Approve and start", `data-session-command="approve_start"`, `name="selected_issue_ids"`, "waiting for specification merge", "Exact approved Markdown.", "factory/specifications/batch")
+	assertContains(t, page, "Accept and commit", "Approve and start", `data-session-command="approve_start"`, `name="selected_issue_ids"`, "waiting for specification merge", "protected target branch can require a human to merge", "Exact approved Markdown.", "factory/specifications/batch")
 	if strings.Contains(page, "Mark items ready for the factory in the tracker") {
 		t.Fatal("local page suggests remote labels grant authority")
 	}
@@ -324,5 +324,5 @@ func TestDraftRevisionShowsDeclinesAndExactChangedCriteria(t *testing.T) {
 	if command := ui.command(t, "decline-and-edit"); command.Outcome != store.IdeationCommandApplied {
 		t.Fatalf("draft change=%s %s", command.Outcome, command.Detail)
 	}
-	assertContains(t, ui.page(t), "Declined n-3", "Acceptance criteria", "A second onboarding pulls no image.", "Current acceptance criterion.", "plan revision 2")
+	assertContains(t, ui.page(t), "Removed n-3", "Acceptance criteria", "A second onboarding pulls no image.", "Current acceptance criterion.", "plan revision 2")
 }
