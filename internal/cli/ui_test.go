@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -176,4 +177,32 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buffer.String()
+}
+
+// TestRunUIReportsAnUnreadableHostConfiguration names the load error when the
+// UI cannot decide whether to offer local issue pages, instead of hiding it.
+func TestRunUIReportsAnUnreadableHostConfiguration(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("repositories: [unterminated\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := &lockedBuffer{}
+	done := make(chan int, 1)
+	go func() {
+		done <- cli.Run(ctx, []string{"ui", "--config", configPath, "--address", "127.0.0.1:0"}, output, output)
+	}()
+	waitForUIURL(t, output, done)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("ui did not stop after cancel")
+	}
+	if !strings.Contains(output.String(), "local issue pages are unavailable") {
+		t.Fatalf("output = %q, want the host configuration load error", output.String())
+	}
 }

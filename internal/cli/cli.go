@@ -297,7 +297,14 @@ func runUI(ctx context.Context, args []string, defaultConfigPath string, output,
 	}
 	service := newService(*configPath)
 	options := webui.Options{RefreshInterval: *refresh, Sessions: service}
-	if host, err := config.LoadHost(*configPath); err == nil && len(host.Repositories) > 0 && host.Repositories[0].EffectiveTracker() == config.ProviderLocal {
+	host, err := config.LoadHost(*configPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// The UI still serves; its pages report store and registration errors.
+		if !writeOutput(errorsOutput, errorsOutput, "factory ui: local issue pages are unavailable: %v\n", err) {
+			return 1
+		}
+	}
+	if err == nil && len(host.Repositories) > 0 && host.Repositories[0].EffectiveTracker() == config.ProviderLocal {
 		options.Local = service
 	}
 	handler := webui.NewHandler(service, options)
