@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 )
 
@@ -27,6 +28,9 @@ func (s *Service) inferRegistration(ctx context.Context, request RegisterRequest
 	needsOwner := strings.TrimSpace(request.GitHubOwner) == ""
 	needsName := strings.TrimSpace(request.GitHubRepository) == ""
 	needsUsers := len(request.AuthorizedUsers) == 0
+	if request.Tracker == config.ProviderLocal && needsUsers {
+		return RegisterRequest{}, nil, errors.New("local registration requires explicit --authorized-user code-host reviewer identities; no remote tracker account is inferred")
+	}
 	inferred := make([]InferredValue, 0, 4)
 	if needsRepository || needsOwner || needsName {
 		discovery, err := s.discoverRegistrationRepository(ctx, request)

@@ -731,6 +731,9 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	repositoryPath := flags.String("repository", "", "registered repository path; inferred from the current Git checkout when omitted")
 	githubOwner := flags.String("github-owner", "", "GitHub repository owner; inferred from the checkout's origin remote when omitted")
 	githubRepository := flags.String("github-repository", "", "GitHub repository name; inferred from the checkout's origin remote when omitted")
+	trackerProvider := flags.String("tracker", "", "work tracker: local or github; omitted retains combined GitHub behavior")
+	codeHostProvider := flags.String("code-host", "", "code host: github; Azure Repos uses the private host configuration route")
+	localOperator := flags.String("local-operator", "", "explicit local operator name for --tracker local; installation identity is generated")
 	operationalDataPath := flags.String("operational-data", "", "SQLite operational data path")
 	pollingInterval := flags.String("poll-interval", "30s", "polling interval")
 	pollingBackoff := flags.String("poll-backoff", "5m", "transport backoff")
@@ -754,6 +757,9 @@ func runRegister(ctx context.Context, args []string, defaultConfigPath string, o
 	}
 	service := newService(*configPath)
 	result, err := service.Register(ctx, factory.RegisterRequest{
+		Tracker:              config.Provider(*trackerProvider),
+		CodeHost:             config.Provider(*codeHostProvider),
+		LocalOperator:        config.LocalOperatorConfig{Name: *localOperator},
 		Update:               *update,
 		RepositoryPath:       *repositoryPath,
 		GitHubOwner:          *githubOwner,

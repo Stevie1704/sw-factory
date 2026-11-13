@@ -178,7 +178,10 @@ type Dependencies struct {
 	// Lease publishes the coordinator's visible heartbeat. It is optional.
 	Lease          tracker.LeaseClient
 	CommitStatuses codehost.CommitStatusPublisher
-	Worktree       gitadapter.WorktreeManager
+	// CodeHostReadiness diagnoses an independently configured code host. Nil
+	// preserves legacy combined-provider readiness checks.
+	CodeHostReadiness codehost.ReadinessChecker
+	Worktree          gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
 	GitWorkspace gitadapter.GitWorkspace
 	// RepositoryDiscoverer resolves the checkout root and GitHub identity used
@@ -264,6 +267,13 @@ type InitResult struct {
 }
 
 type RegisterRequest struct {
+	// Tracker and CodeHost explicitly select independent host adapters. Empty
+	// values preserve legacy combined GitHub registration and inference.
+	Tracker  config.Provider
+	CodeHost config.Provider
+	// LocalOperator supplies explicit host authority provenance; Register
+	// generates its installation identity when a local operator is selected.
+	LocalOperator config.LocalOperatorConfig
 	// Update requests changing credential-source fields on the matching
 	// existing repository registration instead of creating one.
 	Update              bool
@@ -343,6 +353,8 @@ type StatusResult struct {
 type Provider string
 
 const (
+	// ProviderLocal is a committed Markdown work tracker with a separate host.
+	ProviderLocal Provider = "local"
 	// ProviderGitHub is a GitHub registration.
 	ProviderGitHub Provider = "github"
 	// ProviderAzureDevOps is an Azure DevOps registration.
@@ -351,10 +363,7 @@ const (
 
 // providerOf returns the provider a registration selects.
 func providerOf(registration config.RepositoryRegistration) Provider {
-	if !registration.AzureDevOps.IsZero() {
-		return ProviderAzureDevOps
-	}
-	return ProviderGitHub
+	return Provider(registration.EffectiveTracker())
 }
 
 // StatusSource names the part of status collection that failed.
@@ -561,6 +570,13 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 	if err != nil {
 		return RegisterResult{}, err
 	}
+	if request.Tracker == config.ProviderLocal && request.LocalOperator.InstallationID == "" {
+		identity, err := uuid.NewRandom()
+		if err != nil {
+			return RegisterResult{}, fmt.Errorf("generate installation identity: %w", err)
+		}
+		request.LocalOperator.InstallationID = "install-" + strings.ReplaceAll(identity.String(), "-", "")
+	}
 	repositoryPath, err := s.resolveRepositoryPath(request.RepositoryPath)
 	if err != nil {
 		return RegisterResult{}, err
@@ -591,6 +607,9 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 		return RegisterResult{}, err
 	}
 	registration := config.RepositoryRegistration{
+		Tracker:              request.Tracker,
+		CodeHost:             request.CodeHost,
+		LocalOperator:        request.LocalOperator,
 		Path:                 repositoryPath,
 		GitHub:               config.GitHubConfig{Owner: strings.TrimSpace(request.GitHubOwner), Repository: strings.TrimSpace(request.GitHubRepository)},
 		AuthorizedUsers:      request.AuthorizedUsers,
@@ -619,6 +638,9 @@ func (s *Service) Register(ctx context.Context, request RegisterRequest) (Regist
 // updateRegistration changes the explicitly supplied credential sources on an
 // existing registration after proving the requested checkout is the same one.
 func (s *Service) updateRegistration(ctx context.Context, host config.HostConfig, request RegisterRequest) (RegisterResult, error) {
+	if request.Tracker != "" || request.CodeHost != "" || request.LocalOperator != (config.LocalOperatorConfig{}) {
+		return RegisterResult{}, errors.New("credential updates cannot change tracker, code host, or local operator; use explicit private host configuration for provider registration changes")
+	}
 	if strings.TrimSpace(request.CodexAuthPath) == "" && strings.TrimSpace(request.ClaudeAuthPath) == "" && strings.TrimSpace(request.CopilotAuthPath) == "" {
 		return RegisterResult{}, errors.New("registration update requires --codex-auth, --claude-auth, or --copilot-auth")
 	}

@@ -13,8 +13,9 @@ import (
 // root in internal/cli selects the GitHub or Azure DevOps adapter.
 func TestDomainReachesTheTrackerOnlyThroughPorts(t *testing.T) {
 	adapters := map[string]bool{
-		"github.com/Stevie1704/sw-factory/internal/github":      true,
-		"github.com/Stevie1704/sw-factory/internal/azuredevops": true,
+		"github.com/Stevie1704/sw-factory/internal/github":       true,
+		"github.com/Stevie1704/sw-factory/internal/azuredevops":  true,
+		"github.com/Stevie1704/sw-factory/internal/localtracker": true,
 	}
 	output, err := exec.CommandContext(t.Context(), "go", "list", "-deps", "-f", "{{.ImportPath}}", ".", "../effect", "../gate", "../webui", "../publication", "../sessioncommand").Output()
 	if err != nil {

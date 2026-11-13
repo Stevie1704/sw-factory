@@ -148,3 +148,15 @@ type LeaseClient interface {
 type ReadinessChecker interface {
 	StartupChecks(Repository) []doctor.Check
 }
+
+// SeparateCommentStreams marks adapters whose issue IDs and comment IDs do not
+// share the configured code host's namespace. The coordinator scopes durable
+// command watermarks rather than comparing unrelated provider identities.
+type SeparateCommentStreams interface {
+	SeparateIssueCommentStream() bool
+}
+
+// IssueURLProvider supplies a human link without fabricating a remote issue URL.
+type IssueURLProvider interface {
+	IssueURL(context.Context, Repository, int) (string, error)
+}

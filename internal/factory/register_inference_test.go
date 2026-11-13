@@ -123,6 +123,24 @@ func TestRegisterInfersEveryMissingValueFromASubdirectory(t *testing.T) {
 	}
 }
 
+// TestRegisterLocalTrackerNeverInfersARemoteAccount exercises the host-owned
+// operator identity while code-host reviewer identities remain explicit.
+func TestRegisterLocalTrackerNeverInfersARemoteAccount(t *testing.T) {
+	fixture := newInferenceFixture(t)
+	fixture.account.err = errors.New("remote tracker access blocked")
+	_, err := fixture.service.Register(t.Context(), factory.RegisterRequest{Tracker: config.ProviderLocal, CodeHost: config.ProviderGitHub, LocalOperator: config.LocalOperatorConfig{Name: "local operator"}, WorkingDirectory: fixture.repository, AuthorizedUsers: []string{"reviewer"}, OperationalDataPath: filepath.Join(fixture.stateFolder, "factory.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixture.account.callCount != 0 {
+		t.Fatal("local tracker requested a remote tracker account")
+	}
+	registration := loadRegistration(t, fixture.configPath)
+	if registration.EffectiveTracker() != config.ProviderLocal || registration.LocalOperator.Name != "local operator" || !strings.HasPrefix(registration.LocalOperator.InstallationID, "install-") {
+		t.Fatalf("local registration = %#v", registration)
+	}
+}
+
 // TestRegisterLetsExplicitFlagsOverrideInferenceIndependently verifies each
 // explicit registration value replaces exactly one inferred value.
 func TestRegisterLetsExplicitFlagsOverrideInferenceIndependently(t *testing.T) {

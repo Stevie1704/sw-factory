@@ -11,8 +11,15 @@ import (
 	"context"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
+
+// ReadinessChecker diagnoses code-host requirements independently of issue
+// tracking. Local trackers must not inherit combined Boards/Issues checks.
+type ReadinessChecker interface {
+	CodeHostStartupChecks(tracker.Repository) []doctor.Check
+}
 
 // PullRequest is the pull-request identity and body returned to the
 // coordinator after a host-side code-host operation.

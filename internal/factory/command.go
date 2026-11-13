@@ -127,6 +127,9 @@ type CommandRequest struct {
 	RunID string
 	// IssueNumber identifies the issue or pull request being commented on.
 	IssueNumber int
+	// Stream names issue or pull_request for adapters with unrelated comment
+	// namespaces. It is required when both targets have the same number.
+	Stream string
 	// Comment contains the immutable comment identity, author, and body.
 	Comment tracker.Comment
 }
@@ -185,6 +188,13 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	}
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
+	}
+	if s.separateIssueCommentStream() {
+		stream, err := commandStream(*run, request)
+		if err != nil {
+			return CommandResult{Outcome: CommandRejected, Run: *run}, err
+		}
+		request.Comment.ID = scopedCommentID(stream, request.Comment.ID)
 	}
 	if eventIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
@@ -1141,7 +1151,7 @@ func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Contex
 // packet change resumption, ensuring retryability when startAgentWithStore fails.
 func (s *Service) persistPacketChangeWatermark(ctx context.Context, runStore RunStore, run store.Run, commentID string) (store.Run, error) {
 	previousRevision := run.Revision
-	run.ProcessedCommentID = commentID
+	run.ProcessedCommentID = mergeCommentWatermark(run.ProcessedCommentID, commentID)
 	run.ProcessedCommentRevision = run.Revision + 1
 	run.Revision = run.ProcessedCommentRevision
 	run.UpdatedAt = s.deps.Now().UTC()
@@ -1264,7 +1274,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target.number, listErr)}
 		}
 		for _, comment := range listed {
-			comments = append(comments, polledComment{target: target.number, comment: comment})
+			comments = append(comments, polledComment{target: target.number, stream: target.stream, comment: comment})
 		}
 	}
 	sort.SliceStable(comments, func(left, right int) bool {
@@ -1277,7 +1287,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 		if !parsed.Recognized {
 			continue
 		}
-		result, handleErr := s.handleRecognizedCommand(ctx, registration, runStore, &currentRun, CommandRequest{RunID: currentRun.ID, IssueNumber: polled.target, Comment: polled.comment}, parsed, parseErr)
+		result, handleErr := s.handleRecognizedCommand(ctx, registration, runStore, &currentRun, CommandRequest{RunID: currentRun.ID, IssueNumber: polled.target, Stream: polled.stream, Comment: polled.comment}, parsed, parseErr)
 		if result.Run.ID != "" {
 			currentRun = result.Run
 		}
@@ -1299,6 +1309,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 // because GitHub's comment object does not repeat its parent target.
 type polledComment struct {
 	target  int
+	stream  string
 	comment tracker.Comment
 }
 
@@ -1306,6 +1317,7 @@ type polledComment struct {
 // run's issue, or its pull request through the code-host seam.
 type commentTarget struct {
 	number   int
+	stream   string
 	comments func(context.Context, tracker.Repository) ([]tracker.Comment, error)
 }
 
@@ -1315,7 +1327,7 @@ type commentTarget struct {
 // issue's number is the same stream and is read once.
 func (s *Service) commentTargets(run store.Run) []commentTarget {
 	issue := run.IssueNumber
-	targets := []commentTarget{{number: issue, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+	targets := []commentTarget{{number: issue, stream: "issue", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 		return s.deps.Comments.IssueComments(ctx, repository, issue)
 	}}}
 	pullRequest := run.PullRequestNumber
@@ -1323,14 +1335,14 @@ func (s *Service) commentTargets(run store.Run) []commentTarget {
 		return targets
 	}
 	if reader := s.pullRequestCommentReader(); reader != nil {
-		return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+		return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 			return reader.PullRequestComments(ctx, repository, pullRequest)
 		}})
 	}
 	if pullRequest == issue {
 		return targets
 	}
-	return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+	return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 		return s.deps.Comments.IssueComments(ctx, repository, pullRequest)
 	}})
 }
@@ -1640,7 +1652,7 @@ func (s *Service) recoverCommandStatusComment(ctx context.Context, registration 
 func commandProjection(previous store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) store.Run {
 	next := previous
 	next.Revision = previous.Revision + 1
-	next.ProcessedCommentID = comment.ID
+	next.ProcessedCommentID = mergeCommentWatermark(previous.ProcessedCommentID, comment.ID)
 	next.ProcessedCommentRevision = next.Revision
 	next.LastCommandName = name
 	next.LastCommandOutcome = string(CommandAccepted)
@@ -1712,6 +1724,10 @@ func authorizedCommentAuthor(authorized []string, author string) bool {
 func eventIDAlreadyProcessed(processed, current string) bool {
 	if strings.TrimSpace(processed) == "" || strings.TrimSpace(current) == "" {
 		return false
+	}
+	if stream, identity, ok := splitScopedCommentID(current); ok {
+		last := commentWatermarks(processed)[stream]
+		return last != "" && compareEventIDs(identity, last) <= 0
 	}
 	return compareEventIDs(current, processed) <= 0
 }
