@@ -283,6 +283,15 @@ whose Run has not yet been saved blocks reset: resume or reconcile that claim
 first so reset cannot orphan its branch/worktree. Committed issue and
 specification history remain outside operational reset.
 
+New reservation checks the latest decision selecting that issue while holding
+the store's write lock. A newer decision committed after queue observation
+supersedes its older pending authority; an already admitted matching intent
+remains recoverable. The running supervisor also reloads private registration
+before observation/recovery/claim boundaries. Installation, operator, code-host,
+checkout/store path, or policy-path composition changes require restart and
+adapter recomposition before further queue effects; the captured registration
+cannot keep authorizing new work.
+
 Active local Runs use retained source bytes plus mutable local lifecycle
 projections. Deleting or invalidating the current source does not prevent
 cancellation or answering the frozen question. Local source refresh/revision

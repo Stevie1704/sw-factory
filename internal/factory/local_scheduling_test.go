@@ -298,6 +298,74 @@ func TestCurrentTargetOverridesCompositionForPreviewAndClaim(t *testing.T) {
 	}
 }
 
+// schedulingLeaseFunc changes private configuration after Start has captured
+// registration, at the public lease boundary before the first queue pass.
+type schedulingLeaseFunc func()
+
+// RenewLease invokes the deterministic running-service observation hook.
+func (f schedulingLeaseFunc) RenewLease(context.Context, tracker.Repository, tracker.Lease) error {
+	f()
+	return nil
+}
+
+// TestRunningLocalSupervisorRejectsPrivateRegistrationDrift covers a live
+// service rather than a fresh direct-claim request that already reloads config.
+func TestRunningLocalSupervisorRejectsPrivateRegistrationDrift(t *testing.T) {
+	for _, kind := range []string{"installation", "operator", "code-host", "repository-path"} {
+		t.Run(kind, func(t *testing.T) {
+			issue := schedulingTask("local-00112233445566778899aabbccddeeff", "Export")
+			f := newScheduleFixture(t, issue)
+			f.authorize(t, "approve", issue.ID)
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			changed := false
+			lease := schedulingLeaseFunc(func() {
+				if changed {
+					return
+				}
+				changed = true
+				host, err := config.LoadHost(f.configPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r := &host.Repositories[0]
+				switch kind {
+				case "installation":
+					r.LocalOperator.InstallationID = "install-112233445566778899aabbccddeeff00"
+				case "operator":
+					r.LocalOperator.Name = "another-operator"
+				case "code-host":
+					r.GitHub.Repository = "another-service"
+				case "repository-path":
+					r.Path = t.TempDir()
+					r.OperationalDataPath = filepath.Join(r.Path, "factory.db")
+				}
+				if err := config.SaveHost(f.configPath, host); err != nil {
+					t.Fatal(err)
+				}
+			})
+			service := factory.NewWithDependencies(f.configPath, factory.Dependencies{Tracker: f.source, Worktree: f.manager, GitWorkspace: f.manager, Worker: &agentWorker{}, HeadlessHarnesses: testHeadlessHarnesses(&agentHarness{}), PullRequests: f.host, CommitStatuses: f.host, PullRequestReviews: f.host, PullRequestComments: f.host, PullRequestCommentPublisher: f.host, CodeHostReadiness: f.host, Lease: lease, StartupDiagnosis: func(context.Context) (factory.DoctorResult, error) { return factory.DoctorResult{}, nil }, LoadRepository: func(string) (config.RepositoryConfig, error) { return *f.policy, nil }, Now: func() time.Time { return sessionCommandNow }})
+			err := service.Start(ctx, factory.EventSinkFunc(func(event factory.CoordinatorEvent) {
+				if event.Kind == factory.EventPollPass {
+					cancel()
+				}
+			}))
+			if !changed {
+				t.Fatal("Start did not reach the private registration change")
+			}
+			if err != nil && !strings.Contains(err.Error(), "recompose") {
+				t.Fatalf("registration drift refusal=%v", err)
+			}
+			f.withStore(func(db *store.Store) {
+				run, err := db.CurrentRun(t.Context())
+				if err != nil || run != nil {
+					t.Fatalf("old captured authority started work: %#v,%v", run, err)
+				}
+			})
+		})
+	}
+}
+
 // TestCodeHostUnavailablePreventsDirectLocalClaim checks the finite mutation
 // seam as well as the supervised queue; no Run or worker slot is created.
 func TestCodeHostUnavailablePreventsDirectLocalClaim(t *testing.T) {
