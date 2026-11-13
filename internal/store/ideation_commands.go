@@ -67,6 +67,9 @@ const (
 // IdeationCommand is one browser request in the durable session command
 // inbox. The local UI appends it; only the coordinator applies it.
 type IdeationCommand struct {
+	// Scope defaults to session; backlog/run commands use SubjectID independently.
+	Scope     string
+	SubjectID string
 	// RequestID is the browser-chosen idempotency key. It is unique in the
 	// inbox.
 	RequestID string
@@ -121,13 +124,16 @@ type IdeationCommandResult struct {
 
 // ideationCommandColumns is the column order that scanIdeationCommand decodes.
 const ideationCommandColumns = `request_id, session_id, kind, expected_revision, payload, sequence, state, attempts,
-	outcome, detail, session_revision, result, accepted_at, completed_at`
+	outcome, detail, session_revision, result, accepted_at, completed_at, scope, subject_id`
 
 // AcceptIdeationCommand appends command to the inbox in the accepted state. A
 // stored command with the same request ID and content is a replay: it returns
 // the stored command, with any outcome, and true. The same ID with other
 // content returns ErrIdeationRequestReused.
 func (s *Store) AcceptIdeationCommand(ctx context.Context, command IdeationCommand) (IdeationCommand, bool, error) {
+	if command.Scope == "session" {
+		command.Scope = ""
+	}
 	if err := validateIdeationCommand(command); err != nil {
 		return IdeationCommand{}, false, err
 	}
@@ -142,11 +148,11 @@ func (s *Store) AcceptIdeationCommand(ctx context.Context, command IdeationComma
 	defer func() { _ = tx.Rollback() }()
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO ideation_commands (request_id, session_id, kind, expected_revision, payload, state, attempts,
-			outcome, detail, session_revision, result, accepted_at, completed_at)
-		VALUES (?, ?, ?, ?, ?, ?, 0, '', '', 0, '', ?, '')
+			outcome, detail, session_revision, result, accepted_at, completed_at, scope, subject_id)
+		VALUES (?, ?, ?, ?, ?, ?, 0, '', '', 0, '', ?, '', ?, ?)
 		ON CONFLICT(request_id) DO NOTHING`,
 		command.RequestID, command.SessionID, command.Kind, command.ExpectedRevision, string(command.Payload),
-		IdeationCommandAccepted, formatIdeationTime(command.AcceptedAt))
+		IdeationCommandAccepted, formatIdeationTime(command.AcceptedAt), command.Scope, command.SubjectID)
 	if err != nil {
 		return IdeationCommand{}, false, fmt.Errorf("accept ideation command %q: %w", command.RequestID, err)
 	}
@@ -159,7 +165,7 @@ func (s *Store) AcceptIdeationCommand(ctx context.Context, command IdeationComma
 		return IdeationCommand{}, false, err
 	}
 	if inserted == 0 && (stored.SessionID != command.SessionID || stored.Kind != command.Kind ||
-		stored.ExpectedRevision != command.ExpectedRevision || !bytes.Equal(stored.Payload, command.Payload)) {
+		stored.ExpectedRevision != command.ExpectedRevision || stored.Scope != command.Scope || stored.SubjectID != command.SubjectID || !bytes.Equal(stored.Payload, command.Payload)) {
 		return IdeationCommand{}, false, fmt.Errorf("%w: command %q", ErrIdeationRequestReused, command.RequestID)
 	}
 	if err := tx.Commit(); err != nil {
@@ -289,12 +295,15 @@ func scanIdeationCommand(row interface{ Scan(...any) error }, requestID string) 
 	var payload, result, acceptedAt, completedAt string
 	err := row.Scan(&command.RequestID, &command.SessionID, &command.Kind, &command.ExpectedRevision, &payload,
 		&command.Sequence, &command.State, &command.Attempts, &command.Outcome, &command.Detail,
-		&command.SessionRevision, &result, &acceptedAt, &completedAt)
+		&command.SessionRevision, &result, &acceptedAt, &completedAt, &command.Scope, &command.SubjectID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return IdeationCommand{}, fmt.Errorf("%w: %q", ErrIdeationCommandNotFound, requestID)
 	}
 	if err != nil {
 		return IdeationCommand{}, fmt.Errorf("read ideation command: %w", err)
+	}
+	if command.Scope == "session" {
+		command.Scope = ""
 	}
 	command.Payload = []byte(payload)
 	if result != "" {
@@ -316,8 +325,22 @@ func validateIdeationCommand(command IdeationCommand) error {
 	if err := validateIdeationIdentifier("command request id", command.RequestID); err != nil {
 		return err
 	}
-	if err := validateIdeationIdentifier("command session id", command.SessionID); err != nil {
-		return err
+	if command.Scope == "" || command.Scope == "session" {
+		if command.SubjectID != "" {
+			return errors.New("session commands cannot name another subject")
+		}
+		if err := validateIdeationIdentifier("command session id", command.SessionID); err != nil {
+			return err
+		}
+	} else if command.Scope == "backlog" || command.Scope == "run" {
+		if command.SessionID != "" {
+			return errors.New("scoped commands cannot mutate an ideation session")
+		}
+		if err := validateIdeationIdentifier("command subject id", command.SubjectID); err != nil {
+			return err
+		}
+	} else {
+		return errors.New("unsupported command scope")
 	}
 	if err := validateIdeationIdentifier("command kind", command.Kind); err != nil {
 		return err
@@ -480,3 +503,40 @@ func checkExistingStoreFile(path string) (string, error) {
 	}
 	return absolutePath, nil
 }
+
+// Run reads one displayed command subject without granting mutation rights.
+func (inbox *CommandInbox) Run(ctx context.Context, id string) (*Run, error) {
+	return inbox.store.Run(ctx, id)
+}
+
+// LatestLocalExecutionPreview reads the displayed backlog revision.
+func (inbox *CommandInbox) LatestLocalExecutionPreview(ctx context.Context, repo string) (LocalExecutionPreview, error) {
+	return inbox.store.LatestLocalExecutionPreview(ctx, repo)
+}
+
+// LocalExecutionPreview reads exact scoped admission evidence.
+func (inbox *CommandInbox) LocalExecutionPreview(ctx context.Context, repo, id string) (LocalExecutionPreview, error) {
+	return inbox.store.LocalExecutionPreview(ctx, repo, id)
+}
+
+// ScopedIdeationCommands reads recent outcomes for a non-session subject.
+func (s *Store) ScopedIdeationCommands(ctx context.Context, scope, subject string, limit int) ([]IdeationCommand, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	return s.queryIdeationCommands(ctx, `SELECT `+ideationCommandColumns+` FROM ideation_commands WHERE scope=? AND subject_id=? ORDER BY sequence DESC LIMIT ?`, scope, subject, limit)
+}
+
+// CommandRevisionConflictError reports a stale scoped subject without inventing a session.
+type CommandRevisionConflictError struct {
+	Scope, SubjectID string
+	Expected, Actual int64
+}
+
+// Error explains the stale tab and the current subject revision.
+func (e *CommandRevisionConflictError) Error() string {
+	return fmt.Sprintf("%s %s is at revision %d; page showed %d", e.Scope, e.SubjectID, e.Actual, e.Expected)
+}
+
+// Unwrap gives generic clients a stable scoped-conflict classification.
+func (e *CommandRevisionConflictError) Unwrap() error { return ErrLocalExecutionConflict }

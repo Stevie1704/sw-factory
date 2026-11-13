@@ -22,6 +22,13 @@ func TestParseRequestAcceptsEveryDeclaredKind(t *testing.T) {
 		sessioncommand.KindEditDraft:           `{"nodes":[{"id":"n-1","kind":"task","title":"Do it","body":"Body.","acceptance_criteria":["Works."],"brief_refs":["scope-1"]}]}`,
 		sessioncommand.KindRegenerateDraft:     `{"plan_revision":1}`,
 		sessioncommand.KindPreviewPlan:         `{"plan_revision":1}`,
+		sessioncommand.KindApproveStart:        `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `","selected_issue_ids":["local-00112233445566778899aabbccddeeff"]}`,
+		sessioncommand.KindPreviewExecution:    `{"selected_issue_ids":["local-00112233445566778899aabbccddeeff"]}`,
+		sessioncommand.KindAuthorizeExecution:  `{"preview_id":"preview-1","payload_sha256":"sha256:` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"sha256:` + strings.Repeat("b", 64) + `","graph_digest":"sha256:` + strings.Repeat("c", 64) + `","selected_issue_ids":["local-00112233445566778899aabbccddeeff"]}`,
+		sessioncommand.KindAnswerRun:           `{"packet_version":1}`,
+		sessioncommand.KindCancelRun:           `{"packet_version":1}`,
+		sessioncommand.KindRetryRun:            `{"packet_version":1}`,
+		sessioncommand.KindResumeRun:           `{"packet_version":1}`,
 		sessioncommand.KindApprove:             `{"plan_revision":1,"payload_sha256":"` + strings.Repeat("a", 64) + `","relationship_mapping_sha256":"` + strings.Repeat("b", 64) + `"}`,
 		sessioncommand.KindPublish:             `{}`,
 		sessioncommand.KindReconcile:           `{"operation_id":"item/n-1","external_id":"42"}`,
@@ -42,11 +49,21 @@ func TestParseRequestAcceptsEveryDeclaredKind(t *testing.T) {
 				revision = "0"
 			}
 			body := `{"request_id":"request-1","session_id":"session-1","kind":"` + string(kind) + `","expected_revision":` + revision + `,"payload": ` + payload + ` }`
+			scoped := kind == sessioncommand.KindPreviewExecution || kind == sessioncommand.KindAuthorizeExecution || kind == sessioncommand.KindAnswerRun || kind == sessioncommand.KindCancelRun || kind == sessioncommand.KindRetryRun || kind == sessioncommand.KindResumeRun
+			expectedSession := "session-1"
+			if scoped {
+				scope, subject := "run", "run-1"
+				if kind == sessioncommand.KindPreviewExecution || kind == sessioncommand.KindAuthorizeExecution {
+					scope, subject = "backlog", "repository"
+				}
+				body = strings.Replace(body, `"session_id":"session-1"`, `"scope":"`+scope+`","subject_id":"`+subject+`"`, 1)
+				expectedSession = ""
+			}
 			command, err := sessioncommand.ParseRequest([]byte(body))
 			if err != nil {
 				t.Fatalf("ParseRequest() error = %v", err)
 			}
-			if command.RequestID != "request-1" || command.SessionID != "session-1" || command.Kind != string(kind) {
+			if command.RequestID != "request-1" || command.SessionID != expectedSession || command.Kind != string(kind) {
 				t.Fatalf("command = %#v", command)
 			}
 			spaced := strings.Replace(body, `"payload": {`, `"payload": {  `, 1)

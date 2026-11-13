@@ -88,6 +88,8 @@ func invalid(format string, arguments ...any) error {
 
 // request is the JSON envelope of one browser command.
 type request struct {
+	Scope            string          `json:"scope,omitempty"`
+	SubjectID        string          `json:"subject_id,omitempty"`
 	RequestID        string          `json:"request_id"`
 	SessionID        string          `json:"session_id"`
 	Kind             Kind            `json:"kind"`
@@ -235,6 +237,13 @@ func kindTable() []kindSpec {
 		{kind: KindEditDraft, payload: func() payload { return &DraftPayload{} }, handler: editDraft},
 		{kind: KindRegenerateDraft, payload: planRevision, handler: regenerateDraft},
 		{kind: KindPreviewPlan, payload: planRevision, handler: previewPlan, tracker: true},
+		{kind: KindApproveStart, payload: func() payload { return &ApproveStartPayload{} }, handler: approveStart, tracker: true, publishes: true},
+		{kind: KindPreviewExecution, payload: func() payload { return &ExecutionPreviewPayload{} }, handler: operatorCommand, tracker: true},
+		{kind: KindAuthorizeExecution, payload: func() payload { return &ExecutionAuthorizationPayload{} }, handler: operatorCommand, tracker: true},
+		{kind: KindAnswerRun, payload: func() payload { return &RunOperatorPayload{} }, handler: operatorCommand},
+		{kind: KindCancelRun, payload: func() payload { return &RunOperatorPayload{} }, handler: operatorCommand},
+		{kind: KindRetryRun, payload: func() payload { return &RunOperatorPayload{} }, handler: operatorCommand},
+		{kind: KindResumeRun, payload: func() payload { return &RunOperatorPayload{} }, handler: operatorCommand},
 		{kind: KindApprove, payload: func() payload { return &ApprovePayload{} }, handler: approve, tracker: true, publishes: true},
 		{kind: KindPublish, payload: func() payload { return &PublishPayload{} }, handler: publish, tracker: true, publishes: true},
 		{kind: KindReconcile, payload: func() payload { return &ReconcilePayload{} }, handler: reconcile, tracker: true},
@@ -282,14 +291,11 @@ func ParseRequest(body []byte) (store.IdeationCommand, error) {
 	if envelope.Payload == nil {
 		return store.IdeationCommand{}, invalid("payload is required")
 	}
-	if !safeIdentifier(envelope.RequestID) || !safeIdentifier(envelope.SessionID) {
+	if !safeIdentifier(envelope.RequestID) {
 		return store.IdeationCommand{}, invalid("request_id and session_id must be 1 to 128 letters, digits, '.', '_', or '-'")
 	}
-	if envelope.Kind == KindCreateSession && envelope.ExpectedRevision != 0 {
-		return store.IdeationCommand{}, invalid("create_session must use expected_revision 0")
-	}
-	if envelope.Kind != KindCreateSession && envelope.ExpectedRevision < 1 {
-		return store.IdeationCommand{}, invalid("expected_revision must be the session revision the page shows")
+	if err := validateCommandScope(envelope); err != nil {
+		return store.IdeationCommand{}, err
 	}
 	payload, err := DecodePayload(envelope.Kind, envelope.Payload)
 	if err != nil {
@@ -300,7 +306,7 @@ func ParseRequest(body []byte) (store.IdeationCommand, error) {
 		return store.IdeationCommand{}, fmt.Errorf("encode session command payload: %w", err)
 	}
 	return store.IdeationCommand{
-		RequestID: envelope.RequestID, SessionID: envelope.SessionID, Kind: string(envelope.Kind),
+		RequestID: envelope.RequestID, SessionID: envelope.SessionID, Kind: string(envelope.Kind), Scope: envelope.Scope, SubjectID: envelope.SubjectID,
 		ExpectedRevision: envelope.ExpectedRevision, Payload: canonical,
 	}, nil
 }
