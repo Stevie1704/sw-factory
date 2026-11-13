@@ -26,7 +26,7 @@ not run.
 | Item | Value |
 | --- | --- |
 | Platform | darwin/arm64, macOS 27.0.1, Go 1.27.2 (go.mod toolchain) |
-| Release | Development build, revision `8a624368e72b03bcf7079c3097d423a737c77846` (branch `feat/291-local-markdown-backlog`), unmodified |
+| Release | Development build, revision `8100193d4f61c1036cca9826a400b8e64a694057` (branch `feat/291-local-markdown-backlog`), unmodified |
 | Pinned worker image | Not rebuilt for #298. No worker or report contract changed; no live invocation ran. |
 | Host harness | Not observed: no live scenario ran. The implementing agent was Claude Code (Claude Opus 5.5); it is not product evidence. |
 
