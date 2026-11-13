@@ -160,14 +160,11 @@ func (c *Client) Refresh(ctx context.Context) (Snapshot, error) {
 	if _, err := c.run(ctx, "check-ref-format", "refs/heads/"+c.TargetBranch); err != nil {
 		return Snapshot{}, errors.New("invalid local tracker target branch")
 	}
-	if _, err := c.run(ctx, "fetch", "--no-tags", gitadapter.DefaultRemoteName, "refs/heads/"+c.TargetBranch); err != nil {
-		return Snapshot{}, fmt.Errorf("fetch local tracker target: %w", err)
-	}
-	output, err := c.run(ctx, "rev-parse", "FETCH_HEAD")
+	revision, err := gitadapter.FetchTargetSnapshot(ctx, c.Runner, c.Registration.Path, c.TargetBranch)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	snapshot, err := c.Snapshot(ctx, strings.TrimSpace(string(output)))
+	snapshot, err := c.Snapshot(ctx, revision)
 	if err != nil {
 		return Snapshot{}, err
 	}

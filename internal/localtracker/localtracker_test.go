@@ -1,6 +1,7 @@
 package localtracker_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/localissues"
 	"github.com/Stevie1704/sw-factory/internal/localtracker"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -279,5 +281,52 @@ func TestARecreatedStoreImportsContentWithoutLifecycleAuthority(t *testing.T) {
 	queue, err := client.ListEligibleIssues(t.Context(), tracker.Repository{})
 	if err != nil || len(queue) != 0 {
 		t.Fatalf("content import became executable: %#v, %v", queue, err)
+	}
+}
+
+// concurrentFetchRunner injects an independent fetch after the source fetch
+// returns, reproducing shared FETCH_HEAD mutation at the process boundary.
+type concurrentFetchRunner struct {
+	other       string
+	interleaved bool
+}
+
+// Run executes actual policy-controlled Git and then the competing read fetch.
+func (r *concurrentFetchRunner) Run(ctx context.Context, directory string, args []string) ([]byte, error) {
+	base := gitadapter.NewCommandRunner()
+	output, err := base.Run(ctx, directory, args)
+	if err == nil && len(args) > 0 && args[0] == "fetch" && !r.interleaved {
+		r.interleaved = true
+		if _, err := base.Run(ctx, directory, []string{"fetch", "--no-tags", "origin", "refs/heads/" + r.other}); err != nil {
+			return nil, err
+		}
+	}
+	return output, err
+}
+
+// TestRefreshCannotReadAnotherFetchesHead proves a concurrent session/run fetch
+// cannot substitute its source commit for the configured target snapshot.
+func TestRefreshCannotReadAnotherFetchesHead(t *testing.T) {
+	client, registration, name := fixture(t)
+	want := git(t, registration.Path, "rev-parse", "main")
+	git(t, registration.Path, "checkout", "-b", "other")
+	data, err := os.ReadFile(filepath.Join(registration.Path, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(registration.Path, name), []byte(strings.ReplaceAll(string(data), "Committed task", "Other branch")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, registration.Path, "add", name)
+	git(t, registration.Path, "-c", "commit.gpgsign=false", "commit", "-m", "other source")
+	git(t, registration.Path, "push", "origin", "other")
+	git(t, registration.Path, "checkout", "main")
+	client.Runner = &concurrentFetchRunner{other: "other"}
+	snapshot, err := client.Refresh(t.Context())
+	if err != nil || snapshot.Revision != want || snapshot.Issues[0].Issue.Title != "Committed task" {
+		t.Fatalf("competing fetch substituted source: %#v, %v", snapshot, err)
+	}
+	if refs := git(t, registration.Path, "for-each-ref", "--format=%(refname)", "refs/factory/visibility/"); refs != "" {
+		t.Fatalf("temporary target refs retained: %s", refs)
 	}
 }
