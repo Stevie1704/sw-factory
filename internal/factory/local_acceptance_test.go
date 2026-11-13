@@ -533,8 +533,8 @@ func TestLocalBacklogJourneyRunsAParentsTasksInDependencyOrder(t *testing.T) {
 		t.Fatalf("revised draft = %#v, want the revised title", nodes)
 	}
 	declined := slices.DeleteFunc(slices.Clone(nodes), func(node sessioncommand.PlanNodeJSON) bool { return node.ID == "n-4" })
-	if answer := journey.submit("decline-dangling", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: declined}); answer.Outcome == string(store.IdeationCommandApplied) {
-		t.Fatalf("a decline that leaves a dangling dependency was applied: %#v", answer)
+	if answer := journey.submit("decline-dangling", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: declined}); answer.Outcome == string(store.IdeationCommandApplied) || !strings.Contains(answer.Detail, "n-4") {
+		t.Fatalf("a decline that leaves a dangling dependency was not refused for n-4: %#v", answer)
 	}
 	declined[2].DependsOn = []string{"n-2"}
 	journey.apply("decline-pdf", sessioncommand.KindEditDraft, sessioncommand.DraftPayload{Nodes: declined})

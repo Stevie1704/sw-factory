@@ -738,10 +738,17 @@ func TestUnsuccessfulPrerequisitesDoNotReleaseDependents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			found := false
 			for _, item := range view.Projection.Items {
-				if item.Issue.ID == b.ID && item.State != "blocked_by_dependencies" {
-					t.Fatalf("dependency=%#v", item)
+				if item.Issue.ID == b.ID {
+					found = true
+					if item.State != "blocked_by_dependencies" {
+						t.Fatalf("dependency=%#v", item)
+					}
 				}
+			}
+			if !found {
+				t.Fatal("dependent missing from the backlog")
 			}
 		})
 	}
@@ -1066,4 +1073,22 @@ func TestChangingTrackerCannotReplayAnOldRemoteIssueNumberIntoLocalState(t *test
 			t.Fatalf("colliding local issue changed: %#v,%v", projection, err)
 		}
 	})
+}
+
+// TestInvestigationIsVisibleAsUnsupportedInTheBacklog keeps a committed
+// investigation in the backlog with its non-executable disposition.
+func TestInvestigationIsVisibleAsUnsupportedInTheBacklog(t *testing.T) {
+	investigation := schedulingTask("local-00112233445566778899aabbccddeeff", "Measure export volume")
+	investigation.Kind = localissues.KindInvestigation
+	f := newScheduleFixture(t, investigation)
+	if pass, err := f.service.PollOnce(t.Context()); err != nil || pass.Outcome != factory.PollNoWork {
+		t.Fatalf("investigation started work: %#v,%v", pass.Outcome, err)
+	}
+	view, err := f.service.LocalBacklog(t.Context())
+	if err != nil || len(view.Projection.Items) != 1 {
+		t.Fatalf("backlog=%#v,%v", view, err)
+	}
+	if item := view.Projection.Items[0]; item.Issue.ID != investigation.ID || item.State != "unsupported_investigation" {
+		t.Fatalf("investigation projection=%s: %s", item.State, item.Reason)
+	}
 }
