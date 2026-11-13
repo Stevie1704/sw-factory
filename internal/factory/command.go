@@ -1353,6 +1353,13 @@ func (s *Service) commentTargets(run store.Run) []commentTarget {
 			return reader.PullRequestComments(ctx, repository, pullRequest)
 		}})
 	}
+	if s.separateIssueCommentStream() {
+		// Issue numbers are their own namespace here; reading PR comments as
+		// issue comments would read another issue. Fail closed instead.
+		return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(context.Context, tracker.Repository) ([]tracker.Comment, error) {
+			return nil, errors.New("code-host pull-request comment reader is unavailable; recompose a supported code-host adapter")
+		}})
+	}
 	if pullRequest == issue {
 		return targets
 	}
