@@ -48,6 +48,8 @@ func TestResetCommandPrintsRemovedAndRetainedResourcesBeforeConfirmation(t *test
 		"reset database: " + operationalPath,
 		"reset config: " + configPath + " (removed last)",
 		"reset retains: remote factory/* branches",
+		"reset retains: committed local issue Markdown under docs/issues and its Git history",
+		"reset retains: local specification worktrees in the specifications directory next to the operational database",
 		"reset requires --confirm; no resources removed",
 	} {
 		if !strings.Contains(output.String(), fragment) {

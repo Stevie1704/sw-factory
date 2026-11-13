@@ -35,6 +35,9 @@ var resetRetainedResources = []string{
 	"host Codex, Claude, and Copilot credential sources and host harness state",
 	"GitHub label definitions, issues, pull requests, reviews, comments, commit statuses, and merged history",
 	"remote factory/* branches",
+	"committed local issue Markdown under docs/issues and its Git history",
+	"local factory/specifications/* branches",
+	"local specification worktrees in the specifications directory next to the operational database",
 }
 
 // ResetStore is the operational-store seam reset needs to read every persisted

@@ -1795,6 +1795,18 @@ The operational
 store is the cleanup manifest, so it and the configuration survive until every
 resource whose identity depends on them is gone.
 
+For a registration with the local tracker, reset removes the operational
+authorizations, identity mappings, commands, and execution records with the
+database. It keeps the committed `docs/issues/` Markdown files and their Git
+history, the local and remote `factory/specifications/*` branches, and the
+specification worktrees in the `specifications` directory next to the
+operational database: reset removes only the database files, never that
+directory. Inspect a retained specification worktree, then remove it with
+`git worktree remove` and its branch with `git branch -D` when you no longer
+need it. After you register again,
+the new store imports the committed files as content only and starts nothing
+until you approve again.
+
 The evaluation projection stored in that database disappears with it. Ordinary
 evaluation retention outside reset is unchanged and remains owned by
 `factory evaluation-delete`.
