@@ -40,8 +40,9 @@ local publisher (`internal/localpublication`) and local tracker
 the real Git worktree manager, a SQLite store, the coordinator queue and
 lifecycle passes, and a scripted GitHub code host. The human steps are real
 Git operations in a separate reviewer clone: a push of the specification
-branch, a squash merge, and implementation merges. The code-host double fails
-the test on any issue read, label, or comment call.
+branch, a squash merge, and implementation merges. Composition installs only
+the local tracker, so no remote issue client exists; the code-host double's
+issue methods fail the test if called, but that is a guard, not proof.
 
 | Test | Result | What it shows |
 | --- | --- | --- |

@@ -7,7 +7,8 @@
     {
       "scenario": "local-backlog-publish-and-start",
       "evidence": "deterministic",
-      "outcome": "pass"
+      "outcome": "pass",
+      "reason": "Gate and review are not driven for local issues; the journeys reach review-ready through a direct store write"
     },
     {
       "scenario": "local-backlog-publish-and-start",
