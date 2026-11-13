@@ -46,6 +46,7 @@ var _ tracker.IssuePoller = (*Client)(nil)
 var _ tracker.CommentReader = (*Client)(nil)
 var _ tracker.ReadinessChecker = (*Client)(nil)
 var _ tracker.CommittedIssueReader = (*Client)(nil)
+var _ tracker.IssueURLProvider = (*Client)(nil)
 
 // NewClient selects committed local content and the existing operational store.
 func NewClient(registration config.RepositoryRegistration, targetBranch string) *Client {
@@ -176,9 +177,6 @@ func (c *Client) Refresh(ctx context.Context) (Snapshot, error) {
 	snapshot.Issues, err = opened.IndexLocalIssueSnapshot(ctx, c.Registration.Path, snapshot.Revision, snapshot.Graph)
 	return snapshot, err
 }
-
-// ListIssues enumerates the full committed graph, including organizational items.
-func (c *Client) ListIssues(ctx context.Context) (Snapshot, error) { return c.Refresh(ctx) }
 
 // RefreshCommittedIssues imports one validated target snapshot through the
 // neutral source port, granting no authorization or eligibility.

@@ -32,9 +32,11 @@ and statuses use the independently supplied code-host port, even when an issue
 number happens to equal a PR number.
 
 `tracker.CommittedIssueReader` exposes complete validated immutable snapshots to
-the coordinator without importing the local provider. Source refresh may import
-content identity and revision-addressed evidence; read-only source lookup may
-not allocate mappings. `codehost.ReadinessChecker` independently diagnoses PR,
+the coordinator without importing the local provider. Source refresh imports
+content identity and revision-addressed evidence. `Issue` and
+`ListEligibleIssues` refresh first, so they can also allocate the identity
+mappings of newly committed files. Only the preview path stays read-only: it
+reads existing mappings and never allocates one. `codehost.ReadinessChecker` independently diagnoses PR,
 review, and status requirements. The local source check never requests remote
 issue labels, Boards work items, or issue-account inference.
 
