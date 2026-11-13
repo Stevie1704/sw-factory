@@ -477,6 +477,16 @@ func previewPlan(ctx context.Context, env Env, command store.IdeationCommand) (O
 	if err != nil {
 		return Outcome{}, err
 	}
+	if payload.PlanRevision != session.PlanRevision {
+		return Outcome{}, fmt.Errorf("plan revision %d is not the current plan revision %d", payload.PlanRevision, session.PlanRevision)
+	}
+	if preparer, ok := env.Publisher.(interface {
+		Prepare(context.Context, string) error
+	}); ok {
+		if err := preparer.Prepare(ctx, session.ID); err != nil {
+			return Outcome{}, err
+		}
+	}
 	binding, err := env.Publisher.Preview(ctx, session.ID)
 	if err != nil {
 		return Outcome{}, err

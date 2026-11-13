@@ -8,6 +8,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/localpublication"
 	"github.com/Stevie1704/sw-factory/internal/localtracker"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -68,8 +69,18 @@ func TestLocalCompositionSuppliesIndependentHostCapabilities(t *testing.T) {
 				t.Fatal(err)
 			}
 			dependencies := serviceDependencies(path)
-			if _, ok := dependencies.Tracker.(*localtracker.Client); !ok {
+			adapter, ok := dependencies.Tracker.(*localpublication.Adapter)
+			if !ok {
 				t.Fatalf("tracker = %T", dependencies.Tracker)
+			}
+			if _, ok := adapter.Client.(*localtracker.Client); !ok {
+				t.Fatalf("committed tracker = %T", adapter.Client)
+			}
+			if _, ok := dependencies.Tracker.(tracker.PlanBatchPublisher); !ok {
+				t.Fatal("atomic batch publication missing from local composition")
+			}
+			if _, ok := dependencies.Tracker.(tracker.CommittedIssueReader); !ok {
+				t.Fatal("committed source capability lost during composition")
 			}
 			if separate, ok := dependencies.Tracker.(tracker.SeparateCommentStreams); !ok || !separate.SeparateIssueCommentStream() {
 				t.Fatal("local and PR comment identities share a watermark")

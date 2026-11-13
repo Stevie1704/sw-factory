@@ -30,6 +30,9 @@ var ErrPublicationOperationSettled = errors.New("publication operation is settle
 type PublicationOperationKind string
 
 const (
+	// PublicationOperationGitBatch reserves one atomic specification commit and
+	// its explicitly approved push/PR effects before item reference projection.
+	PublicationOperationGitBatch PublicationOperationKind = "git_batch"
 	// PublicationOperationCreateItem creates one tracker item for one plan
 	// node.
 	PublicationOperationCreateItem PublicationOperationKind = "create_item"
@@ -208,7 +211,7 @@ func recordPublicationOperation(ctx context.Context, tx *sql.Tx, operation Publi
 	if err != nil {
 		return PublicationOperation{}, err
 	}
-	if stored.Kind == PublicationOperationCreateItem && operation.State == PublicationOperationSucceeded && strings.TrimSpace(operation.ExternalID) == "" {
+	if (stored.Kind == PublicationOperationCreateItem || stored.Kind == PublicationOperationGitBatch) && operation.State == PublicationOperationSucceeded && strings.TrimSpace(operation.ExternalID) == "" {
 		return PublicationOperation{}, fmt.Errorf("publication operation %q succeeded without an external identity", operation.ID)
 	}
 	if settledChange(stored, operation) {
@@ -269,6 +272,10 @@ func validatePublicationOperations(operations []PublicationOperation) error {
 		}
 		seen[operation.ID] = true
 		switch operation.Kind {
+		case PublicationOperationGitBatch:
+			if operation.ID != "git/batch" || operation.NodeID != "" || operation.Correlation != "" {
+				return errors.New("Git batch operation must use the reserved batch identity")
+			}
 		case PublicationOperationCreateItem:
 			if err := validateIdeationIdentifier("publication node id", operation.NodeID); err != nil {
 				return err

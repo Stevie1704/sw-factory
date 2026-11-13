@@ -6,6 +6,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/github"
+	"github.com/Stevie1704/sw-factory/internal/localpublication"
 	"github.com/Stevie1704/sw-factory/internal/localtracker"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -36,12 +37,7 @@ func serviceDependencies(configPath string) factory.Dependencies {
 		return dependencies
 	}
 	registration := host.Repositories[0]
-	var client configuredCodeHost
-	if registration.EffectiveCodeHost() == config.ProviderAzureDevOps {
-		client = azuredevops.NewClient(registration.AzureDevOps.Organization, registration.AuthorizedUsers)
-	} else {
-		client = github.NewCodeHostClient()
-	}
+	client := codeHostAdapter(registration)
 	dependencies.PullRequests = client
 	dependencies.PullRequestReviews = client
 	dependencies.CommitStatuses = client
@@ -49,6 +45,14 @@ func serviceDependencies(configPath string) factory.Dependencies {
 	dependencies.PullRequestCommentPublisher = client
 	dependencies.CodeHostReadiness = client
 	return dependencies
+}
+
+// codeHostAdapter selects only the independently registered PR/status provider.
+func codeHostAdapter(registration config.RepositoryRegistration) configuredCodeHost {
+	if registration.EffectiveCodeHost() == config.ProviderAzureDevOps {
+		return azuredevops.NewClient(registration.AzureDevOps.Organization, registration.AuthorizedUsers)
+	}
+	return github.NewCodeHostClient()
 }
 
 // trackerAdapter selects committed Markdown or a legacy combined remote tracker.
@@ -67,7 +71,8 @@ func trackerAdapter(configPath string) tracker.Client {
 		if policy, err := config.LoadRepository(registration.RepositoryConfigPath); err == nil {
 			target = policy.TargetBranch
 		}
-		return localtracker.NewClient(registration, target)
+		client := localtracker.NewClient(registration, target)
+		return localpublication.Wrap(client, localpublication.NewPublisher(registration, target, codeHostAdapter(registration)))
 	}
 	if azure := registration.AzureDevOps; !azure.IsZero() {
 		client := azuredevops.NewClient(azure.Organization, registration.AuthorizedUsers)
