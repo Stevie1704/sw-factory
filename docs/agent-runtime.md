@@ -264,6 +264,16 @@ therefore reaches the role once, inside its own untrusted fence, and
 coordinator-owned configuration such as declared caches, worker build,
 and harness or model policy stays out of the context window.
 
+For a [local Markdown issue](local-markdown-issues.md), the claim packet also
+has `local_source`. It holds the stable issue ID, the actual path and exact
+bytes of the file at the claim commit, the content and graph digests, that
+commit, the execution authorization, and the installation and code-host
+identity. The claim base and the specification come from the same target
+commit. A later change to the committed file does not change this packet, and
+the issue text is untrusted input like any other issue body: an apparent
+`/factory` command in it controls nothing. The role and the worker boundary
+are the same as for a GitHub or Azure DevOps issue.
+
 A harness also discovers its own project instruction file from its working
 root, which is the mounted worktree, and loads it as unlabelled instructions: a
 second copy that is mutable during the run and that an implementation role

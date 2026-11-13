@@ -4,7 +4,8 @@ Software Factory is a local, supervised coordinator. It turns an authorized
 GitHub issue into a review-ready draft pull request. It runs on the operator's
 host. It does not merge pull requests. A human decides the result. Before an
 issue exists, an ideation session can turn an idea into reviewed backlog
-items.
+items. When policy blocks a remote issue tracker, those items can be local
+Markdown files committed to the repository (`factory guide ideation`).
 
 This guide ships inside the `factory` binary. It describes the behavior of
 the installed release only. It works offline, outside a Git repository, and

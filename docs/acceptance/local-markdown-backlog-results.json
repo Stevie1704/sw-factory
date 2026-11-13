@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "results": [
+    {
+      "scenario": "local-backlog-publish-and-start",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "local-backlog-publish-and-start",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+    },
+    {
+      "scenario": "local-backlog-authorize-committed",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "local-backlog-authorize-committed",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+    },
+    {
+      "scenario": "local-backlog-recovery",
+      "evidence": "deterministic",
+      "outcome": "pass"
+    },
+    {
+      "scenario": "local-backlog-recovery",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+    },
+    {
+      "scenario": "local-backlog-code-host-access",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "covers diagnosis and claim refusal; completion without a code host is follow-up scope"
+    },
+    {
+      "scenario": "local-backlog-code-host-access",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+    }
+  ]
+}

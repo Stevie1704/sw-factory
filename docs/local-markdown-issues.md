@@ -6,6 +6,55 @@ contract is implemented by `internal/localissues` and the durable identity
 mapping in `internal/store`; [ADR 0029](adr/0029-local-markdown-content-and-local-execution-authority.md)
 records ownership and execution rules.
 
+## Operator workflow
+
+This section is the end-to-end path. The sections after it are the contract.
+
+1. **Register.** Select `tracker: local` and one supported code host in the
+   private host configuration (see
+   [Local tracker and independent code host](configuration.md#local-tracker-and-independent-code-host)).
+   Run `factory doctor`. It checks the code host and Git transport; it never
+   asks for GitHub Issues or Azure Boards access.
+2. **Discuss and plan.** Use the ordinary ideation session on `/sessions`
+   (see [Local Markdown issue review](ideation.md#local-markdown-issue-review)).
+   Edit, split, or decline items in the plan editor, or request a revised
+   draft. A decline must also remove every dependency on the declined item.
+3. **Preview.** The preview shows the exact Markdown files, the stable IDs
+   (`local-<32 hex>`), the paths under `docs/issues/`, the relationships, the
+   specification branch `factory/specifications/<digest>`, and the
+   publication policy. Drafts, declined items, and the conversation stay in
+   the operational store.
+4. **Accept.** **Accept and commit** publishes content only. **Approve and
+   start** publishes the same content and also records execution
+   authorization for the selected tasks at their exact revisions.
+5. **Publish the branch.** The default policy stops at one local commit on
+   the specification branch, in a separate worktree. Your ordinary checkout,
+   its branch, and its changes stay as they are. Push the branch and merge it
+   through the normal review of the target branch. Until the exact files and
+   relationships are on the fetched target, the items show **waiting for
+   specification merge**. A squash merge or cherry-pick with identical bytes
+   is accepted.
+6. **Follow the Runs.** The coordinator claims authorized tasks in
+   dependency order, one non-terminal Run per repository. `/issues` shows
+   each item's disposition and waiting reason; `/runs/<id>` shows the Run
+   and its supported controls: answer, cancel, retry, and resume.
+7. **Review and merge.** Each Run ends in the normal review-ready pull
+   request. A dependent task starts only after its prerequisite's pull
+   request is merged and that merge is on the fetched target. Review-ready,
+   a failed Run, a cancelled Run, or a closed pull request does not release
+   it.
+
+To start committed work later, also after the session has ended, select
+tasks on `/issues`, review the fresh exact execution preview, and approve it.
+
+| Situation | What happens | What you do |
+| --- | --- | --- |
+| A committed specification changes before its claim | The authorization becomes stale and stays stale, also when the old bytes return. | Preview again and approve the new revision. |
+| A specification changes after its claim | The Run keeps its frozen Specification packet. | Finish or cancel the Run; approve the new revision for new work. |
+| A publication is incomplete or ambiguous | No item of the batch is released. | Retry, or reconcile on the plan page after you inspect Git and the code host. |
+| A dependency failed, was cancelled, or is not merged | The dependent stays `blocked_by_dependencies`. | Complete the prerequisite through a merged pull request, or change the plan and approve again. |
+| `factory cleanup` or `factory reset` | Cleanup keeps completion proof. Reset removes approvals, authorizations, and Run records. Markdown files and Git history stay. | After reset, register again and approve again; a new store never starts committed files by itself. |
+
 ## Version 1 format
 
 ```markdown
@@ -306,3 +355,36 @@ provenance and a Gate count; detailed Gate/review evidence remains in Factory.
 Advisory PR-writer text containing remote work-item references is omitted with
 a visible failure reason. Human-authored PR sections remain preserved. Existing
 remote tracker PR rendering keeps its normal remote issue links.
+
+## Code-host access
+
+The local tracker removes the need for GitHub Issues or Azure Boards access
+only. Model and network access, Git transport, and code-host access for pull
+requests, reviews, and commit statuses are still necessary. The Azure Repos
+code host still uses `az` (ADR 0019).
+
+`factory doctor` and coordinator startup check the selected code host before
+any claim. When access is blocked, the result is an explicit failure with an
+actionable condition, and the coordinator claims nothing:
+
+| Condition | Meaning | Action |
+| --- | --- | --- |
+| `azure_devops.code_host.authentication.failed` | `az` cannot establish the configured Azure Repos identity. | Check `az login` and company policy. |
+| `azure_devops.code_host.access.unavailable` | The `az` route to Azure Repos pull requests, permissions, refs, or statuses is blocked or lacks permission. | Check company policy for the Azure Repos APIs. If it blocks them, this installation cannot complete the issue-to-pull-request flow. |
+| `github.code_host.authentication.failed` | `gh` cannot authenticate. | Run `gh auth login`. |
+| `github.code_host.access.unavailable` | GitHub pull request, review, or status access is unavailable. | Check `gh` network access and the contents, pull-request, and commit-status permissions. |
+
+The UI shows `code_host_unavailable` as the waiting reason of an affected
+item. Do not work around a blocked code host with another credential or with
+browser automation.
+
+### Not delivered
+
+These are follow-up scope. This feature does not deliver them:
+
+- completion without any code-host adapter (a fully local or manual review
+  and merge);
+- browser automation, or an Azure authentication route other than `az`;
+- a change to corporate access restrictions.
+
+Acceptance evidence: [local Markdown backlog acceptance](acceptance/local-markdown-backlog.md).

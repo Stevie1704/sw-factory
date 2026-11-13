@@ -106,7 +106,9 @@ The pages keep unsent input through automatic refresh and command completion;
 a conflict leaves the input visible for an explicit decision. While the
 coordinator is stopped, retained pages remain readable and new mutations report
 unavailable. See the [local Markdown issue contract](local-markdown-issues.md)
-for source identity, authorization, Git publication and recovery rules.
+for source identity, authorization, Git publication and recovery rules, and its
+[operator workflow](local-markdown-issues.md#operator-workflow) for the complete
+path and the code-host access that remains necessary.
 
 ## What one approval authorizes
 

@@ -1831,7 +1831,9 @@ Private host schema version 2 accepts explicit `tracker` and `code_host`
 selectors. Omitting them retains existing combined GitHub/Azure behavior and
 stored identities. Local content follows the [Markdown issue
 contract](local-markdown-issues.md) and [ADR
-0029](adr/0029-local-markdown-content-and-local-execution-authority.md).
+0029](adr/0029-local-markdown-content-and-local-execution-authority.md). The
+[operator workflow](local-markdown-issues.md#operator-workflow) walks through
+the complete path from an idea to merged pull requests.
 
 The registration metadata still names exactly one supported code host. Select
 `tracker: local` with `code_host: github` and the existing `github` identity,
