@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -37,7 +39,7 @@ func claimAuthorization(t *testing.T, db *store.Store, id, title string) store.L
 	if _, err := db.AuthorizeLocalExecution(t.Context(), store.LocalExecutionAuthorization{RequestID: id, PreviewID: preview.ID, Binding: binding}, nil); err != nil {
 		t.Fatal(err)
 	}
-	key := localissues.Digest([]byte(strings.Join([]string{binding.InstallationID, binding.RepositoryPath, binding.CodeHostProvider, binding.CodeHostRepository, binding.TargetBranch, issue.ID, source.Issue.ContentDigest, graph.Digest}, "\x00")))
+	key := store.LocalRevisionKey(binding.InstallationID, binding.RepositoryPath, binding.CodeHostProvider, binding.CodeHostRepository, binding.TargetBranch, issue.ID, source.Issue.ContentDigest)
 	return store.LocalClaim{Key: key, RunID: "local-" + strings.TrimPrefix(key, "sha256:"), RepositoryPath: binding.RepositoryPath, InstallationID: binding.InstallationID, CodeHostProvider: binding.CodeHostProvider, CodeHostRepository: binding.CodeHostRepository, TargetBranch: binding.TargetBranch, IssueID: issue.ID, ContentDigest: source.Issue.ContentDigest, GraphDigest: graph.Digest, Number: source.Number, AuthorizationID: id, BaseSHA: binding.SourceRevision, SpecificationPacket: `{"version":1}`}
 }
 
@@ -77,6 +79,47 @@ func TestNewClaimMustUseLatestSelectedAuthority(t *testing.T) {
 			}
 			if reserved, err := db.ReserveLocalClaim(t.Context(), b); err != nil || reserved.RunID != b.RunID {
 				t.Fatalf("new authority could not reserve: %#v,%v", reserved, err)
+			}
+		})
+	}
+}
+
+// TestLegacyGraphKeyedClaimStillGuardsItsRevision stores a claim row in the
+// earlier format, whose key also hashed the graph digest. The row stays
+// readable, and a new reservation of the same revision cannot consume it twice.
+func TestLegacyGraphKeyedClaimStillGuardsItsRevision(t *testing.T) {
+	for _, state := range []string{"reserved", "claimed"} {
+		t.Run(state, func(t *testing.T) {
+			db, path := openIdeationStoreForTest(t)
+			claim := claimAuthorization(t, db, "authority", "Export")
+			legacy := claim
+			legacy.Key = localissues.Digest([]byte(strings.Join([]string{claim.InstallationID, claim.RepositoryPath, claim.CodeHostProvider, claim.CodeHostRepository, claim.TargetBranch, claim.IssueID, claim.ContentDigest, claim.GraphDigest}, "\x00")))
+			legacy.RunID = "local-" + strings.TrimPrefix(legacy.Key, "sha256:")
+			data, err := json.Marshal(legacy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := raw.ExecContext(t.Context(), `INSERT INTO local_claims(claim_key,repository_path,run_id,state,claim) VALUES(?,?,?,?,?)`, legacy.Key, legacy.RepositoryPath, legacy.RunID, state, data); err != nil {
+				t.Fatal(err)
+			}
+			_ = raw.Close()
+			claims, err := db.LocalClaims(t.Context(), claim.RepositoryPath)
+			if err != nil || len(claims) != 1 || claims[0].RevisionKey() != claim.RevisionKey() {
+				t.Fatalf("legacy claim unreadable: %#v,%v", claims, err)
+			}
+			reserved, err := db.ReserveLocalClaim(t.Context(), claim)
+			if state == "reserved" {
+				if err != nil || reserved.RunID != legacy.RunID {
+					t.Fatalf("legacy reservation not adopted: %#v,%v", reserved, err)
+				}
+				return
+			}
+			if !errors.Is(err, store.ErrLocalClaimConflict) {
+				t.Fatalf("consumed legacy revision reserved again: %#v,%v", reserved, err)
 			}
 		})
 	}

@@ -248,7 +248,11 @@ policy. This path works independently of any originating session. Committed
 imports, factory labels, and a preview alone grant no execution authority.
 The complete validated graph is conservatively bound: unrelated accepted source
 changes also require a new preview and approval for pending work. Active Runs
-retain their frozen Specification packets.
+retain their frozen Specification packets. A graph change does not reset what a
+revision already did: an issue whose exact content was claimed is never claimed
+again in the same installation, repository, code-host, and target context, and
+its successful completion still satisfies dependents after unrelated issues
+land.
 
 Exact source bytes are retained in the read-only preview projection, bounded by
 the 16 MiB source-graph contract and a 32 MiB serialized-evidence ceiling. The

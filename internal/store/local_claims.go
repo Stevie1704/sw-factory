@@ -29,6 +29,20 @@ type LocalClaim struct {
 	MergeCommitSHA                                                           string
 }
 
+// LocalRevisionKey identifies one consumable issue revision: the exact content
+// in one installation, repository, code-host and target context. The graph
+// digest is deliberately absent, because an unrelated graph change does not
+// change what a completed or consumed revision already did.
+func LocalRevisionKey(installationID, repositoryPath, codeHostProvider, codeHostRepository, targetBranch, issueID, contentDigest string) string {
+	return localissues.Digest([]byte(strings.Join([]string{installationID, repositoryPath, codeHostProvider, codeHostRepository, targetBranch, issueID, contentDigest}, "\x00")))
+}
+
+// RevisionKey derives the revision identity from the claim's own fields. It
+// also matches legacy rows whose stored Key still includes a graph digest.
+func (c LocalClaim) RevisionKey() string {
+	return LocalRevisionKey(c.InstallationID, c.RepositoryPath, c.CodeHostProvider, c.CodeHostRepository, c.TargetBranch, c.IssueID, c.ContentDigest)
+}
+
 // LocalBacklogItem is bounded retained evidence for a local issue page.
 type LocalBacklogItem struct {
 	QueueState, QueueReason, RunState, RunReason, FrozenRevision, FrozenContentDigest string
@@ -121,7 +135,7 @@ func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalC
 	if auth.Binding.CodeHostProvider != claim.CodeHostProvider || auth.Binding.CodeHostRepository != claim.CodeHostRepository || auth.Binding.TargetBranch != claim.TargetBranch {
 		return claim, ErrLocalClaimConflict
 	}
-	expectedKey := localissues.Digest([]byte(strings.Join([]string{claim.InstallationID, claim.RepositoryPath, claim.CodeHostProvider, claim.CodeHostRepository, claim.TargetBranch, claim.IssueID, claim.ContentDigest, claim.GraphDigest}, "\x00")))
+	expectedKey := claim.RevisionKey()
 	if claim.Key != expectedKey || claim.RunID != "local-"+strings.TrimPrefix(expectedKey, "sha256:") {
 		return claim, ErrLocalClaimConflict
 	}
@@ -134,15 +148,15 @@ func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalC
 	if !found {
 		return claim, ErrLocalClaimConflict
 	}
-	existing, err := scanLocalClaim(tx.QueryRowContext(ctx, `SELECT claim_key,repository_path,run_id,state,claim,terminal_status,merge_sha FROM local_claims WHERE claim_key=?`, claim.Key))
-	if err == nil {
-		if existing.CodeHostProvider != claim.CodeHostProvider || existing.CodeHostRepository != claim.CodeHostRepository || existing.TargetBranch != claim.TargetBranch || existing.RepositoryPath != claim.RepositoryPath || existing.InstallationID != claim.InstallationID || existing.IssueID != claim.IssueID || existing.ContentDigest != claim.ContentDigest || existing.GraphDigest != claim.GraphDigest || existing.RunID != claim.RunID {
-			return claim, ErrLocalClaimConflict
+	existing, found, err := revisionClaim(ctx, tx, claim)
+	if err != nil {
+		return claim, err
+	}
+	if found {
+		if existing.State != "reserved" {
+			return claim, fmt.Errorf("%w: revision already consumed by Run %s", ErrLocalClaimConflict, existing.RunID)
 		}
 		return existing, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return claim, err
 	}
 	// The write lock acquired above serializes this observation with authority
 	// writers. A queue observation cannot reserve an older decision after a newer
@@ -183,6 +197,27 @@ func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalC
 		return claim, err
 	}
 	return claim, nil
+}
+
+// revisionClaim finds a claim for the same revision under any graph, including
+// legacy rows keyed with a graph digest. It is the consumed-revision guard.
+func revisionClaim(ctx context.Context, tx *sql.Tx, claim LocalClaim) (LocalClaim, bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT claim_key,repository_path,run_id,state,claim,terminal_status,merge_sha FROM local_claims WHERE repository_path=?`, claim.RepositoryPath)
+	if err != nil {
+		return LocalClaim{}, false, err
+	}
+	defer rows.Close()
+	want := claim.RevisionKey()
+	for rows.Next() {
+		existing, err := scanLocalClaim(rows)
+		if err != nil {
+			return LocalClaim{}, false, err
+		}
+		if existing.RevisionKey() == want {
+			return existing, true, nil
+		}
+	}
+	return LocalClaim{}, false, rows.Err()
 }
 
 // SaveLocalClaimRun atomically saves the Run and consumes its exact revision.

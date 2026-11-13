@@ -92,7 +92,7 @@ func (s *Service) LocalBacklog(ctx context.Context) (LocalBacklogView, error) {
 			continue
 		}
 		for _, claim := range claims {
-			if claim.Key == localClaimKey(auth.Binding, item.Issue) && claim.GraphDigest == projection.GraphDigest {
+			if claim.RevisionKey() == localClaimKey(auth.Binding, item.Issue) {
 				if err := projectLocalClaim(ctx, db, item, claim); err != nil {
 					return LocalBacklogView{}, err
 				}
@@ -376,7 +376,7 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 				for _, dependency := range item.Issue.Dependencies {
 					if !s.localDependencyComplete(ctx, db, claims, binding, dependency, snapshot.Revision) {
 						item.State = "blocked_by_dependencies"
-						item.Reason = "prerequisite " + dependency + " needs successful lifecycle completion for this graph and its merge commit visible on this exact target; fetch complete target history if unavailable"
+						item.Reason = "prerequisite " + dependency + " needs successful lifecycle completion of its exact content and its merge commit visible on this exact target; fetch complete target history if unavailable"
 						break
 					}
 				}
@@ -389,7 +389,7 @@ func (s *Service) observeLocalQueue(ctx context.Context, r config.RepositoryRegi
 			}
 			key := localClaimKey(binding, authorityIssue)
 			for _, claim := range claims {
-				if claim.Key == key {
+				if claim.RevisionKey() == key {
 					if item.State == "queued" || claim.State == "reserved" {
 						if err := projectLocalClaim(ctx, db, &item, claim); err != nil {
 							return nil, err
@@ -500,12 +500,15 @@ func localVisibility(binding store.LocalExecutionBinding, snapshot tracker.Commi
 	return "stale_authorization", "accepted source is missing from the fetched target; preview and approve again"
 }
 
-// localClaimKey binds a revision across independent duplicate authorization IDs.
+// localClaimKey binds a revision across independent duplicate authorization IDs
+// and across graph changes. The binding's graph digest gates authority only.
 func localClaimKey(binding store.LocalExecutionBinding, issue store.LocalExecutionIssue) string {
-	return localissues.Digest([]byte(strings.Join([]string{binding.InstallationID, binding.RepositoryPath, binding.CodeHostProvider, binding.CodeHostRepository, binding.TargetBranch, issue.ID, issue.ContentDigest, binding.GraphDigest}, "\x00")))
+	return store.LocalRevisionKey(binding.InstallationID, binding.RepositoryPath, binding.CodeHostProvider, binding.CodeHostRepository, binding.TargetBranch, issue.ID, issue.ContentDigest)
 }
 
-// localDependencyComplete requires source/graph-specific normal lifecycle proof.
+// localDependencyComplete requires normal lifecycle proof for the prerequisite's
+// exact content in this context. Any matching claim (legacy graph-keyed rows
+// can duplicate a revision) whose merge is visible at the target satisfies it.
 func (s *Service) localDependencyComplete(ctx context.Context, db localScheduleStore, claims []store.LocalClaim, binding store.LocalExecutionBinding, id, targetRevision string) bool {
 	var source *store.LocalExecutionIssue
 	for i := range binding.Issues {
@@ -518,8 +521,14 @@ func (s *Service) localDependencyComplete(ctx context.Context, db localScheduleS
 		return false
 	}
 	key := localClaimKey(binding, *source)
+	ancestry, ok := s.worktreeManager().(interface {
+		IsAncestor(context.Context, string, string, string) (bool, error)
+	})
+	if !ok {
+		return false
+	}
 	for _, claim := range claims {
-		if claim.Key != key {
+		if claim.RevisionKey() != key {
 			continue
 		}
 		run, err := db.Run(ctx, claim.RunID)
@@ -531,16 +540,11 @@ func (s *Service) localDependencyComplete(ctx context.Context, db localScheduleS
 			status, merge = run.Status, run.MergeCommitSHA
 		}
 		if status != store.StatusComplete || !codehost.ValidCommitSHA(merge) {
-			return false
+			continue
 		}
-		ancestry, ok := s.worktreeManager().(interface {
-			IsAncestor(context.Context, string, string, string) (bool, error)
-		})
-		if !ok {
-			return false
+		if visible, err := ancestry.IsAncestor(ctx, binding.RepositoryPath, merge, targetRevision); err == nil && visible {
+			return true
 		}
-		visible, err := ancestry.IsAncestor(ctx, binding.RepositoryPath, merge, targetRevision)
-		return err == nil && visible
 	}
 	return false
 }

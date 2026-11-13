@@ -546,6 +546,66 @@ func TestDependenciesNeedMergedImplementationVisibleAtTheClaimSnapshot(t *testin
 	}
 }
 
+// TestUnrelatedGraphChangeKeepsCompletionAndConsumption completes a
+// prerequisite, then lands an unrelated issue so the graph digest changes. A
+// fresh decision at the new graph must release the dependent and must not
+// claim the completed revision a second time.
+func TestUnrelatedGraphChangeKeepsCompletionAndConsumption(t *testing.T) {
+	a := schedulingTask("local-00112233445566778899aabbccddeeff", "First")
+	b := schedulingTask("local-112233445566778899aabbccddeeff00", "Second")
+	b.Dependencies = []string{a.ID}
+	f := newScheduleFixture(t, a, b)
+	f.authorize(t, "first", a.ID)
+	first, err := f.service.PollOnce(t.Context())
+	if err != nil || first.Outcome != factory.PollClaimed {
+		t.Fatalf("first claim=%#v,%v", first, err)
+	}
+	ready := first.Run
+	ready.Stage, ready.PullRequestNumber = store.StageReady, 91
+	f.withStore(func(db *store.Store) {
+		if err := db.SaveRun(t.Context(), ready); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err := os.WriteFile(filepath.Join(f.registration.Path, "implemented.txt"), []byte("first implementation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scheduleGit(t, f.registration.Path, "add", "implemented.txt")
+	scheduleGit(t, f.registration.Path, "-c", "commit.gpgsign=false", "commit", "-m", "human merge")
+	merged := scheduleGit(t, f.registration.Path, "rev-parse", "HEAD")
+	scheduleGit(t, f.registration.Path, "push", "origin", "main")
+	f.host.pullRequest = codehost.PullRequest{Number: 91, State: "closed", Merged: true, MergeCommitSHA: merged, HeadBranch: ready.Branch, HeadSHA: ready.CheckpointSHA, BaseBranch: "main"}
+	completed, err := f.service.PollLifecycle(t.Context(), factory.LifecycleRequest{RunID: ready.ID})
+	if err != nil || completed.Outcome != factory.LifecycleCompleted {
+		t.Fatalf("normal merge lifecycle=%#v,%v", completed, err)
+	}
+	f.writeIssueCommit(t, schedulingTask("local-22334455667788990011aabbccddeeff", "Unrelated"))
+	f.authorize(t, "again", a.ID, b.ID)
+	second, err := f.service.PollOnce(t.Context())
+	if err != nil || second.Outcome != factory.PollClaimed || second.Run.ID == ready.ID {
+		t.Fatalf("dependent after graph change=%#v,%v", second, err)
+	}
+	var packet factory.SpecificationPacket
+	if err := json.Unmarshal([]byte(second.Run.SpecificationPacket), &packet); err != nil || packet.LocalSource == nil || packet.LocalSource.IssueID != b.ID {
+		t.Fatalf("completed prerequisite claimed again: %#v,%v", packet.LocalSource, err)
+	}
+	f.withStore(func(db *store.Store) {
+		claims, err := db.LocalClaims(t.Context(), f.registration.Path)
+		if err != nil || len(claims) != 2 {
+			t.Fatalf("claims=%#v,%v", claims, err)
+		}
+	})
+	view, err := f.service.LocalBacklog(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range view.Projection.Items {
+		if item.Issue.ID == a.ID && item.State != string(store.StatusComplete) {
+			t.Fatalf("completed prerequisite projection=%#v", item)
+		}
+	}
+}
+
 // TestLocalDraftRegenerationCannotCloseRemoteIssues preserves human ownership
 // while omitting unsafe generated source and retained advisory text.
 func TestLocalDraftRegenerationCannotCloseRemoteIssues(t *testing.T) {

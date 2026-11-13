@@ -77,8 +77,17 @@ prerequisite cannot release a dependent authorized against the old graph.
 Admission reserves the exact claim packet and target base durably before Git
 worktree creation, then atomically saves the Run and consumes the authorized
 revision. Deterministic recovery adopts matching owned artifacts and cannot
-reclaim a consumed issue/content/graph in the same installation, repository,
-code-host and target context. Retained cleanup proof includes the actual merge
+reclaim a consumed issue/content in the same installation, repository,
+code-host and target context. The claim key, the consumed-revision guard, and
+the dependency-completion lookup exclude the graph digest: the graph digest
+gates authorization validity only. An earlier decision also keyed claims by the
+graph digest. That let an unrelated graph change hide a completed prerequisite
+and let a fresh approval claim identical content a second time, which broke
+"a dependency is satisfied by successful completion" and "a revision is never
+claimed twice". Claim rows stored with the earlier graph-keyed key stay
+readable, and the guard matches them by their fields. Consequence: a
+cancelled or failed revision is also not claimable again after an unrelated
+graph change; running it again needs a content change. Retained cleanup proof includes the actual merge
 commit, which must be an ancestor of the same target snapshot as a dependent
 claim. Observed preclaim source/graph/policy drift permanently invalidates that
 grant; restoring old content requires a fresh explicit decision.
