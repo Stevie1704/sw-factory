@@ -48,7 +48,8 @@ to recover a run does not supply these decisions.
 
 With a local Markdown tracker, **Accept and commit**, **Approve and start**,
 an execution approval on `/issues`, the merge of a specification branch, and
-answers, cancel, retry, or resume on a local run page are human decisions.
+answers, cancel, retry, or resume on the run page of a local issue are human
+decisions.
 Committed issue files, labels, and imported files grant no authority. An agent
 prepares or explains these steps; it does not send them for the human.
 

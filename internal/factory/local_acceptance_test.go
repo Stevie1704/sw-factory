@@ -134,7 +134,7 @@ func newLocalJourney(t *testing.T) *localJourney {
 // local registration does. Each restart composes fresh adapters, so only Git
 // and the store carry state across it.
 func (j *localJourney) compose(dependencies *factory.Dependencies) {
-	registration := j.ideationJourney.host.Repositories[0]
+	registration := j.host.Repositories[0]
 	source := localtracker.NewClient(registration, "main")
 	dependencies.Tracker = localpublication.Wrap(source, localpublication.NewPublisher(registration, "main", j.codeHost))
 	dependencies.Worktree = j.manager
@@ -474,6 +474,9 @@ func TestLocalBacklogJourneyStartsOneIssueAfterTheHumanSpecificationMerge(t *tes
 	}
 	journey.coordinate()
 	journey.poll(factory.PollNoWork)
+	if state := journey.pageState(id); state != "waiting_for_specification_merge" {
+		t.Fatalf("local issue page shows %q after a restart, want the specification merge wait", state)
+	}
 	journey.requireSpecificationCommit(branch, task)
 
 	target := journey.humanMergesSpecification(branch)
@@ -535,6 +538,7 @@ func TestLocalBacklogJourneyRunsAParentsTasksInDependencyOrder(t *testing.T) {
 	journey.restart()
 
 	approval, items := journey.localPreview("preview-1")
+	journey.restart()
 	if len(items) != 3 || items["n-1"].Type != "parent" {
 		t.Fatalf("preview items = %#v, want the parent and two tasks without the declined task", items)
 	}
@@ -627,6 +631,9 @@ func TestLocalBacklogJourneyAuthorizesCommittedWorkAfterTheSessionEnded(t *testi
 	journey.applyScoped("cancel-1", "run", run.ID, sessioncommand.KindCancelRun, controls.Revision, sessioncommand.RunOperatorPayload{PacketVersion: 1})
 	journey.restart()
 	journey.poll(factory.PollNoWork)
+	if cancelled, err := journey.store.Run(t.Context(), run.ID); err != nil || cancelled == nil || cancelled.Status != store.StatusCancelled {
+		t.Fatalf("Run after cancellation = %#v, %v; want cancelled", cancelled, err)
+	}
 	claims, err := journey.store.LocalClaims(t.Context(), journey.repo)
 	if err != nil || len(claims) != 1 {
 		t.Fatalf("local claims = %#v, %v; want the cancelled Run only", claims, err)

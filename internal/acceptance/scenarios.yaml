@@ -573,7 +573,7 @@ scenarios:
     success:
       - A lost commit, push, or pull request response is adopted from Git or the code host; no second commit, branch, pull request, or Run is created.
       - A partial, cancelled, or ambiguous batch releases none of its items and stays visible until it is reconciled.
-      - A claim reservation is resumed with its workspace at the exact base, and a blocked code host prevents the claim before any workspace or worker exists.
+      - A claim reservation is resumed with its workspace at the exact base, and a blocked code host prevents the claim, so no Run is created.
     failure:
       - The agent deletes or rewrites a specification commit, force-pushes, or edits the store to clear an incomplete publication.
     cleanup:

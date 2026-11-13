@@ -630,10 +630,11 @@ func TestLocalAdvisoryWriterCannotAddRemoteIssueAuthority(t *testing.T) {
 	}
 }
 
-// TestUnsuccessfulPrerequisitesDoNotReleaseDependents uses ordinary cancellation
-// and closed-unmerged lifecycle handling with the same exact approved graph.
+// TestUnsuccessfulPrerequisitesDoNotReleaseDependents uses ordinary cancellation,
+// a failed terminal Run, and closed-unmerged lifecycle handling with the same
+// exact approved graph.
 func TestUnsuccessfulPrerequisitesDoNotReleaseDependents(t *testing.T) {
-	for _, disposition := range []string{"cancelled", "closed-unmerged"} {
+	for _, disposition := range []string{"cancelled", "failed", "closed-unmerged"} {
 		t.Run(disposition, func(t *testing.T) {
 			a := schedulingTask("local-00112233445566778899aabbccddeeff", "First")
 			b := schedulingTask("local-112233445566778899aabbccddeeff00", "Second")
@@ -644,9 +645,18 @@ func TestUnsuccessfulPrerequisitesDoNotReleaseDependents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if disposition == "cancelled" {
+			switch disposition {
+			case "cancelled":
 				_, err = f.service.HandleCommand(t.Context(), factory.CommandRequest{RunID: first.Run.ID, IssueNumber: first.Run.IssueNumber, Stream: "issue", Comment: tracker.Comment{ID: "1", Author: "alice", Body: "/factory cancel"}})
-			} else {
+			case "failed":
+				run := first.Run
+				run.Status = store.StatusFailed
+				f.withStore(func(db *store.Store) {
+					if err := db.SaveRun(t.Context(), run); err != nil {
+						t.Fatal(err)
+					}
+				})
+			default:
 				run := first.Run
 				run.Stage, run.PullRequestNumber = store.StageReady, 91
 				f.withStore(func(db *store.Store) {

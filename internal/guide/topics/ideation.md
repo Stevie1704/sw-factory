@@ -93,8 +93,8 @@ its prerequisite's pull request is merged on the target. Parents never run.
 Follow the items on `/issues` and the runs on `/runs/<id>`. To start committed
 work later, also after the session ended, select tasks on `/issues`, review the
 fresh preview, and approve it. A changed specification needs a new preview
-and approval. Answers, cancel, retry, and resume of a local run use the run
-page; they are human decisions.
+and approval. Answers, cancel, retry, and resume for the run of a local issue
+use its run page; they are human decisions.
 
 | Waiting reason on `/issues` | Meaning |
 | --- | --- |
