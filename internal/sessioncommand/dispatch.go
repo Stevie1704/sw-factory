@@ -62,6 +62,10 @@ type Roles interface {
 // Env is what a handler uses to apply a command. Only the coordinator builds
 // it.
 type Env struct {
+	// Operator applies backlog/Run commands using protected host provenance.
+	Operator OperatorCommands
+	// AuthorizePlan records separate local authority after publication approval.
+	AuthorizePlan func(context.Context, store.IdeationCommand, []string) error
 	// Store is the operational store.
 	Store Store
 	// Lifecycle resolves every session state change.
@@ -215,12 +219,12 @@ func (d *Dispatcher) takeFailures() error {
 func (d *Dispatcher) claim(command store.IdeationCommand, background bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running[command.RequestID] || (background && d.busy[command.SessionID]) {
+	if d.running[command.RequestID] || (background && d.busy[EffectiveScope(command)+":"+command.SessionID+command.SubjectID]) {
 		return false
 	}
 	d.running[command.RequestID] = true
 	if background {
-		d.busy[command.SessionID] = true
+		d.busy[EffectiveScope(command)+":"+command.SessionID+command.SubjectID] = true
 	}
 	return true
 }
@@ -305,6 +309,9 @@ func (d *Dispatcher) run(ctx context.Context, command store.IdeationCommand) (Ou
 // conflict names the current revision; every other error that is not
 // transient is a refusal that explains itself.
 func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationCommand, err error) Outcome {
+	if errors.Is(err, store.ErrLocalExecutionConflict) || errors.Is(err, store.ErrRevisionConflict) {
+		return Outcome{Code: store.IdeationCommandConflict, Detail: err.Error()}
+	}
 	var conflict *store.IdeationRevisionConflictError
 	if errors.As(err, &conflict) {
 		current := conflict.Actual

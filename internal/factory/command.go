@@ -291,9 +291,13 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	next.PendingQuestions = removePendingQuestion(run.PendingQuestions, parsed.QuestionID)
 	next.ClarificationCommentID = ""
 	next.UpdatedAt = s.deps.Now().UTC()
+	localStream, _, _ := splitScopedCommentID(comment.ID)
+	localOperatorAnswer := localStream == "local_operator"
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
-	next.ProcessedCommentID = run.ProcessedCommentID
+	if !localOperatorAnswer {
+		next.ProcessedCommentID = run.ProcessedCommentID
+	}
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
@@ -304,6 +308,12 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if localOperatorAnswer {
+		// Local inbox answers persist packet and scoped watermark together.
+		// Ordinary coordinator progression owns continuation after this write,
+		// removing the native-launch-before-command-completion crash window.
+		return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 	}
 	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
 	if err != nil {
@@ -1584,6 +1594,7 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
 	next := commandProjection(run, comment, parsed, commandResultName(parsed), rejection.Error())
 	next.LastCommandOutcome = string(CommandRejected)
+	next.ProcessedCommentID = recordLocalOperatorReceipt(next.ProcessedCommentID, comment.ID, next.LastCommandOutcome, next.LastCommandMessage)
 	updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
 	result := CommandResult{Outcome: CommandRejected, Command: parsed, Rejection: rejection, Run: updated}
 	if err != nil {
@@ -1660,6 +1671,7 @@ func commandProjection(previous store.Run, comment tracker.Comment, parsed comma
 	if parsed.Kind == "" {
 		next.LastCommandOutcome = string(CommandRejected)
 	}
+	next.ProcessedCommentID = recordLocalOperatorReceipt(next.ProcessedCommentID, comment.ID, next.LastCommandOutcome, next.LastCommandMessage)
 	next.UpdatedAt = previous.UpdatedAt
 	return next
 }

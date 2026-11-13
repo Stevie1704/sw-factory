@@ -103,3 +103,22 @@ displayed subject; clarification answers additionally bind question and
 Specification revisions. The coordinator remains the sole consumer and workflow
 writer, and loopback/Host/origin/token protections, strict size bounds,
 idempotency, recovery, and supervisor-unavailable results still apply.
+
+### Scoped inbox implementation
+
+Schema 50 adds explicit `scope` and `subject_id` columns to the existing
+`ideation_commands` inbox. Old rows and envelopes retain session scope. Backlog
+and Run requests have no session ID, preventing terminal-session mutation; the
+same protected route, append-only UI handle, coordinator dispatcher, revision
+checks, and durable outcomes serve all three scopes. Exact execution authority
+is stored separately from publication approval. A committed-target authorization
+and its applied inbox outcome commit atomically, and a settled refusal can never
+be changed into execution authority by replay.
+
+Local Run commands reuse supported coordinator handlers. Their numeric inbox
+sequence uses a separate origin-aware watermark plus bounded disposition; it
+never replaces issue/PR watermarks. Local answers retain that watermark in the
+packet-change transition, then ordinary coordinator progression continues the
+Run. This makes packet acceptance restart-safe without adding another invocation
+or workflow path. The complete format and operator behavior are in the
+[local Markdown contract](../local-markdown-issues.md#protected-local-execution-decisions-and-run-controls).

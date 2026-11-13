@@ -53,7 +53,7 @@ func splitScopedCommentID(id string) (string, string, bool) {
 		return "", "", false
 	}
 	stream, encoded, ok := strings.Cut(strings.TrimPrefix(id, scopedCommentPrefix), ":")
-	if !ok || (stream != "issue" && stream != "pull_request") {
+	if !ok || (stream != "issue" && stream != "pull_request" && stream != "local_operator") {
 		return "", "", false
 	}
 	value, err := base64.RawURLEncoding.DecodeString(encoded)
@@ -89,4 +89,37 @@ func mergeCommentWatermark(previous, current string) string {
 	}
 	encoded, _ := json.Marshal(watermarks)
 	return commentWatermarksPrefix + base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+// localOperatorReceipt is the latest local stream's durable disposition. Remote
+// projections preserve it even when they replace the Run's last-command fields.
+type localOperatorReceipt struct{ ID, Outcome, Detail string }
+
+// localOperatorReceiptKey keeps receipt metadata outside the ordered stream IDs.
+const localOperatorReceiptKey = "local_operator_receipt"
+
+// recordLocalOperatorReceipt commits a local disposition with its Run transition.
+func recordLocalOperatorReceipt(watermarks, commentID, outcome, detail string) string {
+	stream, id, ok := splitScopedCommentID(commentID)
+	if !ok || stream != "local_operator" {
+		return watermarks
+	}
+	values := commentWatermarks(watermarks)
+	receipt, _ := json.Marshal(localOperatorReceipt{ID: id, Outcome: outcome, Detail: store.TruncateUTF8(detail, 1024)})
+	values[localOperatorReceiptKey] = string(receipt)
+	data, _ := json.Marshal(values)
+	return commentWatermarksPrefix + base64.RawURLEncoding.EncodeToString(data)
+}
+
+// replayLocalOperatorReceipt restores its own outcome without reapplying a handler.
+func replayLocalOperatorReceipt(run store.Run, commentID string) (store.IdeationCommandOutcome, string) {
+	_, id, _ := splitScopedCommentID(commentID)
+	var receipt localOperatorReceipt
+	if json.Unmarshal([]byte(commentWatermarks(run.ProcessedCommentID)[localOperatorReceiptKey]), &receipt) != nil || receipt.ID != id {
+		return store.IdeationCommandConflict, "local command was processed; its exact disposition is unavailable, inspect Run history before a new request"
+	}
+	if receipt.Outcome == string(CommandRejected) {
+		return store.IdeationCommandRefused, receipt.Detail
+	}
+	return store.IdeationCommandApplied, receipt.Detail
 }

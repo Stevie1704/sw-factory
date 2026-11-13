@@ -173,3 +173,57 @@ history; reset removes operational authority. Recreating the store never
 reconstructs execution permission from files. The local tracker removes remote
 issue access only: Git transport, model/network access, and code-host PR/review/
 status access remain necessary; Azure Repos still requires `az` (ADR 0019).
+
+## Protected local execution decisions and Run controls
+
+The existing command inbox now has explicit `session`, `backlog`, and `run`
+subjects. Session is the default for old requests. A backlog or Run command has
+its own `subject_id` and no session ID, so a terminal ideation session is never
+reopened to hold a later authorization or answer. The protected origin/token/
+Host/loopback checks and supervisor heartbeat apply to every scope. Repeated
+request IDs return their durable original result even while the supervisor is
+stopped; a new stopped-supervisor mutation returns unavailable.
+
+`approve_start` is a session command that accepts the same exact publication
+digests as publication-only `approve`, plus an explicit selected set of stable
+executable issue IDs. The coordinator records the publication approval, then a
+separate installation-local execution decision, then uses the ordinary content
+publisher. Incomplete publication cannot become claimable. Existing remote
+approvals remain publication-only, and an adapter without the explicit local
+authorizer reports approve-and-start as unsupported.
+
+For already committed work, `preview_execution` creates a fresh exact target
+preview and `authorize_execution` binds that displayed preview's revision,
+content/graph/relationship digests, executable subset, registration, and target
+policy. This path works independently of any originating session. Committed
+imports, factory labels, and a preview alone grant no execution authority.
+The complete validated graph is conservatively bound: unrelated accepted source
+changes also require a new preview and approval for pending work. Active Runs
+retain their frozen Specification packets.
+
+Exact source bytes are retained in the read-only preview projection, bounded by
+the 16 MiB source-graph contract and a 32 MiB serialized-evidence ceiling. The
+command outcome contains a small preview reference and digests instead of
+copying the whole graph into the 4 MiB command-result allowance. Nothing is
+silently shortened. Revalidation checks stable integer mappings, exact source
+and relationships, selected task kinds, installation/operator/code-host identity,
+and the current target branch before recording authority.
+
+Run controls expose only supported `answer_run`, `cancel_run`, `retry_run`, and
+`resume_run` commands. Every operation binds the displayed Run revision and
+Specification version; answers also bind the pending question ID and exact
+question digest. The coordinator supplies local operator provenance from private
+registration. Browser payloads and issue content cannot supply an author or
+installation identity. Unsupported recovery states are refused using the
+ordinary Run semantics. Cancellation applies to existing Runs and to cancellable
+ideation/publication sessions; there is no fabricated Run or queue-cancellation
+workflow for unclaimed work.
+
+Local Run commands have their own numerically ordered inbox-sequence watermark
+and disposition in the existing origin-aware Run projection; issue and PR
+watermarks remain independent. A local answer commits its new packet and local
+watermark in the same ordinary packet transition. The normal coordinator
+progression owns the subsequent invocation, so restart or a lost inbox response
+cannot append the answer twice or launch another invocation. Remote comment
+answer behavior is preserved. A changed source file never changes an active
+Run's frozen packet through this command surface.
