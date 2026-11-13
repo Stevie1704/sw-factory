@@ -40,7 +40,10 @@ import (
 const localJourneyInstallation = "install-00112233445566778899aabbccddeeff"
 
 // localJourneyHost is the scripted code host. Its issue methods fail the
-// journey, because a local tracker must make no remote issue call.
+// journey if called. They are a guard only, not proof: compose wires this
+// value as the code host and never as a tracker, so the absence of remote
+// issue calls follows from composition, which installs only the local
+// tracker.
 type localJourneyHost struct {
 	*schedulingHost
 	t *testing.T
