@@ -1802,3 +1802,45 @@ The high-level `Factory` seam injects configuration, repository checking,
 the tracker adapter, pull requests, `GitWorkspace`, worker, headless harness, clock,
 run-identity, and operational-store adapters. Contract tests exercise Docker
 and both detached adapters through controlled seams.
+
+## Local tracker and independent code host
+
+Private host schema version 2 accepts explicit `tracker` and `code_host`
+selectors. Omitting them retains existing combined GitHub/Azure behavior and
+stored identities. Local content follows the [Markdown issue
+contract](local-markdown-issues.md) and [ADR
+0029](adr/0029-local-markdown-content-and-local-execution-authority.md).
+
+The registration metadata still names exactly one supported code host. Select
+`tracker: local` with `code_host: github` and the existing `github` identity,
+or with `code_host: azure_devops` and the existing `azure_devops` identity.
+Remote tracker selections retain their matching provider identity. Local is
+not a code host. Keep these fields out of checked-in `factory.yaml`.
+
+The private configuration route can select a local tracker without an account
+lookup. Prepare the normal host registration (or explicitly write its private
+YAML), then add these fields to the repository entry before starting it:
+
+```yaml
+tracker: local
+code_host: github
+local_operator:
+  installation_id: install-00112233445566778899aabbccddeeff
+  name: workstation-operator
+```
+
+Generate a fresh opaque 128-bit installation identity for a new installation;
+the example is illustrative. The operator name is explicit host configuration,
+not a GitHub/Boards login and never taken from an issue. `authorized_users`
+continues to declare the identities trusted for ordinary code-host review
+commands; configuring it does not require a remote tracker account lookup.
+The configuration decoder validates both selectors, code-host identity, and
+local operator provenance. Changing these private fields does not reinterpret
+old publication approvals as permission to execute.
+
+Local tracker diagnosis must not request GitHub Issues/Boards access. The
+independent code-host check must still verify PR, review, commit-status, and Git
+transport requirements. Azure Repos continues to use `az`: if company policy
+blocks those operations, local Markdown alone cannot provide the full
+issue-to-PR flow. Fully local/manual completion and alternative Azure access
+are follow-up scope.

@@ -32,9 +32,16 @@ type HostConfig struct {
 	Repositories  []RepositoryRegistration `yaml:"repositories"`
 }
 
+// RepositoryRegistration selects the host-owned repository identity and adapters.
 type RepositoryRegistration struct {
-	Path   string       `yaml:"path"`
-	GitHub GitHubConfig `yaml:"github,omitempty"`
+	// Tracker selects the work tracker independently; omission retains legacy behavior.
+	Tracker Provider `yaml:"tracker,omitempty"`
+	// CodeHost selects the PR/status host; omission derives it from existing metadata.
+	CodeHost Provider `yaml:"code_host,omitempty"`
+	// LocalOperator is explicit host provenance for protected local commands.
+	LocalOperator LocalOperatorConfig `yaml:"local_operator,omitempty"`
+	Path          string              `yaml:"path"`
+	GitHub        GitHubConfig        `yaml:"github,omitempty"`
 	// AzureDevOps names an Azure DevOps Services repository in place of
 	// GitHub. A registration names exactly one of the two.
 	AzureDevOps     AzureDevOpsConfig `yaml:"azure_devops,omitempty"`
@@ -949,10 +956,10 @@ func validateTestPolicyPaths(field string, values []string) error {
 	return nil
 }
 
-// validateProvider requires exactly one tracker and code-host identity: the
+// validateLegacyProvider requires exactly one tracker and code-host identity: the
 // GitHub owner and repository, or the Azure DevOps organization, project, and
 // repository.
-func validateProvider(prefix string, repository RepositoryRegistration) error {
+func validateLegacyProvider(prefix string, repository RepositoryRegistration) error {
 	if repository.AzureDevOps.IsZero() {
 		if strings.TrimSpace(repository.GitHub.Owner) == "" {
 			return validation(prefix+".github.owner", "is required")

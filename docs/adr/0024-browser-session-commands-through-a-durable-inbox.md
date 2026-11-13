@@ -94,3 +94,12 @@ away with `factory reset`.
 - **Completing commands only after the handler returns.** Rejected: a stop
   between the session write and the completion would apply a non-idempotent
   edit twice; the same-transaction completion removes that window.
+
+## Commands beyond sessions
+
+[ADR 0029](0029-local-markdown-content-and-local-execution-authority.md) extends
+the inbox contract to backlog and Run subjects. Expected revisions bind the
+displayed subject; clarification answers additionally bind question and
+Specification revisions. The coordinator remains the sole consumer and workflow
+writer, and loopback/Host/origin/token protections, strict size bounds,
+idempotency, recovery, and supervisor-unavailable results still apply.
