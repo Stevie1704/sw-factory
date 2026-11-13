@@ -34,15 +34,3 @@ type PlanBatchResult struct {
 // PlanBatchRecorder persists each subeffect's intent/evidence before the
 // adapter crosses its Git or code-host boundary. Failure stops publication.
 type PlanBatchRecorder func(PlanBatchResult) error
-
-// PlanTargetObserver verifies exact approved content at one fetched snapshot.
-type PlanTargetObserver interface {
-	ObservePlanTarget(context.Context, Repository, PlanPreview) (PlanTargetVisibility, error)
-}
-
-// PlanTargetVisibility keeps successful publication separate from merge waits.
-type PlanTargetVisibility struct {
-	Revision string
-	Visible  bool
-	Reason   string
-}

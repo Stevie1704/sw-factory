@@ -73,8 +73,9 @@ recoverable without duplicates and without a Run.
 
 ### Local Git batches (#294)
 
-The local adapter additionally implements `tracker.PlanPreparer`,
-`PlanBatchPublisher`, and `PlanTargetObserver`. The preview command explicitly
+The local adapter additionally implements `tracker.PlanPreparer` and
+`PlanBatchPublisher`. Target visibility of approved content is decided by the
+local scheduler against its fetched snapshot, not by the adapter. The preview command explicitly
 prepares durable identities before calling the read-only preview; a direct
 preview never allocates or opens a store writer. `PlanBatchPublisher` exists
 because one Git commit must contain the whole accepted graph. Its ledger starts

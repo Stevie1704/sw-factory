@@ -508,7 +508,6 @@ scenarios:
       - "internal/factory:TestUnsuccessfulPrerequisitesDoNotReleaseDependents"
       - "internal/factory:TestLocalClaimRequiresExplicitAuthorityAndFreezesExactBase"
       - "internal/localpublication:TestBatchCommitPreservesCheckoutAndRecovers"
-      - "internal/localpublication:TestTargetVisibilityAcceptsIdenticalSquashContent"
       - "internal/webui:TestLocalPlanSeparatesCommitAcceptanceFromExplicitSelectedExecution"
       - "internal/webui:TestDraftRevisionShowsDeclinesAndExactChangedCriteria"
       - "internal/localissues:TestInvalidGraphsAreRejectedAsAWhole"

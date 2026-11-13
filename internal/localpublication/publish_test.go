@@ -67,8 +67,4 @@ func TestBatchCommitPreservesCheckoutAndRecovers(t *testing.T) {
 	if err != nil || replay.CommitSHA != result.CommitSHA {
 		t.Fatalf("replay=%+v,%v", replay, err)
 	}
-	visibility, err := f.publisher.ObservePlanTarget(t.Context(), tracker.Repository{}, preview)
-	if err != nil || visibility.Visible || visibility.Reason != "waiting for specification merge" {
-		t.Fatalf("target visibility=%+v,%v", visibility, err)
-	}
 }

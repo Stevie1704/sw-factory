@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/codehost"
-	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/localissues"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -560,28 +559,6 @@ func (p *Publisher) remoteRef(ctx context.Context, branch string) (string, error
 		return "", errors.New("ambiguous remote specification ref")
 	}
 	return fields[0], nil
-}
-
-// ObservePlanTarget fetches once and compares exact complete graph identity at
-// that immutable snapshot. Identical squash/cherry-pick content preserves it.
-func (p *Publisher) ObservePlanTarget(ctx context.Context, _ tracker.Repository, preview tracker.PlanPreview) (tracker.PlanTargetVisibility, error) {
-	batch, err := p.approvedBatch(ctx, preview)
-	if err != nil {
-		return tracker.PlanTargetVisibility{}, err
-	}
-	revision, err := gitadapter.FetchTargetSnapshot(ctx, p.Runner, p.RepositoryPath, batch.TargetBranch)
-	if err != nil {
-		return tracker.PlanTargetVisibility{}, err
-	}
-	graph, err := p.graphAt(ctx, revision)
-	if err != nil {
-		return tracker.PlanTargetVisibility{Revision: revision}, err
-	}
-	result := tracker.PlanTargetVisibility{Revision: revision, Visible: graph.Digest == batch.GraphDigest}
-	if !result.Visible {
-		result.Reason = "waiting for specification merge"
-	}
-	return result, nil
 }
 
 // Per-item mutation is intentionally unsupported: only the batch may commit.
