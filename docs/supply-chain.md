@@ -9,8 +9,9 @@ owns the Worker image layout and the digest format.
 ## Approved Go toolchain
 
 The `toolchain` line in [go.mod](../go.mod) names the one approved Go release.
-It was set to `go1.27.2` on 2026-10-09. Then, `go1.27.2` and `go1.26.9` were
-the two supported patched releases. The `go` line remains the language
+It was set to `go1.27.4` on 2026-11-13 to fix GO-2026-6859 (net/http) and
+GO-2026-6809 (crypto/x509). Then, `go1.27.4` was the latest patched release.
+The `go` line remains the language
 minimum. It does not select a build toolchain.
 
 Every build path selects the approved release, or it stops with a diagnosis:

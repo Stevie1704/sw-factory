@@ -114,6 +114,24 @@ func (p *Publisher) Preview(ctx context.Context, sessionID string) (Binding, err
 	return p.render(ctx, history, history.Session.PlanRevision)
 }
 
+// Prepare explicitly reserves local identities before Preview. Remote
+// publishers have no preparation write. Preview and render remain read-only.
+func (p *Publisher) Prepare(ctx context.Context, sessionID string) error {
+	preparer, ok := p.Tracker.(tracker.PlanPreparer)
+	if !ok {
+		return nil
+	}
+	history, err := p.Store.IdeationHistory(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	plan, ok := findPlan(history.Plans, history.Session.PlanRevision)
+	if !ok {
+		return fmt.Errorf("session %q has no plan to prepare", sessionID)
+	}
+	return preparer.PreparePlan(ctx, p.Repository, planGraph(sessionID, plan))
+}
+
 // render preflights one stored plan revision and encodes the preview.
 func (p *Publisher) render(ctx context.Context, history store.IdeationHistory, planRevision int64) (Binding, error) {
 	plan, ok := findPlan(history.Plans, planRevision)

@@ -120,6 +120,30 @@
       "verified_at": "2026-10-17T10:14:26Z"
     },
     {
+      "image_digest": "sha256:c14a2bb6118044059705666d546d1fc0cc4ec488c6d4cd8eb26e429199c5545f",
+      "harness": "claude",
+      "harness_version": "2.1.325 (Claude Code)",
+      "skills": [
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-11-14T09:19:48Z"
+    },
+    {
+      "image_digest": "sha256:c14a2bb6118044059705666d546d1fc0cc4ec488c6d4cd8eb26e429199c5545f",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-11-14T08:15:21Z"
+    },
+    {
       "image_digest": "sha256:c496a269778fcf8ccc75c8b956dfe0010299442c456c6b7624e89cc289eee5c2",
       "harness": "claude",
       "harness_version": "2.1.232 (Claude Code)",

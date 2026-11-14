@@ -866,6 +866,18 @@ works. Register that file only when the operator confirms that it is current.
 A Step 7 smoke that fails with an expired or unrefreshable session shows that
 the registered file will fail in a run too.
 
+When company policy blocks the remote issue tracker (GitHub Issues or Azure
+Boards), the operator can select the local Markdown tracker instead. Issues
+are then Markdown files under `docs/issues/` that an ideation session commits,
+and `factory register` needs `--tracker local --code-host github
+--local-operator <NAME> --authorized-user <REVIEWER>` in addition to the
+GitHub identity. Azure Repos uses the private YAML route. See
+[Local tracker and independent code host](configuration.md#local-tracker-and-independent-code-host).
+The code host is still necessary for pull requests, reviews, and statuses;
+`factory doctor` reports when its access is blocked. With a local tracker,
+`bootstrap-labels` makes no remote change, because labels are local records,
+and the Step 8 proof uses a local issue (see below).
+
 ## Step 7: record the skill smoke
 
 The skill smoke runs once per worker digest, with the release's script,
@@ -1017,6 +1029,13 @@ The onboarding is complete when this proof succeeds, or when the operator
 declines it and `factory doctor` reports ready. With an onboarding plan,
 record the issue with `onboard record live-proof --issue <NUMBER>`; the plan
 `result` is then `live_proof_passed` or `live_proof_declined`.
+
+With a local tracker, there is no `agent-ready` label. Instead, discuss the
+small change in a session on `/sessions`, select **Approve and start** on the
+plan page, merge the specification branch through the normal review, and
+follow the item on `/issues` until its Run reaches the draft pull request. The
+same scope and cleanup rules apply. See the
+[operator workflow](local-markdown-issues.md#operator-workflow).
 
 ## Agent discovery
 

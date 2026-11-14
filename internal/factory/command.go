@@ -127,6 +127,9 @@ type CommandRequest struct {
 	RunID string
 	// IssueNumber identifies the issue or pull request being commented on.
 	IssueNumber int
+	// Stream names issue or pull_request for adapters with unrelated comment
+	// namespaces. It is required when both targets have the same number.
+	Stream string
 	// Comment contains the immutable comment identity, author, and body.
 	Comment tracker.Comment
 }
@@ -186,6 +189,13 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	if request.IssueNumber != run.IssueNumber && request.IssueNumber != run.PullRequestNumber {
 		return CommandResult{Outcome: CommandRejected, Run: *run}, &PolicyRejection{Code: PolicyRejectionWrongTarget, Problem: fmt.Sprintf("comment target #%d does not belong to run %q", request.IssueNumber, run.ID)}
 	}
+	if s.separateIssueCommentStream() {
+		stream, err := commandStream(*run, request)
+		if err != nil {
+			return CommandResult{Outcome: CommandRejected, Run: *run}, err
+		}
+		request.Comment.ID = scopedCommentID(stream, request.Comment.ID)
+	}
 	if eventIDAlreadyProcessed(run.ProcessedCommentID, request.Comment.ID) {
 		return CommandResult{Outcome: CommandReplayed, Command: parsed.Command, Run: *run}, nil
 	}
@@ -195,6 +205,10 @@ func (s *Service) handleRecognizedCommand(ctx context.Context, registration conf
 	}
 	if parseErr != nil {
 		rejection := &PolicyRejection{Code: PolicyRejectionMalformed, Problem: parseErr.Error()}
+		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
+	}
+	if packet, err := decodeSpecificationPacket(run.SpecificationPacket); err == nil && packet.LocalSource != nil && (parsed.Command.Kind == commandlanguage.Refresh || parsed.Command.Kind == commandlanguage.Revision) {
+		rejection := &PolicyRejection{Code: PolicyRejectionCode("local_source_frozen"), Problem: "local accepted source stays frozen for this Run; preview and explicitly authorize changed source as a new local revision"}
 		return s.persistCommandRejection(ctx, registration, runStore, *run, request.Comment, parsed.Command, rejection)
 	}
 	if published, publicationErr := s.ensureClarificationPublication(ctx, registration, runStore, *run); publicationErr != nil {
@@ -281,19 +295,29 @@ func (s *Service) handleAnswerCommand(ctx context.Context, registration config.R
 	next.PendingQuestions = removePendingQuestion(run.PendingQuestions, parsed.QuestionID)
 	next.ClarificationCommentID = ""
 	next.UpdatedAt = s.deps.Now().UTC()
+	localStream, _, _ := splitScopedCommentID(comment.ID)
+	localOperatorAnswer := localStream == "local_operator"
 	// Clear ProcessedCommentID temporarily to defer watermark until after resumption
 	processedCommentID := next.ProcessedCommentID
-	next.ProcessedCommentID = run.ProcessedCommentID
+	if !localOperatorAnswer {
+		next.ProcessedCommentID = run.ProcessedCommentID
+	}
 	if err := s.stopRunWorkerIfActive(ctx, runStore, run); err != nil {
 		return CommandResult{}, err
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for answer: %w", err)
 	}
 	updated, err := s.applyPacketChangeTransition(ctx, runStore, registration, issue, run, next)
 	if err != nil {
 		return CommandResult{}, err
+	}
+	if localOperatorAnswer {
+		// Local inbox answers persist packet and scoped watermark together.
+		// Ordinary coordinator progression owns continuation after this write,
+		// removing the native-launch-before-command-completion crash window.
+		return CommandResult{Outcome: CommandAccepted, Command: parsed, Run: updated}, nil
 	}
 	updated, err = s.resumeAfterPacketChange(ctx, registration, runStore, updated)
 	if err != nil {
@@ -467,7 +491,7 @@ func (s *Service) handleRepairCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for maintainer repair: %w", err)
 	}
@@ -507,7 +531,7 @@ func (s *Service) handleRefreshCommand(ctx context.Context, registration config.
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("decode specification packet for refresh: %w", err)
 	}
-	issue, err := s.deps.Tracker.Issue(ctx, registeredRepository(registration), run.IssueNumber)
+	issue, err := s.runIssue(ctx, registeredRepository(registration), run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for refresh: %w", err)
 	}
@@ -592,7 +616,7 @@ func (s *Service) handleRevisionCommand(ctx context.Context, registration config
 		return CommandResult{}, fmt.Errorf("decode specification packet for revision: %w", err)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for revision: %w", err)
 	}
@@ -1141,7 +1165,7 @@ func (s *Service) applyPacketChangeTransitionWithInvalidation(ctx context.Contex
 // packet change resumption, ensuring retryability when startAgentWithStore fails.
 func (s *Service) persistPacketChangeWatermark(ctx context.Context, runStore RunStore, run store.Run, commentID string) (store.Run, error) {
 	previousRevision := run.Revision
-	run.ProcessedCommentID = commentID
+	run.ProcessedCommentID = mergeCommentWatermark(run.ProcessedCommentID, commentID)
 	run.ProcessedCommentRevision = run.Revision + 1
 	run.Revision = run.ProcessedCommentRevision
 	run.UpdatedAt = s.deps.Now().UTC()
@@ -1205,7 +1229,7 @@ func (s *Service) handleCancelCommand(ctx context.Context, registration config.R
 		return s.persistCommandRejection(ctx, registration, runStore, run, comment, parsed, rejection)
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("read issue for cancellation: %w", err)
 	}
@@ -1264,7 +1288,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 			return nil, &pollingTransportError{err: fmt.Errorf("list comments for #%d: %w", target.number, listErr)}
 		}
 		for _, comment := range listed {
-			comments = append(comments, polledComment{target: target.number, comment: comment})
+			comments = append(comments, polledComment{target: target.number, stream: target.stream, comment: comment})
 		}
 	}
 	sort.SliceStable(comments, func(left, right int) bool {
@@ -1277,7 +1301,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 		if !parsed.Recognized {
 			continue
 		}
-		result, handleErr := s.handleRecognizedCommand(ctx, registration, runStore, &currentRun, CommandRequest{RunID: currentRun.ID, IssueNumber: polled.target, Comment: polled.comment}, parsed, parseErr)
+		result, handleErr := s.handleRecognizedCommand(ctx, registration, runStore, &currentRun, CommandRequest{RunID: currentRun.ID, IssueNumber: polled.target, Stream: polled.stream, Comment: polled.comment}, parsed, parseErr)
 		if result.Run.ID != "" {
 			currentRun = result.Run
 		}
@@ -1299,6 +1323,7 @@ func (s *Service) PollCommands(ctx context.Context, request CommandPollRequest) 
 // because GitHub's comment object does not repeat its parent target.
 type polledComment struct {
 	target  int
+	stream  string
 	comment tracker.Comment
 }
 
@@ -1306,6 +1331,7 @@ type polledComment struct {
 // run's issue, or its pull request through the code-host seam.
 type commentTarget struct {
 	number   int
+	stream   string
 	comments func(context.Context, tracker.Repository) ([]tracker.Comment, error)
 }
 
@@ -1315,7 +1341,7 @@ type commentTarget struct {
 // issue's number is the same stream and is read once.
 func (s *Service) commentTargets(run store.Run) []commentTarget {
 	issue := run.IssueNumber
-	targets := []commentTarget{{number: issue, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+	targets := []commentTarget{{number: issue, stream: "issue", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 		return s.deps.Comments.IssueComments(ctx, repository, issue)
 	}}}
 	pullRequest := run.PullRequestNumber
@@ -1323,14 +1349,21 @@ func (s *Service) commentTargets(run store.Run) []commentTarget {
 		return targets
 	}
 	if reader := s.pullRequestCommentReader(); reader != nil {
-		return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+		return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 			return reader.PullRequestComments(ctx, repository, pullRequest)
+		}})
+	}
+	if s.separateIssueCommentStream() {
+		// Issue numbers are their own namespace here; reading PR comments as
+		// issue comments would read another issue. Fail closed instead.
+		return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(context.Context, tracker.Repository) ([]tracker.Comment, error) {
+			return nil, errors.New("code-host pull-request comment reader is unavailable; recompose a supported code-host adapter")
 		}})
 	}
 	if pullRequest == issue {
 		return targets
 	}
-	return append(targets, commentTarget{number: pullRequest, comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
+	return append(targets, commentTarget{number: pullRequest, stream: "pull_request", comments: func(ctx context.Context, repository tracker.Repository) ([]tracker.Comment, error) {
 		return s.deps.Comments.IssueComments(ctx, repository, pullRequest)
 	}})
 }
@@ -1386,7 +1419,7 @@ func (s *Service) handleRetryCommand(ctx context.Context, registration config.Re
 		run = updated
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, run)
 	if err != nil {
 		return CommandResult{}, err
 	}
@@ -1572,6 +1605,7 @@ func (s *Service) handleHarnessConfiguration(ctx context.Context, registration c
 func (s *Service) persistCommandRejection(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run store.Run, comment tracker.Comment, parsed commandlanguage.Request, rejection *PolicyRejection) (CommandResult, error) {
 	next := commandProjection(run, comment, parsed, commandResultName(parsed), rejection.Error())
 	next.LastCommandOutcome = string(CommandRejected)
+	next.ProcessedCommentID = recordLocalOperatorReceipt(next.ProcessedCommentID, comment.ID, next.LastCommandOutcome, next.LastCommandMessage)
 	updated, err := s.persistCommandProjectionWithRun(ctx, registration, runStore, next, run)
 	result := CommandResult{Outcome: CommandRejected, Command: parsed, Rejection: rejection, Run: updated}
 	if err != nil {
@@ -1640,7 +1674,7 @@ func (s *Service) recoverCommandStatusComment(ctx context.Context, registration 
 func commandProjection(previous store.Run, comment tracker.Comment, parsed commandlanguage.Request, name, message string) store.Run {
 	next := previous
 	next.Revision = previous.Revision + 1
-	next.ProcessedCommentID = comment.ID
+	next.ProcessedCommentID = mergeCommentWatermark(previous.ProcessedCommentID, comment.ID)
 	next.ProcessedCommentRevision = next.Revision
 	next.LastCommandName = name
 	next.LastCommandOutcome = string(CommandAccepted)
@@ -1648,6 +1682,7 @@ func commandProjection(previous store.Run, comment tracker.Comment, parsed comma
 	if parsed.Kind == "" {
 		next.LastCommandOutcome = string(CommandRejected)
 	}
+	next.ProcessedCommentID = recordLocalOperatorReceipt(next.ProcessedCommentID, comment.ID, next.LastCommandOutcome, next.LastCommandMessage)
 	next.UpdatedAt = previous.UpdatedAt
 	return next
 }
@@ -1712,6 +1747,10 @@ func authorizedCommentAuthor(authorized []string, author string) bool {
 func eventIDAlreadyProcessed(processed, current string) bool {
 	if strings.TrimSpace(processed) == "" || strings.TrimSpace(current) == "" {
 		return false
+	}
+	if stream, identity, ok := splitScopedCommentID(current); ok {
+		last := commentWatermarks(processed)[stream]
+		return last != "" && compareEventIDs(identity, last) <= 0
 	}
 	return compareEventIDs(current, processed) <= 0
 }

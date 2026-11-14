@@ -22,14 +22,15 @@ Before sessions, `factory ui` was a read-only view: it never wrote to the
 operational store, and the work tracker was the only durable operator
 surface. Sessions change this on purpose, and only this far:
 
-- The UI can append one kind of record, a session command, to the command
+- The UI can append one kind of record, a bounded command, to the command
   inbox in the operational store. It never applies a command and never
   changes session or run state.
 - The coordinator that `factory start` runs is still the only writer of
   session state and the only process that talks to the tracker.
 - The browser pages of a session (conversation, brief, plan review, preview,
   approval) are durable local operator surfaces in addition to the tracker.
-  Run pages and run evaluation pages stay read-only.
+  With a local tracker, backlog and supported Run operator commands use that
+  same inbox. Remote-tracker Run pages and all run evaluation pages stay read-only.
 
 The exact command API, its HTTP answers, and its request protection are in
 [Local web UI](configuration.md#local-web-ui).
@@ -76,6 +77,39 @@ Keep `factory start` running, run `factory ui`, and open `/sessions`.
    page shows each created item with its link, and the ledger of every
    operation.
 
+## Local Markdown issue review
+
+For a registered local tracker, use the same discussion, Brief handoff and plan
+editor. Decline an item with the editor, repair its incoming links, and save the
+next revision. The review page shows exact before/after fields and declined
+items. Request a revised draft to return work to the existing planning role.
+Unsaved edits withdraw the displayed preview actions until you save or discard
+them and review a fresh preview.
+
+The exact preview shows complete Markdown, stable identities, file paths, graph
+and content digests, the specification branch, target and publication policy.
+**Accept and commit** publishes that content only. **Approve and start** also
+records a separate execution decision for the explicitly selected tasks. It can
+remain **waiting for specification merge**: protected target-branch policy and
+successful dependency completion still apply. Parents group work; unsupported
+investigations never become ordinary implementation tasks.
+
+Open **Local issues** (`/issues`) to follow accepted source, publication evidence,
+authorizations, waiting reasons and linked Runs. Each stable issue page preserves
+the distinction between current source and an active Run’s frozen revision. A
+fresh exact execution preview can authorize committed tasks independently of a
+terminal ideation session. Local Run pages offer only coordinator-supported
+answers, cancellation, retry or resume, bound to the displayed Run, question and
+Specification revisions. All writes use the protected command inbox.
+
+The pages keep unsent input through automatic refresh and command completion;
+a conflict leaves the input visible for an explicit decision. While the
+coordinator is stopped, retained pages remain readable and new mutations report
+unavailable. See the [local Markdown issue contract](local-markdown-issues.md)
+for source identity, authorization, Git publication and recovery rules, and its
+[operator workflow](local-markdown-issues.md#operator-workflow) for the complete
+path and the code-host access that remains necessary.
+
 ## What one approval authorizes
 
 The approval names the plan revision and the digests of the preview. The
@@ -86,7 +120,8 @@ hierarchy needs. If any of it differs when the coordinator records the
 approval or starts publication, the command is refused and nothing is
 written.
 
-The approval authorizes the creation of those items and links, once. It
+For GitHub/Azure remote publication, the approval authorizes the creation of
+those items and links, once. It
 does not authorize `agent-ready`, an implementation run, a change or
 deletion of an existing tracker item, or a publication under a different
 mapping. Implementation starts only when an authorized person marks a

@@ -62,6 +62,13 @@ type Roles interface {
 // Env is what a handler uses to apply a command. Only the coordinator builds
 // it.
 type Env struct {
+	// Operator applies backlog/Run commands using protected host provenance.
+	Operator OperatorCommands
+	// AuthorizePlan records separate local authority after publication approval.
+	AuthorizePlan func(context.Context, store.IdeationCommand, []string) error
+	// ValidateStartSelection, when set, refuses an approve-and-start selection
+	// before the approval is recorded, so a refused command approves nothing.
+	ValidateStartSelection func(context.Context, store.IdeationCommand, []string) error
 	// Store is the operational store.
 	Store Store
 	// Lifecycle resolves every session state change.
@@ -210,17 +217,27 @@ func (d *Dispatcher) takeFailures() error {
 	return errors.Join(failed...)
 }
 
+// commandSubjectKey gives claim and release the same scope-qualified owner.
+func commandSubjectKey(command store.IdeationCommand) string {
+	scope := EffectiveScope(command)
+	subject := command.SubjectID
+	if scope == "session" {
+		subject = command.SessionID
+	}
+	return scope + ":" + subject
+}
+
 // claim reserves command for this dispatcher. A running command, or tracker
 // work for a session that already has tracker work, is not claimed.
 func (d *Dispatcher) claim(command store.IdeationCommand, background bool) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.running[command.RequestID] || (background && d.busy[command.SessionID]) {
+	if d.running[command.RequestID] || (background && d.busy[commandSubjectKey(command)]) {
 		return false
 	}
 	d.running[command.RequestID] = true
 	if background {
-		d.busy[command.SessionID] = true
+		d.busy[commandSubjectKey(command)] = true
 	}
 	return true
 }
@@ -231,7 +248,7 @@ func (d *Dispatcher) release(command store.IdeationCommand, background bool) {
 	defer d.mu.Unlock()
 	delete(d.running, command.RequestID)
 	if background {
-		delete(d.busy, command.SessionID)
+		delete(d.busy, commandSubjectKey(command))
 	}
 }
 
@@ -305,6 +322,9 @@ func (d *Dispatcher) run(ctx context.Context, command store.IdeationCommand) (Ou
 // conflict names the current revision; every other error that is not
 // transient is a refusal that explains itself.
 func (d *Dispatcher) outcomeOf(ctx context.Context, command store.IdeationCommand, err error) Outcome {
+	if errors.Is(err, store.ErrLocalExecutionConflict) || errors.Is(err, store.ErrRevisionConflict) {
+		return Outcome{Code: store.IdeationCommandConflict, Detail: err.Error()}
+	}
 	var conflict *store.IdeationRevisionConflictError
 	if errors.As(err, &conflict) {
 		current := conflict.Actual

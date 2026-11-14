@@ -7,7 +7,7 @@
 <p class="hero-state"><span class="status" data-status="{{.Session.State}}">{{.Session.State}}</span> <span class="activity">session revision {{.Session.Revision}}{{with .Plan}} · plan revision {{.Revision}} from brief revision {{.SourceBriefRevision}}{{end}}</span>{{with .Session.StateReason}} <span class="reason">{{.}}</span>{{end}}</p>
 </div>
 
-<p class="notice plan-note" role="note">Publication creates the reviewed work items in the tracker and nothing more. It does not start implementation: it adds no <code>agent-ready</code> label or tag and starts no run. Mark items ready for the factory in the tracker when you decide to build them.</p>
+{{if .Local}}<p class="notice plan-note" role="note">Accept and commit publishes specifications only. Approve and start separately authorizes the exact selected tasks. Both use a dedicated specification branch and may be <strong>waiting for specification merge</strong> before implementation. A protected target branch can require a human to merge the specification branch before execution can start. Parents and investigations do not start implementation Runs. <a href="/issues">Follow local issues</a>.</p>{{else}}<p class="notice plan-note" role="note">Publication creates the reviewed work items in the tracker and nothing more. It does not start implementation: it adds no <code>agent-ready</code> label or tag and starts no run. Mark items ready for the factory in the tracker when you decide to build them.</p>{{end}}
 
 {{with .Pending -}}
 <section class="callout" aria-labelledby="pending-commands" data-pending-commands>
@@ -32,6 +32,7 @@
 
 <section aria-labelledby="plan-items">
 <h2 id="plan-items">Plan items</h2>
+{{with .Changes}}<section data-plan-changes><h3>Changes from the previous draft</h3>{{range .}}<details><summary>{{.Decision}} {{.NodeID}}: {{.Title}}</summary><dl class="facts">{{range .Fields}}<dt>{{.Field}} before</dt><dd><pre>{{.Before}}</pre></dd><dt>{{.Field}} after</dt><dd><pre>{{.After}}</pre></dd>{{end}}</dl></details>{{end}}<p>These decisions are retained in consecutive plan revisions.</p></section>{{end}}
 {{with .Plan -}}
 {{if .Stale}}<p class="notice notice-alarm" role="alert">This plan derives from brief revision {{.SourceBriefRevision}}, but the brief changed. Regenerate the draft from the current brief before you edit, preview, or approve it.</p>{{end}}
 <p class="plan-context">Repository context revision <code>{{.ContextRevision}}</code>.</p>
@@ -77,14 +78,15 @@
 {{- end}}
 
 {{if .Actions.Regenerate -}}
-<form class="command-form" data-session-command="regenerate_draft" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<form class="command-form" data-session-command="regenerate_draft" data-plan-approval-action data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
 <input type="hidden" name="plan_revision" data-type="number" value="{{.Plan.Revision}}">
-<button type="submit">Regenerate the draft</button>
+<button type="submit">{{if .Local}}Request revised draft{{else}}Regenerate the draft{{end}}</button>
 <span>The planning role writes a new plan revision from the current brief. It replaces this draft and any preview.</span>
 <output data-command-status></output>
 </form>
 {{- end}}
 
+<p id="plan-unsaved" class="notice" role="status" hidden>Unsaved draft changes withdraw the displayed preview actions. Save or discard your edits, then review a fresh preview before approving.</p>
 <section aria-labelledby="preview">
 <h2 id="preview">Publication preview</h2>
 {{with .PreviewRefusal -}}
@@ -101,21 +103,26 @@
 <p class="empty">No preview of plan revision {{with .Plan}}{{.Revision}}{{end}} yet. A preview asks the tracker adapter to resolve types, fields, and relationships without writing anything.</p>
 {{end -}}
 {{if .Actions.Preview -}}
-<form class="command-form" data-session-command="preview_plan" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
+<form class="command-form" data-session-command="preview_plan" data-plan-approval-action data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}">
 <input type="hidden" name="plan_revision" data-type="number" value="{{.Plan.Revision}}">
 <button type="submit">{{if .Preview}}Preview again{{else}}Preview publication{{end}}</button>
 <output data-command-status></output>
 </form>
 {{- end}}
 {{if .Actions.Approve}}{{with .Preview -}}
-<form class="command-form approve-form" data-session-command="approve" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}" data-single-submit>
+<form class="command-form approve-form" data-plan-approval-action data-session-command="approve" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}" data-single-submit>
 <input type="hidden" name="plan_revision" data-type="number" value="{{.PlanRevision}}">
 <input type="hidden" name="payload_sha256" value="{{.PayloadSHA256}}">
 <input type="hidden" name="relationship_mapping_sha256" value="{{.RelationshipMappingSHA256}}">
 <p>Approval binds exactly this preview: plan revision {{.PlanRevision}} at session revision {{$.Session.Revision}}, items <code>{{.PayloadSHA256}}</code>, relationships <code>{{.RelationshipMappingSHA256}}</code>. The coordinator records the approval and then publishes. If anything changed since this preview, it refuses the approval.</p>
-<button type="submit">Approve and publish</button>
+<button type="submit">{{if .Local}}Accept and commit{{else}}Approve and publish{{end}}</button>
 <output data-command-status></output>
 </form>
+{{if and .Local .Executable}}<form class="command-form approve-form" data-plan-approval-action data-session-command="approve_start" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}" data-single-submit>
+<input type="hidden" name="plan_revision" data-type="number" value="{{.PlanRevision}}"><input type="hidden" name="payload_sha256" value="{{.PayloadSHA256}}"><input type="hidden" name="relationship_mapping_sha256" value="{{.RelationshipMappingSHA256}}">
+<fieldset><legend>Tasks explicitly authorized for implementation</legend>{{range .Items}}{{if eq .Type "task"}}<label><input type="checkbox" name="selected_issue_ids" data-list value="{{index .Fields "local_id"}}" checked> {{.Title}} <code>{{index .Fields "local_id"}}</code></label>{{else}}<p>{{.Title}} ({{.Type}}): not executable.</p>{{end}}{{end}}</fieldset>
+<p>Only selected task revisions are authorized. Dependencies still require successful completion and the complete approved specification graph must be present on the fetched target. This grants no merge authority.</p>
+<button type="submit">Approve and start</button><output data-command-status></output></form>{{end}}
 {{- end}}{{end}}
 </section>
 
@@ -132,51 +139,52 @@
 <h2 id="publication">Publication</h2>
 {{if .Actions.Publishing}}<p class="notice" role="status">The coordinator is publishing. Created links appear here as each item is recorded.</p>
 {{else if eq .Session.State "publishing"}}<p class="notice notice-alarm" role="alert">Publication stopped without a recorded result, for example because the coordinator stopped. Retry it to continue the same approved content, or cancel the session.</p>{{end}}
-{{if eq .Session.State "published"}}<p class="notice" role="status">Publication is complete. No implementation started.</p>{{end}}
+{{if eq .Session.State "published"}}<p class="notice" role="status">{{if .Local}}Specifications are committed. Execution requires separate approval, exact target visibility and satisfied dependencies; <a href="/issues">follow local issues and Runs</a>.{{else}}Publication is complete. No implementation started.{{end}}</p>{{end}}
 {{with .Progress -}}
-<p class="publication-counts" data-publication-counts>{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome{{if .NotRun}} · {{.NotRun}} not run{{end}}</p>
+<p class="publication-counts" data-publication-counts>{{if .Batches}}{{.Batches}} atomic batch committed · {{end}}{{.Created}} items created · {{.Linked}} relationships created · {{.Pending}} pending · {{.Failed}} failed · {{.Ambiguous}} unknown outcome{{if .NotRun}} · {{.NotRun}} not run{{end}}</p>
 <div class="scroll">
 <table class="ledger">
 <thead><tr><th scope="col">Operation</th><th scope="col">State</th><th scope="col">Tracker item</th><th scope="col">Detail</th></tr></thead>
 <tbody>
 {{range .Operations -}}
 <tr data-operation="{{.ID}}" data-state="{{.State}}">
-<td>{{if eq .Kind "create_item"}}Create <code>{{.NodeID}}</code> {{.Title}}{{if .Intermediate}} <span class="badge">intermediate</span>{{end}}{{else}}Link <code>{{.FromNodeID}}</code> {{.RelationshipKind}} <code>{{.ToNodeID}}</code>{{end}}</td>
+<td>{{if eq .Kind "create_item"}}Create <code>{{.NodeID}}</code> {{.Title}}{{if .Intermediate}} <span class="badge">intermediate</span>{{end}}{{else if eq .Kind "git_batch"}}Atomic specification commit / optional push and PR{{else}}Link <code>{{.FromNodeID}}</code> {{.RelationshipKind}} <code>{{.ToNodeID}}</code>{{end}}</td>
 <td>{{.Label}}{{if gt .Attempts 0}} ({{.Attempts}} attempts){{end}}</td>
 <td>{{if .URL}}<a href="{{.URL}}" rel="noreferrer noopener">{{.ExternalID}}</a>{{else}}{{.ExternalID}}{{end}}</td>
-<td>{{.Detail}}</td>
+<td>{{if .Batch}}{{with .Batch}}{{.Problem}}{{if .Evidence.Complete}}Approved publication effects are complete.{{end}}{{end}}{{else}}{{.Detail}}{{end}}</td>
 </tr>
 {{end -}}
 </tbody>
 </table>
 </div>
+{{range .Operations}}{{with .Batch}}<dl class="facts batch-evidence"><dt>Specification branch</dt><dd><code>{{.Evidence.Branch}}</code></dd><dt>Specification commit</dt><dd><code>{{.Evidence.CommitSHA}}</code></dd><dt>Push observed</dt><dd>{{.Evidence.Pushed}}</dd>{{with .Evidence.PullRequestURL}}<dt>Specification PR</dt><dd><a href="{{.}}" rel="noreferrer noopener">{{.}}</a></dd>{{end}}{{with .Problem}}<dt>Recovery</dt><dd>{{.}}</dd>{{end}}</dl>{{end}}{{end}}
 {{with .Receipts -}}
 <h3>Attempts</h3>
 <ul class="receipts">
-{{range .}}<li data-receipt="{{.ID}}"><code>{{.ID}}</code> {{.Outcome}}{{with .Detail}}: {{.}}{{end}}</li>
+{{range .}}<li data-receipt="{{.ID}}"><code>{{.ID}}</code> {{.Outcome}}{{if not $.Local}}{{with .Detail}}: {{.}}{{end}}{{else if eq .Outcome "incomplete"}}: Review the atomic batch evidence and recover the pending effect explicitly.{{end}}{{with .Items}}<ul>{{range .}}<li>{{if .URL}}<a href="{{.URL}}" rel="noreferrer noopener">{{.NodeID}} · {{.ExternalID}}</a>{{else}}{{.NodeID}} · {{.ExternalID}}{{end}}</li>{{end}}</ul>{{end}}</li>
 {{end -}}
 </ul>
 {{- end}}
 {{- end}}
 {{if .Actions.Reconcile}}{{with .Progress}}{{range .Operations}}{{if .Reconcilable -}}
 <div class="reconcile" data-reconcile="{{.ID}}">
-<p><code>{{.ID}}</code> has an unknown outcome. Look for an item with correlation <code>{{.Correlation}}</code> in the tracker, then adopt it or confirm that none exists. Reconciliation never creates or deletes an item.{{if eq $.Session.State "cancelled"}} The session stays cancelled: reconciliation only records the result, and no publication resumes.{{end}}</p>
+{{if eq .Kind "git_batch"}}<p><code>{{.ID}}</code> has an unknown commit, push or specification PR outcome. Inspect Git and the code host before adopting the complete matching commit or confirming the pending effect absent. Restore a missing recorded commit ref; never replace it with another commit.</p>{{else}}<p><code>{{.ID}}</code> has an unknown outcome. Look for an item with correlation <code>{{.Correlation}}</code> in the tracker, then adopt it or confirm that none exists. Reconciliation never creates or deletes an item.{{if eq $.Session.State "cancelled"}} The session stays cancelled: reconciliation only records the result, and no publication resumes.{{end}}</p>{{end}}
 <form class="command-form" data-session-command="reconcile" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
 <input type="hidden" name="operation_id" value="{{.ID}}">
-<label>Tracker item ID <input name="external_id" required></label>
-<button type="submit">Adopt this item</button>
+<label>{{if eq .Kind "git_batch"}}Complete matching commit SHA{{else}}Tracker item ID{{end}} <input name="external_id" required></label>
+<button type="submit">{{if eq .Kind "git_batch"}}Adopt complete matching commit{{else}}Adopt this item{{end}}</button>
 <output data-command-status></output>
 </form>
 <form class="command-form" data-session-command="reconcile" data-session-id="{{$.Session.ID}}" data-expected-revision="{{$.Session.Revision}}">
 <input type="hidden" name="operation_id" value="{{.ID}}">
 <input type="hidden" name="external_id" value="">
-<button type="submit">Confirm that no item exists</button>
+<button type="submit">{{if eq .Kind "git_batch"}}Confirm pending effect absent after inspection{{else}}Confirm that no item exists{{end}}</button>
 <output data-command-status></output>
 </form>
 </div>
 {{- end}}{{end}}{{end}}{{end}}
 {{if .Actions.Publish -}}
-<form class="command-form" data-session-command="publish" data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}" data-single-submit>
+<form class="command-form" data-session-command="publish" data-plan-approval-action data-session-id="{{.Session.ID}}" data-expected-revision="{{.Session.Revision}}" data-single-submit>
 <button type="submit">{{if .Actions.Retry}}Retry publication{{else}}Publish the approved plan{{end}}</button>
 <span>{{if .Actions.Retry}}A retry resumes the same approved content: it looks up each unfinished item by correlation before it creates it.{{else}}Publication creates exactly the approved content.{{end}}</span>
 <output data-command-status></output>
@@ -196,6 +204,7 @@
 {{- end}}
 
 {{define "publication" -}}
+{{if .Local}}<p class="notice" data-publication-policy="{{.Policy}}">{{if eq .Policy "local_commit"}}Publication stops at a local commit. Use your ordinary Git/code-host review flow to publish the displayed branch and merge it according to target policy.{{else if eq .Policy "push"}}Publication commits and pushes the displayed specification branch.{{else if eq .Policy "pull_request"}}Publication commits, pushes, and opens a draft specification pull request. Approval covers these three publication effects.{{end}} Target: <code>{{.TargetBranch}}</code>; specification branch: <code>{{.Branch}}</code>. Implementation requires separate authorization and target visibility.</p>{{end}}
 <dl class="facts publication-target">
 <dt>Target</dt><dd><code>{{.Target}}</code></dd>
 <dt>Plan revision</dt><dd>{{.PlanRevision}}</dd>
@@ -209,7 +218,7 @@
 {{if .Intermediate}}<p class="notice">Intermediate item: the tracker hierarchy requires this item between plan items. It is not a plan node; publication creates it like one.</p>{{end}}
 <dl class="facts">
 <dt>Plan node</dt><dd><code>{{.NodeID}}</code></dd>
-<dt>Work-item type</dt><dd>{{.Type}}</dd>
+<dt>Kind / work-item type</dt><dd>{{.Type}}</dd>
 <dt>Correlation</dt><dd><code>{{.Correlation}}</code></dd>
 {{with .Labels}}<dt>Labels</dt><dd>{{range $index, $label := .}}{{if $index}}, {{end}}<code>{{$label}}</code>{{end}}</dd>{{end}}
 {{range .FieldList}}<dt>Field <code>{{.Name}}</code></dt><dd>{{.Value}}</dd>{{end}}

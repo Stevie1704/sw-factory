@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 47
+const CurrentSchemaVersion = 51
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -660,9 +660,11 @@ type Run struct {
 	// Revision is the monotonic coordinator revision used by command replay
 	// prevention and persisted supervision updates.
 	Revision int64
-	// ProcessedCommentID is the highest processed GitHub comment watermark for
+	// ProcessedCommentID is the processed comment watermark for
 	// this run. Claim initializes it to the latest pre-claim issue comment so
 	// historical commands cannot execute against the new run.
+	// Separate tracker/code-host namespaces use a versioned per-stream payload;
+	// legacy combined adapters retain their original raw IDs.
 	ProcessedCommentID string
 	// ProcessedCommentRevision records the run revision at which the watermark
 	// was persisted, making the watermark tuple restart-safe and auditable.
@@ -3553,6 +3555,22 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 		case 47:
 			if err := migrateSessionResourceReleaseSchema(ctx, tx); err != nil {
 				return fmt.Errorf("apply store migration 47: %w", err)
+			}
+		case 48:
+			if _, err := tx.ExecContext(ctx, localIssueIdentitySchema); err != nil {
+				return fmt.Errorf("apply store migration 48: %w", err)
+			}
+		case 49:
+			if err := migrateLocalIssueProjections(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 49: %w", err)
+			}
+		case 50:
+			if err := migrateLocalExecution(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 50: %w", err)
+			}
+		case 51:
+			if err := migrateLocalClaims(ctx, tx); err != nil {
+				return fmt.Errorf("apply store migration 51: %w", err)
 			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)

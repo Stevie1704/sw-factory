@@ -1,7 +1,7 @@
 # Versioned factory worker base image. The repository worker definition adds
 # only the project toolchain that its gates require.
 
-ARG GO_VERSION=1.27.2
+ARG GO_VERSION=1.27.4
 
 # Building the report in a stage that has the target platform selected makes
 # the copied binary native to the image platform, including under buildx.
@@ -17,8 +17,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /factory-report ./cmd/f
 
 FROM node:22-bookworm-slim
 
-ARG NPM_VERSION=11.21.0
-ARG CLAUDE_VERSION=2.1.232
+ARG NPM_VERSION=12.2.2
+ARG CLAUDE_VERSION=2.1.325
 ARG CODEX_VERSION=0.148.0
 # The release docs/spikes/0003-copilot-cli-protocol.md proved. Change it only
 # together with a new compatibility record.
@@ -51,9 +51,10 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends \
 # Exact package versions are build arguments so the base image can be
 # reproduced without silently adopting a newer harness release. npm itself is
 # pinned too: the copy bundled with Node carries dependencies with released
-# security fixes.
+# security fixes. npm 12 runs no dependency install scripts by default; only
+# Claude Code needs its postinstall, which links the native binary.
 RUN npm install --global "npm@${NPM_VERSION}" \
-    && npm install --global \
+    && npm install --global --allow-scripts=@anthropic-ai/claude-code \
       "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
       "@openai/codex@${CODEX_VERSION}" \
       "@github/copilot@${COPILOT_VERSION}" \

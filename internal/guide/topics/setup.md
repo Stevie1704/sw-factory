@@ -155,6 +155,27 @@ scripts/smoke-skills.sh`. That smoke is a paid call; it needs explicit scope.
 repository. `factory doctor` runs the complete startup diagnosis. Repeat the
 named action and `factory doctor` until it prints `doctor: ready`.
 
+### Local Markdown tracker
+
+When policy blocks GitHub Issues or Azure Boards, the operator can select the
+local tracker. Issues are then Markdown files under `docs/issues/`, and an
+ideation session commits them. Register with the extra flags:
+
+```sh
+factory register --tracker local --code-host github \
+  --local-operator <operator-name> --authorized-user <code-host-reviewer> \
+  --codex-auth <codex-auth-path> --claude-auth <claude-auth-path>
+```
+
+Azure Repos as code host uses the private YAML route of the configuration
+guide. The local tracker removes issue-tracker access only. `factory doctor`
+still checks code-host access for pull requests, reviews, and statuses, and
+Azure Repos still uses `az`. When the code host is blocked, doctor fails with
+`github.code_host.access.unavailable` or
+`azure_devops.code_host.access.unavailable`, and no run can start. Report this
+to the operator; do not work around it. `factory guide ideation` describes the
+local workflow.
+
 ## Start supervision
 
 ```sh

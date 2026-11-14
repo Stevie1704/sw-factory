@@ -71,7 +71,8 @@
   // in, a form. A swap would replace the form and wipe that input, so the
   // refresh waits until the form is sent or left.
   function editing() {
-    if (document.querySelector("form[data-dirty]")) {
+    if (window.factoryCommands && window.factoryCommands.editing()) { return true; }
+    if (document.querySelector("form[data-dirty], form[data-command-pending]")) {
       return true;
     }
     var active = document.activeElement;
@@ -89,6 +90,11 @@
     fetch(window.location.href, { cache: "no-store", credentials: "same-origin" })
       .then(readPage)
       .then(function (fresh) {
+        if (editing()) {
+          var notice = document.getElementById("revision-status");
+          if (notice) { notice.hidden = false; }
+          return;
+        }
         if (claim(number)) {
           swapRegions(fresh);
           showUnreachable(false);
@@ -104,5 +110,10 @@
   }
 
   window.setInterval(refresh, seconds * 1000);
+  // Preserve native form input even if the command asset could not load.
+  document.addEventListener("input", function (event) {
+    var form = event.target.closest && event.target.closest("form");
+    if (form) { form.dataset.dirty = "true"; }
+  });
   document.addEventListener("visibilitychange", refresh);
 })();

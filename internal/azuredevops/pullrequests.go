@@ -108,11 +108,38 @@ func pullRequestURL(repository tracker.Repository, number int) string {
 // target branch pair in any status, so a retry cannot create a duplicate. It
 // reads the match by id to get the complete description.
 func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) (codehost.PullRequest, error) {
-	if err := validateRepository(repository); err != nil {
+	ids, err := c.exactPullRequestIDs(ctx, repository, headBranch, baseBranch)
+	if err != nil || len(ids) == 0 {
 		return codehost.PullRequest{}, err
 	}
+	return c.pullRequestByID(ctx, repository, ids[0])
+}
+
+// FindPullRequestCandidates returns all exact branch matches in every status.
+func (c *Client) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
+	ids, err := c.exactPullRequestIDs(ctx, repository, headBranch, baseBranch)
+	if err != nil {
+		return nil, err
+	}
+	var matches []codehost.PullRequest
+	for _, id := range ids {
+		pr, err := c.pullRequestByID(ctx, repository, id)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, pr)
+	}
+	return matches, nil
+}
+
+// exactPullRequestIDs lists, in host order, the pull requests in every status
+// whose source and target refs match the exact branch pair.
+func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]int, error) {
+	if err := validateRepository(repository); err != nil {
+		return nil, err
+	}
 	if err := validateBranches(headBranch, baseBranch); err != nil {
-		return codehost.PullRequest{}, err
+		return nil, err
 	}
 	query := url.Values{
 		"searchCriteria.sourceRefName": {branchRef(headBranch)},
@@ -124,14 +151,15 @@ func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Reposit
 		Value []pullRequestResponse `json:"value"`
 	}
 	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/pullrequests", query)}, &response); err != nil {
-		return codehost.PullRequest{}, fmt.Errorf("find pull request for %q: %w", headBranch, err)
+		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
+	var ids []int
 	for _, candidate := range response.Value {
 		if candidate.SourceRefName == branchRef(headBranch) && candidate.TargetRefName == branchRef(baseBranch) {
-			return c.pullRequestByID(ctx, repository, candidate.PullRequestID)
+			ids = append(ids, candidate.PullRequestID)
 		}
 	}
-	return codehost.PullRequest{}, nil
+	return ids, nil
 }
 
 // pullRequestByID reads one pull request. The list endpoint truncates the

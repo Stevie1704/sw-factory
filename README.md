@@ -11,6 +11,12 @@ source of issue and pull-request activity, while the coordinator runs locally
 and keeps workflow decisions, external projections, and recovery state
 explicit. It does not merge pull requests.
 
+When company policy blocks the remote issue tracker, a registration can use
+the local Markdown tracker instead: an ideation session commits accepted
+issues under `docs/issues/`, and the operator approves their execution in the
+local UI. Pull requests still go through the configured code host. See the
+[local Markdown issue workflow](docs/local-markdown-issues.md#operator-workflow).
+
 This README is an entry point. Detailed contracts intentionally live in the
 documents linked below instead of being copied here.
 
@@ -171,6 +177,8 @@ Each operational contract has one owner:
 | Preparing a new repository for factory runs, as an ordered agent-runnable procedure | [Repository initialization](docs/repository-initialization.md) |
 | Host and repository configuration, issue operations, polling, GitHub commands, cleanup, and reset | [Configuration and local operation](docs/configuration.md) |
 | Ideation sessions for users: configuration, flow, approval scope, recovery, and retention | [From an idea to a reviewed backlog](docs/ideation.md) |
+| Local Markdown issues: file format, identities, Git publication, execution authorization, scheduling, and the remaining code-host access | [Local Markdown issue contract](docs/local-markdown-issues.md) |
+| Release evidence of the local Markdown backlog | [Local Markdown backlog acceptance](docs/acceptance/local-markdown-backlog.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | GitHub Copilot CLI operator setup, credentials, smoke evidence, and failure actions | [GitHub Copilot CLI](docs/configuration.md#github-copilot-cli) |
 | Release evidence and open live blockers of the Copilot CLI harness | [Copilot CLI release evidence](docs/acceptance/copilot.md) |

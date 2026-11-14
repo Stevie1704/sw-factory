@@ -57,6 +57,8 @@ func (routes *sessionRoutes) register(mux *http.ServeMux) {
 // answer is the JSON answer of the command API. Fields that do not apply
 // are left out.
 type answer struct {
+	Scope            string          `json:"scope,omitempty"`
+	SubjectID        string          `json:"subject_id,omitempty"`
 	RequestID        string          `json:"request_id,omitempty"`
 	SessionID        string          `json:"session_id,omitempty"`
 	Kind             string          `json:"kind,omitempty"`
@@ -132,12 +134,19 @@ func (routes *sessionRoutes) refuseForeign(r *http.Request) (int, string) {
 
 // submitRefusal maps a submission error to its status and answer.
 func submitRefusal(err error, command store.IdeationCommand) (int, answer) {
-	refusal := answer{RequestID: command.RequestID, SessionID: command.SessionID, Kind: command.Kind, Detail: err.Error()}
+	refusal := answer{Scope: command.Scope, SubjectID: command.SubjectID, RequestID: command.RequestID, SessionID: command.SessionID, Kind: command.Kind, Detail: err.Error()}
+	var scopedConflict *store.CommandRevisionConflictError
 	var conflict *store.IdeationRevisionConflictError
 	switch {
 	case errors.Is(err, factory.ErrSupervisorUnavailable):
 		refusal.Outcome = "unavailable"
 		return http.StatusServiceUnavailable, refusal
+	case errors.As(err, &scopedConflict):
+		refusal.Outcome, refusal.ExpectedRevision, refusal.CurrentRevision = "conflict", scopedConflict.Expected, scopedConflict.Actual
+		return http.StatusConflict, refusal
+	case errors.Is(err, store.ErrLocalExecutionConflict):
+		refusal.Outcome = "conflict"
+		return http.StatusConflict, refusal
 	case errors.As(err, &conflict):
 		refusal.Outcome, refusal.ExpectedRevision, refusal.CurrentRevision = "conflict", conflict.Expected, conflict.Actual
 		refusal.Detail = "the session changed since the page was read; reload it and decide again"
@@ -174,7 +183,7 @@ func (routes *sessionRoutes) command(w http.ResponseWriter, r *http.Request) {
 // commandAnswer is the answer for one stored command.
 func commandAnswer(command store.IdeationCommand) answer {
 	return answer{
-		RequestID: command.RequestID, SessionID: command.SessionID, Kind: command.Kind, State: string(command.State),
+		Scope: command.Scope, SubjectID: command.SubjectID, RequestID: command.RequestID, SessionID: command.SessionID, Kind: command.Kind, State: string(command.State),
 		Outcome: string(command.Outcome), Detail: command.Detail, ExpectedRevision: command.ExpectedRevision,
 		SessionRevision: command.SessionRevision, Attempts: command.Attempts, AcceptedAt: jsonTime(command.AcceptedAt),
 		CompletedAt: jsonTime(command.CompletedAt), Result: command.Result,

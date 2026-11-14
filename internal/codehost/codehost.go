@@ -11,8 +11,15 @@ import (
 	"context"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
+
+// ReadinessChecker diagnoses code-host requirements independently of issue
+// tracking. Local trackers must not inherit combined Boards/Issues checks.
+type ReadinessChecker interface {
+	CodeHostStartupChecks(tracker.Repository) []doctor.Check
+}
 
 // PullRequest is the pull-request identity and body returned to the
 // coordinator after a host-side code-host operation.
@@ -63,6 +70,12 @@ type PullRequestClient interface {
 	FindPullRequest(context.Context, tracker.Repository, string, string) (PullRequest, error)
 	CreatePullRequest(context.Context, tracker.Repository, PullRequestRequest) (PullRequest, error)
 	UpdatePullRequest(context.Context, tracker.Repository, int, PullRequestRequest) (PullRequest, error)
+}
+
+// PullRequestCandidateReader lists every exact source/target match so a
+// publication can refuse ambiguous duplicate effects rather than pick one.
+type PullRequestCandidateReader interface {
+	FindPullRequestCandidates(context.Context, tracker.Repository, string, string) ([]PullRequest, error)
 }
 
 // PullRequestReviewState is the bounded review decision vocabulary. Each

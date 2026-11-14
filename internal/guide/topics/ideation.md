@@ -70,6 +70,46 @@ that you defer after approval resumes with its approval; neither starts a new
 planning run. No-build and cancel end the session; cancel never deletes tracker
 items.
 
+## Local Markdown issues
+
+With a registration that selects the local tracker, the same session ends in
+Markdown files under `docs/issues/` instead of tracker items. The preview
+shows the exact files, stable IDs, paths, relationships, the specification
+branch, and the publication policy. Drafts, declined items, and the
+conversation are never committed.
+
+- **Accept and commit** writes one commit on a factory specification branch in
+  a separate worktree. The operator's checkout does not change. It authorizes
+  no implementation.
+- **Approve and start** also records execution authorization for the selected
+  tasks at their exact revisions.
+
+Push the specification branch and merge it through the normal review of the
+target branch. Until the exact files are on the fetched target, the items show
+`waiting_for_specification_merge`. The coordinator then claims the authorized
+tasks in dependency order, one run at a time. A dependent starts only after
+its prerequisite's pull request is merged on the target. Parents never run.
+
+Follow the items on `/issues` and the runs on `/runs/<id>`. To start committed
+work later, also after the session ended, select tasks on `/issues`, review the
+fresh preview, and approve it. A changed specification needs a new preview
+and approval. Answers, cancel, retry, and resume for the run of a local issue
+use its run page; they are human decisions.
+
+| Waiting reason on `/issues` | Meaning |
+| --- | --- |
+| `missing_execution_approval` | Committed content without an execution decision. |
+| `publication_incomplete` | The specification commit or its push or pull request is incomplete. Retry or reconcile on the plan page. |
+| `waiting_for_specification_merge` | The exact files are not yet on the fetched target branch. |
+| `stale_authorization` | The content, graph, or target changed after approval. Preview and approve again. |
+| `blocked_by_dependencies` | A prerequisite has no merged pull request on the target. |
+| `active_run` | Another run holds the repository's run slot. |
+| `code_host_unavailable` | The code host check failed; see `factory doctor`. |
+| `admission_refused` | Repository policy refuses this task before any claim effect, for example its route, a harness capability, or the target branch. Other tasks continue. Fix the policy or the task. |
+| `unsupported_investigation` | Investigations have no executable route. |
+
+The contract is `docs/local-markdown-issues.md` in the release resources.
+
 ## What an approval covers
 
 An approval binds the plan revision, the tracker target, the complete

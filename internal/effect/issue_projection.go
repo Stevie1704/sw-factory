@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
 // issueProjection makes the two GitHub projections of a run — its state label
@@ -28,7 +29,7 @@ func (p issueProjection) applyStateTransition(ctx context.Context, next *store.R
 	if p.issues == nil {
 		return errors.New("GitHub client is required for state transition")
 	}
-	observed, err := p.issues.Issue(ctx, transition.Repository, next.IssueNumber)
+	observed, err := observeIssueProjection(ctx, p.issues, transition.Repository, issue)
 	if err != nil {
 		return fmt.Errorf("read issue before state transition: %w", err)
 	}
@@ -80,6 +81,15 @@ func (p issueProjection) applyStateTransition(ctx context.Context, next *store.R
 		return fmt.Errorf("edit status comment: %w", err)
 	}
 	return nil
+}
+
+// observeIssueProjection keeps local operational effects independent of source
+// validity while remote adapters retain their ordinary live issue read.
+func observeIssueProjection(ctx context.Context, client issueClient, repository tracker.Repository, frozen tracker.Issue) (tracker.Issue, error) {
+	if reader, ok := client.(tracker.IssueProjectionReader); ok {
+		return reader.ProjectIssue(ctx, repository, frozen)
+	}
+	return client.Issue(ctx, repository, frozen.Number)
 }
 
 // applyStatusComment observes the marker-owned status comment before editing

@@ -51,10 +51,13 @@ func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (stor
 	if !ok {
 		return store.PublicationOperation{}, fmt.Errorf("%w: the current approval has no operation %q", ErrReconciliationRefused, request.OperationID)
 	}
-	if operation.Kind != store.PublicationOperationCreateItem ||
+	if (operation.Kind != store.PublicationOperationCreateItem && operation.Kind != store.PublicationOperationGitBatch) ||
 		(operation.State != store.PublicationOperationAmbiguous && operation.State != store.PublicationOperationAttempted) {
 		return store.PublicationOperation{}, fmt.Errorf("%w: operation %q is a %s in state %s; only an ambiguous item create needs reconciliation",
 			ErrReconciliationRefused, operation.ID, operation.Kind, operation.State)
+	}
+	if operation.Kind == store.PublicationOperationGitBatch {
+		return p.reconcileBatch(ctx, history, request, operation)
 	}
 	candidates, err := p.Tracker.FindPlanItems(ctx, p.Repository, operation.Correlation)
 	if err != nil {

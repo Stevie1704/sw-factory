@@ -119,3 +119,11 @@ small text and the risk of losing publication evidence is worse.
 - **Deleting unpublished sessions with run cleanup after seven days.**
   Rejected for now: a deferred or cancelled conversation is user work with no
   external copy, and cleanup has no session preview yet.
+
+## Backlog and Run operator extension
+
+[ADR 0029](0029-local-markdown-content-and-local-execution-authority.md) extends
+the protected durable command surface to local backlog and Run subjects without
+mutating terminal sessions. Publication approval remains content-only; execution
+authorization is a separate installation-local coordinator decision. Reset
+retains committed Markdown and Git history while removing operational authority.

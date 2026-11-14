@@ -146,11 +146,13 @@ the coordinator; there is no control socket.
 _Avoid_: Queue (for run work), control socket
 
 **Work tracker**:
-The external system that holds the issues the factory claims, their run-state
+The system that holds the issues the factory claims, their run-state
 labels, the status and command comments, and the optional coordinator lease.
 It stays the source of truth for product intent. The coordinator reaches it
-only through the tracker port. The adapters are GitHub and Azure DevOps
-(Boards work items, with tags as labels).
+only through the tracker port. The adapters are GitHub, Azure DevOps
+(Boards work items, with tags as labels), and local committed Markdown. For the
+local tracker, Markdown owns accepted content and SQLite owns operational
+labels/comments; host-local execution authorization is separate from files.
 _Avoid_: GitHub (for the concept), ticket store
 
 **Code host**:
@@ -521,8 +523,9 @@ A planned evidence-gathering delivery phase comparing the supervised factory wit
 _Avoid_: Production readiness, tracer bullet
 
 **Host configuration**:
-Host-local schema-version-2 YAML that registers the one repository, its GitHub
-identity, authorized users, polling, credential sources, checked-in repository
+Host-local schema-version-2 YAML that registers the one repository, its code-host
+identity, independently selected tracker/code host, optional local operator
+provenance, authorized users, polling, credential sources, checked-in repository
 configuration path, external operational-data location, and the cache root with
 the host directory of every repository cache.
 _Avoid_: Repository policy
@@ -570,3 +573,33 @@ store that identifies it, refuses a genuinely live run, and retains the source
 checkout, installed binaries, worker images, repository caches, host credential
 sources, GitHub history and label definitions, and remote branches.
 _Avoid_: Cleanup, uninstall, deregistration, factory reinstall
+
+
+**Local Markdown issue**:
+An accepted UTF-8 Markdown specification under `docs/issues/` with a schema,
+opaque stable identity, kind, parent/dependency references, and publication
+correlation. Git owns accepted content; neither its front matter nor its body
+can authorize execution. Identity survives renames and process restart.
+_Avoid_: Task file, local Run, authorized file
+
+**Local execution authorization**:
+An explicit, durable coordinator decision by the registered local operator,
+bound to the installation/repository, stable issue identities, exact bytes and
+complete graph, displayed publication/preview digests, and selected executable
+subset. It grants no merge authority. A publication approval or imported file
+never supplies it.
+_Avoid_: Plan approval, agent-ready label (for local authority)
+
+**Specification publication**:
+The commit of an exact approved local issue batch in a factory-owned branch and
+separate worktree. Local commit is the default; push and a specification PR need
+explicit approval. It records content and Git evidence only and grants no
+execution authority.
+_Avoid_: Run start, target write, implementation commit
+
+**Target visibility**:
+Evidence that the entire approved batch's exact issue bytes and relationships
+exist at one immutable fetched target-branch snapshot. It compares content
+identity rather than the original publication commit SHA and supplies the same
+snapshot for claim base and Specification source.
+_Avoid_: Published (for executable readiness), matching commit SHA

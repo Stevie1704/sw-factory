@@ -18,7 +18,7 @@
   "use strict";
 
   // A page refresh can insert this script again; one copy is enough.
-  if (window.factoryPlanEditor) {
+  if (window.factoryPlanEditor || !window.factoryCommands) {
     return;
   }
   window.factoryPlanEditor = true;
@@ -93,7 +93,8 @@
 
   // markDirty pauses the automatic refresh until the draft is saved.
   Editor.prototype.markDirty = function () {
-    this.form.dataset.dirty = "true";
+    window.factoryCommands.touch(this.form);
+    window.factoryCommands.invalidatePlan();
   };
 
   // onInput copies one edited field into the draft.
@@ -143,7 +144,8 @@
         this.repair(id, Number(control.dataset.repair));
         break;
       case "discard":
-        window.location.reload();
+        delete this.form.dataset.dirty;
+        window.factoryCommands.refresh(this.form);
         return;
       default:
         return;
@@ -323,13 +325,19 @@
     editor.inFlight = true;
     editor.showState();
     editor.status.textContent = "sending";
-    window.factoryCommands.submit({
+    if (!editor.pendingCommand) {
+      editor.submittedVersion = editor.form.dataset.editVersion || "0";
+      editor.pendingCommand = {
       request_id: editor.requestID,
       session_id: editor.draft.session_id,
       kind: "edit_draft",
       expected_revision: editor.draft.expected_revision,
       payload: { nodes: editor.nodes.map(payloadNode) }
-    }).then(function (answer) {
+      };
+    }
+    editor.form.dataset.commandPending = "true";
+    window.factoryCommands.submit(editor.pendingCommand).then(function (answer) {
+      delete editor.form.dataset.commandPending;
       editor.inFlight = false;
       if (!window.factoryCommands.isFinal(answer)) {
         // The command can be in the inbox, so the next save replays it.
@@ -338,15 +346,17 @@
         return;
       }
       editor.requestID = "";
+      delete editor.pendingCommand;
       if (answer.outcome === "applied") {
-        delete editor.form.dataset.dirty;
-        window.location.reload();
+        if ((editor.form.dataset.editVersion || "0") === editor.submittedVersion) { delete editor.form.dataset.dirty; }
+        window.factoryCommands.refresh(editor.form);
         return;
       }
       editor.showState();
       editor.status.textContent = (answer.outcome || answer.state) + ": " + (answer.detail || "") +
         (answer.outcome === "conflict" ? " Your edits stay here; copy what you need, then discard and edit again." : "");
     }, function () {
+      delete editor.form.dataset.commandPending;
       editor.inFlight = false;
       editor.showState();
       editor.status.textContent = "UI server unreachable: save again to retry the same request";
@@ -439,7 +449,7 @@
     var actions = element("p");
     actions.appendChild(button("Split this item", "split"));
     actions.appendChild(document.createTextNode(" "));
-    actions.appendChild(button("Remove this item", "remove"));
+    actions.appendChild(button(this.draft.local ? "Decline this item" : "Remove this item", "remove"));
     set.appendChild(actions);
     return set;
   }
@@ -485,11 +495,19 @@
     });
   }
 
+  // Draft typing withdraws preview actions even while a refresh replaces editors.
+  document.addEventListener("input", function (event) {
+    if (event.target.closest && event.target.closest(".plan-edit-form")) {
+      window.factoryCommands.invalidatePlan();
+    }
+  });
+
   // guardSingleSubmit disables the button of a single-submit form while its
   // command is open, and moves focus away so the page refresh can show
   // progress.
   document.addEventListener("submit", function (event) {
     var form = event.target;
+    if (form.matches && form.matches(".plan-edit-form")) { window.factoryCommands.invalidatePlan(); }
     if (!form.matches || !form.matches("form[data-single-submit]")) {
       return;
     }
@@ -504,7 +522,7 @@
   // enableButtons enables every button of form again.
   function enableButtons(form) {
     Array.prototype.forEach.call(form.querySelectorAll("button"), function (control) {
-      control.disabled = false;
+      if (!control.dataset.draftBlocked) { control.disabled = false; }
     });
   }
 
@@ -512,11 +530,7 @@
   // other answer re-enables the form; its status shows the reason.
   document.addEventListener("factory:command", function (event) {
     var answer = event.detail || {};
-    if (answer.outcome === "applied") {
-      window.location.reload();
-      return;
-    }
-    enableButtons(event.target);
+    if (answer.outcome !== "applied") { enableButtons(event.target); }
   });
 
   // A lost answer re-enables the form, so a resend repeats the same request.

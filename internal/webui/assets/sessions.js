@@ -53,8 +53,9 @@
   function finish(form, answer) {
     setStatus(form, describe(answer));
     if (answer && answer.outcome === "applied") {
-      delete form.dataset.dirty;
-      window.location.reload();
+      delete form.dataset.commandPending;
+      if ((form.dataset.editVersion || "0") === form.dataset.submittedVersion) { delete form.dataset.dirty; }
+      commands.refresh(form);
     }
   }
 
@@ -84,8 +85,12 @@
   // then opens the session page. A created session is not created again
   // when only the idea must be resent.
   function startSession(form) {
-    var idea = form.elements.idea.value.trim();
-    var title = form.elements.title.value.trim();
+    if (!form.factoryNewSession) {
+      form.factoryNewSession = { idea: form.elements.idea.value.trim(), title: form.elements.title.value.trim(), version: form.dataset.editVersion || "0" };
+    }
+    var idea = form.factoryNewSession.idea;
+    var title = form.factoryNewSession.title;
+    form.dataset.commandPending = "true";
     if (!form.dataset.sessionId) {
       form.dataset.sessionId = commands.newRequestID();
     }
@@ -106,11 +111,21 @@
       if (answer.outcome !== "applied") {
         throw answer;
       }
-      delete form.dataset.dirty;
-      window.location.href = "/sessions/" + encodeURIComponent(sessionID);
+      delete form.dataset.commandPending;
+      if ((form.dataset.editVersion || "0") === form.factoryNewSession.version) { delete form.dataset.dirty; }
+      if (!commands.refresh(form, "/sessions/" + encodeURIComponent(sessionID))) {
+        setStatus(form, "Session created at /sessions/" + sessionID + "; new unsent edits remain here.");
+      }
+      delete form.factoryNewSession;
+      delete form.dataset.createdRevision;
+      delete form.dataset.requestCreate;
+      delete form.dataset.requestTurn;
+      delete form.dataset.sessionId;
     }).catch(function (answer) {
+      delete form.dataset.commandPending;
       setStatus(form, describe(answer));
       if (commands.isFinal(answer)) {
+        delete form.factoryNewSession;
         // The answer is final, so a resend is a new request. A transport
         // failure or an answer that is not final keeps every ID, so a resend
         // replays the same requests.
@@ -157,15 +172,23 @@
   // saveBrief sends the edited brief as the next brief revision.
   function saveBrief(form) {
     setStatus(form, "sending");
-    commands.submit({
+    if (!form.factoryBriefCommand) {
+      form.dataset.submittedVersion = form.dataset.editVersion || "0";
+      form.factoryBriefCommand = {
       request_id: requestID(form, "Brief"), session_id: form.dataset.sessionId, kind: "edit_brief",
       expected_revision: Number(form.dataset.expectedRevision), payload: { brief: briefOf(form) }
-    }).then(function (answer) {
+      };
+    }
+    form.dataset.commandPending = "true";
+    commands.submit(form.factoryBriefCommand).then(function (answer) {
+      delete form.dataset.commandPending;
       if (commands.isFinal(answer)) {
         delete form.dataset.requestBrief;
+        delete form.factoryBriefCommand;
       }
       finish(form, answer);
     }, function () {
+      delete form.dataset.commandPending;
       setStatus(form, "UI server unreachable: send again to retry the same request");
     });
   }
@@ -215,7 +238,7 @@
     remove.textContent = "Remove " + id;
     row.appendChild(remove);
     button.parentNode.insertBefore(row, button);
-    form.dataset.dirty = "true";
+    commands.touch(form);
     row.querySelector("textarea").focus();
   }
 
@@ -225,7 +248,7 @@
       return;
     }
     if (form.id === "new-session" || "briefEditor" in form.dataset) {
-      form.dataset.dirty = "true";
+      commands.touch(form);
     }
     if ("answerForm" in form.dataset) {
       composeAnswer(form);
@@ -261,7 +284,7 @@
       var form = remove.closest("form");
       var container = remove.closest("fieldset");
       remove.closest("[data-brief-row]").remove();
-      form.dataset.dirty = "true";
+      commands.touch(form);
       container.querySelector("button").focus();
     }
   });
@@ -278,9 +301,5 @@
     }
   });
 
-  document.addEventListener("factory:command", function (event) {
-    if (event.detail && event.detail.outcome === "applied") {
-      window.location.reload();
-    }
-  });
+
 })();

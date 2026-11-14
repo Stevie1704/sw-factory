@@ -35,6 +35,9 @@ var resetRetainedResources = []string{
 	"host Codex, Claude, and Copilot credential sources and host harness state",
 	"GitHub label definitions, issues, pull requests, reviews, comments, commit statuses, and merged history",
 	"remote factory/* branches",
+	"committed local issue Markdown under docs/issues and its Git history",
+	"local factory/specifications/* branches",
+	"local specification worktrees in the specifications directory next to the operational database",
 }
 
 // ResetStore is the operational-store seam reset needs to read every persisted
@@ -239,6 +242,19 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 		}
 	}()
 
+	if claims, ok := resetStore.(interface {
+		LocalClaims(context.Context, string) ([]store.LocalClaim, error)
+	}); ok {
+		pending, err := claims.LocalClaims(ctx, registration.Path)
+		if err != nil {
+			return ResetResult{}, err
+		}
+		for _, claim := range pending {
+			if claim.State == "reserved" {
+				return ResetResult{}, fmt.Errorf("pending local claim %s owns reserved Git artifacts; resume/reconcile that claim before reset so all managed targets are inventoried", claim.RunID)
+			}
+		}
+	}
 	plan, blockers, err := s.buildResetPlan(ctx, registration, resetStore, lockPath, operationalDataTarget)
 	if err != nil {
 		return ResetResult{}, err

@@ -71,6 +71,39 @@ recoverable without duplicates and without a Run.
 
 ## Consequences
 
+### Local Git batches (#294)
+
+The local adapter additionally implements `tracker.PlanPreparer` and
+`PlanBatchPublisher`. Target visibility of approved content is decided by the
+local scheduler against its fetched snapshot, not by the adapter. The preview command explicitly
+prepares durable identities before calling the read-only preview; a direct
+preview never allocates or opens a store writer. `PlanBatchPublisher` exists
+because one Git commit must contain the whole accepted graph. Its ledger starts
+with one `git/batch` operation of kind `git_batch`; the existing item and link
+rows follow as references to that atomic result. They never become succeeded
+until the complete commit and every explicitly approved push/PR effect succeed.
+Existing GitHub/Azure item-ledger behavior remains unchanged.
+
+The batch adapter records each subeffect's intent and evidence through the
+coordinator-supplied recorder before crossing Git or the code-host boundary.
+The operation detail retains source/commit/ref, push, and PR evidence; its
+external identity is the immutable specification commit. Recovery verifies the
+exact branch, original parent, publication marker, changed paths, file bytes,
+and complete resulting graph, then observes the optional remote ref and every
+matching specification PR. Successful effects are adopted; a moved/missing ref,
+multiple PRs, conflicting content, or an attempted effect that is not observable
+stops for reconciliation. Confirming a pending effect absent permits retry;
+recorded committed content must instead be restored and cannot be discarded to
+create another commit. Cancelling keeps committed evidence and stops later work.
+
+Each specification commit is made in a factory-owned worktree. Before commit,
+the staged paths, modes, and bytes must exactly match approval; host Git filters
+and signing remain enabled under ADR 0015, but transformations cannot silently
+change the specification. Publication success and target visibility are separate:
+the observer fetches one immutable target snapshot and compares complete graph
+content, so equivalent squash/cherry-pick content is valid. Neither publication
+nor visibility grants execution authority.
+
 The GitHub (#273) and Azure DevOps (#274) adapters implement
 `tracker.PlanPublisher` and must keep `PreflightPlan` deterministic, or every
 retry after approval reports a stale approval. They choose their own

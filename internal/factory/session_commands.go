@@ -145,7 +145,11 @@ func (s *Service) SubmitSessionCommand(ctx context.Context, command store.Ideati
 	if !supervisor.Live {
 		return SessionCommandAck{}, &SupervisorUnavailableError{Supervisor: supervisor}
 	}
-	if err := checkCommandTarget(ctx, inbox, command); err != nil {
+	if sessioncommand.EffectiveScope(command) != "session" {
+		if err := s.checkOperatorCommandTarget(ctx, inbox, registration, command); err != nil {
+			return SessionCommandAck{}, err
+		}
+	} else if err := checkCommandTarget(ctx, inbox, command); err != nil {
 		return SessionCommandAck{}, err
 	}
 	command.AcceptedAt = supervisor.ObservedAt
@@ -181,7 +185,7 @@ func checkCommandTarget(ctx context.Context, inbox CommandInbox, command store.I
 // sameCommand reports whether a retried command carries the stored content.
 func sameCommand(stored, retried store.IdeationCommand) bool {
 	return stored.SessionID == retried.SessionID && stored.Kind == retried.Kind &&
-		stored.ExpectedRevision == retried.ExpectedRevision && bytes.Equal(stored.Payload, retried.Payload)
+		stored.ExpectedRevision == retried.ExpectedRevision && sessioncommand.EffectiveScope(stored) == sessioncommand.EffectiveScope(retried) && stored.SubjectID == retried.SubjectID && bytes.Equal(stored.Payload, retried.Payload)
 }
 
 // supervisorLiveness judges the persisted heartbeat at the service clock.
@@ -368,6 +372,15 @@ func (s *Service) sessionCommandEnv(commandStore sessionCommandStore, registrati
 	env := sessioncommand.Env{
 		Store: commandStore, Lifecycle: lifecycle, Roles: sessionRoleStarter{service: s}, ValidatePlan: plangraph.Validate,
 		RepositoryPath: registration.Path, Now: s.deps.Now,
+	}
+	if registration.EffectiveTracker() == config.ProviderLocal {
+		env.Operator = localOperatorCommands{service: s, store: commandStore}
+		env.AuthorizePlan = func(ctx context.Context, command store.IdeationCommand, selected []string) error {
+			return s.authorizeLocalPlan(ctx, commandStore, command, selected)
+		}
+		env.ValidateStartSelection = func(ctx context.Context, command store.IdeationCommand, selected []string) error {
+			return s.validateLocalStartSelection(ctx, commandStore, registration, command, selected)
+		}
 	}
 	if planner, ok := s.deps.Tracker.(tracker.PlanPublisher); ok {
 		env.Publisher = &publication.Publisher{

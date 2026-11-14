@@ -1055,7 +1055,7 @@ the configured image must be built locally under the same image name; this is
 deliberate because the worker runtime never pulls. A registry publish workflow
 should replace it with the registry's manifest digest. The command prints the
 exact `worker_build` block to copy into `factory.yaml`. The defaults pin Codex
-`0.148.0`, Claude Code `2.1.232`, and npm `11.21.0`; override those build arguments explicitly
+`0.148.0`, Claude Code `2.1.325`, and npm `12.2.2`; override those build arguments explicitly
 when producing a new versioned image. The Go release is not an override: the
 script reads the approved release from the go.mod `toolchain` line, refuses a
 different `GO_VERSION`, and verifies the build metadata of the shipped helpers
@@ -1507,7 +1507,7 @@ Store use:
 
 - Each page request opens the operational store read-only, reads, and closes
   it. The UI never creates or migrates the store, and it does not probe the
-  coordinator lock. Its only write is to append a session command to the
+  coordinator lock. Its only write is to append a validated operator command to the
   command inbox (see below). Thus the UI works while `factory start` runs, and
   its pages also work while the coordinator is stopped.
 - The read-only open requires the current store schema. After an upgrade, normal
@@ -1521,8 +1521,8 @@ Data and network:
 - The UI sends no request to GitHub, Azure DevOps, a remote Git host, or any
   other service, and it sends no telemetry (ADR 0001). Pages and assets load
   only from the UI server; the Content-Security-Policy blocks all other
-  origins. The pull-request link on a run page is the only external URL, and
-  the browser opens it only when you click it.
+  origins. Published tracker-item and specification/implementation PR links open an
+  external URL only when you click them. Local issue links stay on this UI.
 - Run pages show repository content: issue titles, pending questions, the last
   command message, and gate failure diagnostics. This content stays on the
   host; the UI serves it only on the loopback interface.
@@ -1535,6 +1535,8 @@ Pages:
 | `/runs/{id}` | One run: waiting state and reason, checkpoints, gate results, invocations, pending effect, pull request, and gate failure diagnostics. The Retained inspection metadata section adds the frozen policy identity, bounded observations, and evidence availability/checkpoint metadata from the shared CLI projection. |
 | `/sessions` | Ideation sessions, newest update first, with state and reason, and a form that starts a session from an idea. Only with the session command API. |
 | `/sessions/{id}` | One session: the conversation in rounds, pending questions with one answer field each, corrections and the decisions they affect, the brief, the readiness proposal with its brief revision, role progress and failures, and the user's decisions. |
+| `/issues` | Local tracker only: last observed accepted source, queue reasons, publication/authorization evidence, exact fresh execution preview and selected task approval. Reads no Git or network. |
+| `/issues/{stable-id}` | Local tracker only: exact Markdown source, identity, relationships and evidence, with separate current-source and frozen-Run state. Local Run pages add only supported bound operator forms; remote Run pages remain read-only. |
 | `/runs/{id}/evaluation` | The local evaluation summary of one run: outcome, wall time per stage, attempts, invocation versions, and reported usage. The summary is content-free (ADR 0001). When cleanup removed the run row, the page shows only the summary. |
 | `/sessions/{id}/plan` | Plan review of one ideation session (only with the session command API): the current plan items with validation problems, the draft editor, the tracker publication preview, approve-and-publish, and publication progress. See "Plan review" below. |
 
@@ -1545,6 +1547,26 @@ shows a warning that names the run; run `factory start` to continue it. While th
 the banner again after each `--refresh` interval; with `--refresh 0` the page
 changes only when you reload it. When the UI server does not answer, the page
 shows that the server is unreachable.
+
+Local tracker operator controls use the same protected inbox. Session
+`approve_start` includes the exact publication digests plus `selected_issue_ids`;
+existing `approve` stays publication-only. Backlog commands use
+`scope: "backlog"`, `subject_id: "repository"`, and no `session_id`:
+`preview_execution` selects committed task IDs; `authorize_execution` binds the
+returned preview ID/revision, complete graph digest and selected subset. Run
+commands use `scope: "run"`, the displayed Run ID as `subject_id`, its exact
+revision, `packet_version`, and for `answer_run` the displayed `question_id` and
+`question_digest`. Only supported `answer_run`, `cancel_run`, `retry_run`, and
+`resume_run` forms are offered. Plan digests retain their existing raw hexadecimal
+wire format; fresh backlog digests use `sha256:<hex>`. Source content remains
+read-only and no form grants merge authority.
+
+Automatic refresh waits for unsent input and pending commands, including input
+entered while a page read is in flight. Completing one form never discards
+another form's edits. A stale/rejected request retains its text and shows the
+outcome; it does not silently update the expected revision or reapprove content.
+When a Run changes between page reads, its controls are withheld until a fresh
+coherent revision is displayed.
 
 Session commands (ADR 0021, ADR 0024):
 
@@ -1773,6 +1795,18 @@ The operational
 store is the cleanup manifest, so it and the configuration survive until every
 resource whose identity depends on them is gone.
 
+For a registration with the local tracker, reset removes the operational
+authorizations, identity mappings, commands, and execution records with the
+database. It keeps the committed `docs/issues/` Markdown files and their Git
+history, the local and remote `factory/specifications/*` branches, and the
+specification worktrees in the `specifications` directory next to the
+operational database: reset removes only the database files, never that
+directory. Inspect a retained specification worktree, then remove it with
+`git worktree remove` and its branch with `git branch -D` when you no longer
+need it. After you register again,
+the new store imports the committed files as content only and starts nothing
+until you approve again.
+
 The evaluation projection stored in that database disappears with it. Ordinary
 evaluation retention outside reset is unchanged and remains owned by
 `factory evaluation-delete`.
@@ -1802,3 +1836,73 @@ The high-level `Factory` seam injects configuration, repository checking,
 the tracker adapter, pull requests, `GitWorkspace`, worker, headless harness, clock,
 run-identity, and operational-store adapters. Contract tests exercise Docker
 and both detached adapters through controlled seams.
+
+## Local tracker and independent code host
+
+Private host schema version 2 accepts explicit `tracker` and `code_host`
+selectors. Omitting them retains existing combined GitHub/Azure behavior and
+stored identities. Local content follows the [Markdown issue
+contract](local-markdown-issues.md) and [ADR
+0029](adr/0029-local-markdown-content-and-local-execution-authority.md). The
+[operator workflow](local-markdown-issues.md#operator-workflow) walks through
+the complete path from an idea to merged pull requests.
+
+The registration metadata still names exactly one supported code host. Select
+`tracker: local` with `code_host: github` and the existing `github` identity,
+or with `code_host: azure_devops` and the existing `azure_devops` identity.
+Remote tracker selections retain their matching provider identity. Local is
+not a code host. Keep these fields out of checked-in `factory.yaml`.
+
+The private configuration route can select a local tracker without an account
+lookup. Prepare the normal host registration (or explicitly write its private
+YAML), then add these fields to the repository entry before starting it:
+
+```yaml
+tracker: local
+code_host: github
+local_operator:
+  installation_id: install-00112233445566778899aabbccddeeff
+  name: workstation-operator
+```
+
+For a new GitHub-backed registration the CLI also accepts:
+
+```sh
+factory register --repository /path/to/repository \
+  --github-owner OWNER --github-repository NAME \
+  --tracker local --code-host github --local-operator workstation-operator \
+  --authorized-user CODE_HOST_REVIEWER
+```
+
+This generates a fresh installation identity and records the explicit local
+operator without looking up a remote tracker account. `--authorized-user` is
+required for local registration; it names trusted code-host reviewers and may
+be repeated. Azure Repos uses the private YAML route with its existing
+`azure_devops` identity. Credential-only `register --update` does not change
+provider selection or local provenance.
+
+Generate a fresh opaque 128-bit installation identity for a new installation;
+the example is illustrative. The operator name is explicit host configuration,
+not a GitHub/Boards login and never taken from an issue. `authorized_users`
+continues to declare the identities trusted for ordinary code-host review
+commands; configuring it does not require a remote tracker account lookup.
+The configuration decoder validates both selectors, code-host identity, and
+local operator provenance. Changing these private fields does not reinterpret
+old publication approvals as permission to execute.
+
+Local tracker diagnosis must not request GitHub Issues/Boards access. The
+independent code-host check must still verify PR, review, commit-status, and Git
+transport requirements. Azure Repos continues to use `az`: if company policy
+blocks those operations, local Markdown alone cannot provide the full
+issue-to-PR flow. Fully local/manual completion and alternative Azure access
+are follow-up scope.
+
+The local source check reads the fetched `origin/<target_branch>` commit without
+importing content or changing approvals. Fetch that target first when the ref
+is unavailable. The coordinator's local tracker refresh validates the whole
+committed graph before it atomically indexes a revision and assigns missing
+integer mappings. Working-tree changes are ignored; invalid source or identity
+collisions leave earlier evidence intact and return an explicit error. Local
+labels and status/question comments persist in SQLite and never rewrite the
+Markdown files. Import and `agent-ready` labels alone grant no execution
+authority.

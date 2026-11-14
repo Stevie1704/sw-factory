@@ -1,0 +1,41 @@
+{{define "title"}}Local issues{{end}}
+{{define "content" -}}
+<div class="page-head"><p class="crumbs"><a href="/issues">Local issues</a>{{with .Item}} / <code>{{.Issue.ID}}</code>{{end}}</p>
+<h1>{{with .Item}}{{.Title}}{{else}}Local issues{{end}}</h1>
+<p>Last coordinator observation {{formatTime .Projection.ObservedAt}} at <code>{{.Projection.Revision}}</code>.</p>
+<p>These retained pages remain readable with the coordinator stopped. New commands require a live coordinator. Committed files alone never authorize execution.</p></div>
+{{with .Projection.Error}}<p class="notice notice-alarm" role="alert">Source observation unavailable: {{.}}</p>{{end}}
+{{if .Item}}{{template "local-issue" .Item}}{{else}}
+<p><a href="/sessions">Discuss a new idea</a></p>
+{{if .Items}}<div class="scroll"><table><thead><tr><th>Issue</th><th>Kind</th><th>Disposition</th><th>Waiting reason</th><th>Run</th></tr></thead><tbody>
+{{range .Items}}<tr data-local-issue="{{.Issue.ID}}" data-state="{{.State}}"><td><a href="/issues/{{.Issue.ID}}">{{.Title}}</a><br><code>{{.Issue.ID}}</code></td><td>{{.Issue.Kind}}</td><td>{{.State}}</td><td>{{.Reason}}{{if ne .QueueState .State}}<p>Current source: {{.QueueState}} — {{.QueueReason}}</p>{{end}}</td><td>{{with .RunID}}<a href="/runs/{{.}}">{{.}}</a>{{end}}</td></tr>{{end}}
+</tbody></table></div>{{else}}<p>No committed issues observed yet. Start the coordinator to inspect the target, or review an ideation plan.</p>{{end}}{{end}}
+
+<section aria-labelledby="fresh-preview"><h2 id="fresh-preview">Review committed work for execution</h2>
+<p>Choose tasks to preview exact current committed source. This works independently of the originating session, including after that session is terminal. Parents group work; investigations have no executable route.</p>
+<form class="command-form" data-session-command="preview_execution" data-command-scope="backlog" data-subject-id="repository" data-expected-revision="0">
+{{if .Item}}{{with .Item}}{{if .Executable}}<label><input type="checkbox" name="selected_issue_ids" data-list value="{{.Issue.ID}}" checked> {{.Title}}</label>{{end}}{{end}}{{else}}{{range .Items}}{{if .Executable}}<label><input type="checkbox" name="selected_issue_ids" data-list value="{{.Issue.ID}}"> {{.Title}} <code>{{.Issue.ID}}</code></label>{{end}}{{end}}{{end}}
+<button type="submit"{{if not .CanPreview}} disabled{{end}}>Preview selected committed tasks</button><output data-command-status></output></form></section>
+
+{{with .Preview}}<section aria-labelledby="execution-preview" data-execution-preview="{{.ID}}"><h2 id="execution-preview">Exact execution preview</h2>
+<dl class="facts"><dt>Preview revision</dt><dd>{{.Revision}}</dd><dt>Target snapshot</dt><dd><code>{{.Binding.SourceRevision}}</code></dd><dt>Complete graph digest</dt><dd><code>{{.Binding.GraphDigest}}</code></dd><dt>Publication policy</dt><dd>{{.Binding.PublicationPolicy}}</dd><dt>Operator</dt><dd>{{.Binding.OperatorName}}</dd></dl>
+<p>The selected tasks are listed below. Their dependencies still need successful completion. This approval grants no merge authority.</p>
+{{range .Issues}}<details{{if .Selected}} open{{end}}><summary>{{if .Selected}}Selected for execution: {{else}}Graph context: {{end}}{{.Title}} · <code>{{.ID}}</code></summary><dl class="facts"><dt>Path</dt><dd>{{.Path}}</dd><dt>Content digest</dt><dd><code>{{.ContentDigest}}</code></dd><dt>Parent</dt><dd>{{.Parent}}</dd><dt>Dependencies</dt><dd>{{join .Dependencies ", "}}</dd></dl><pre class="rendered-body">{{.Body}}</pre></details>{{end}}
+{{if .Stale}}<p class="notice notice-alarm" role="alert">The coordinator observed changed or unavailable source after this preview. Preview current committed tasks again before approving.</p>{{else if .Approved}}<p class="notice">This exact preview is already approved. To approve again, for example after the authorization became stale, preview the current committed tasks again.</p>{{else}}<form class="command-form" data-session-command="authorize_execution" data-command-scope="backlog" data-subject-id="repository" data-expected-revision="{{.Revision}}">
+<input type="hidden" name="preview_id" value="{{.ID}}"><input type="hidden" name="payload_sha256" value="{{.Binding.PayloadSHA256}}"><input type="hidden" name="relationship_mapping_sha256" value="{{.Binding.RelationshipMappingSHA256}}"><input type="hidden" name="graph_digest" value="{{.Binding.GraphDigest}}">
+{{range .Binding.SelectedIssueIDs}}<input type="checkbox" name="selected_issue_ids" data-list value="{{.}}" checked hidden>{{end}}
+<button type="submit">Approve exact selected tasks and start</button><output data-command-status></output></form>{{end}}</section>{{end}}
+
+{{with .Execution.Authorizations}}<section><h2>Execution authorization evidence</h2><ul>{{range .}}<li><code>{{.RequestID}}</code> by {{.Binding.OperatorName}} for {{join .Binding.SelectedIssueIDs ", "}} at graph <code>{{.Binding.GraphDigest}}</code>.</li>{{end}}</ul></section>{{end}}
+{{with .Execution.Commands}}{{template "local-command-outcomes" .}}{{end}}
+{{- end}}
+
+{{define "local-issue" -}}
+<section data-local-issue="{{.Issue.ID}}" data-state="{{.State}}"><h2>Accepted source and disposition</h2>
+<p><strong>{{.State}}</strong>: {{.Reason}}</p><dl class="facts"><dt>Stable identity</dt><dd><code>{{.Issue.ID}}</code></dd><dt>Kind</dt><dd>{{.Issue.Kind}}</dd><dt>Committed path</dt><dd>{{.Issue.Path}}</dd><dt>Content digest</dt><dd><code>{{.Issue.ContentDigest}}</code></dd><dt>Parent</dt><dd>{{with .Issue.Parent}}<a href="/issues/{{.}}">{{.}}</a>{{end}}</dd><dt>Dependencies</dt><dd>{{range .Issue.Dependencies}}<a href="/issues/{{.}}">{{.}}</a> {{end}}</dd><dt>Current source</dt><dd>{{.QueueState}}: {{.QueueReason}}</dd>
+{{with .SessionID}}<dt>Originating session</dt><dd><a href="/sessions/{{.}}/plan">{{.}}</a></dd>{{end}}{{with .AuthorizationID}}<dt>Authorization</dt><dd><code>{{.}}</code></dd>{{end}}{{with .PublicationBranch}}<dt>Specification branch</dt><dd><code>{{.}}</code></dd>{{end}}{{with .PublicationCommit}}<dt>Specification commit</dt><dd><code>{{.}}</code></dd>{{end}}{{with .PublicationPolicy}}<dt>Publication policy</dt><dd>{{.}}</dd>{{end}}</dl>
+{{with .RunID}}<h3>Frozen Run</h3><p><a href="/runs/{{.}}">{{.}}</a>: {{$.RunState}} {{$.RunReason}}</p><dl class="facts"><dt>Frozen target</dt><dd><code>{{$.FrozenRevision}}</code></dd><dt>Frozen source digest</dt><dd><code>{{$.FrozenContentDigest}}</code></dd></dl>{{end}}
+{{with .PRURL}}<p><a href="{{.}}" rel="noreferrer noopener">Implementation pull request</a></p>{{end}}
+<details open><summary>Exact Markdown source</summary><pre class="rendered-body">{{.Body}}</pre></details></section>
+{{- end}}
+

@@ -21,3 +21,28 @@ Only the composition root in `internal/cli` selects the GitHub adapter. `interna
 - Versioned payloads that read the old GitHub shape. Rejected: the shape does not change, so a reader for an old version adds code without a use.
 - A required lease. Rejected: a tracker without a fitting resource would need a workaround for a diagnostic value.
 - A message broker between the coordinator and the adapters. Rejected: the pending-effect journal already owns ordering and replay, and a broker adds at-least-once delivery that the journal would have to reconcile.
+
+## Local tracker extension
+
+[ADR 0029](0029-local-markdown-content-and-local-execution-authority.md) adds a
+committed Markdown tracker with independent code-host selection. Existing
+combined registrations and serialized tracker payloads retain their identities.
+The local adapter owns issue content/projections only; PR comments, reviews,
+and statuses use the independently supplied code-host port, even when an issue
+number happens to equal a PR number.
+
+`tracker.CommittedIssueReader` exposes complete validated immutable snapshots to
+the coordinator without importing the local provider. Source refresh imports
+content identity and revision-addressed evidence. `Issue` and
+`ListEligibleIssues` refresh first, so they can also allocate the identity
+mappings of newly committed files. Only the preview path stays read-only: it
+reads existing mappings and never allocates one. `codehost.ReadinessChecker` independently diagnoses PR,
+review, and status requirements. The local source check never requests remote
+issue labels, Boards work items, or issue-account inference.
+
+Adapters declaring `tracker.SeparateCommentStreams` use a versioned pair of
+issue/PR watermarks in the existing `ProcessedCommentID` field. Numeric targets
+and comment IDs can coincide across streams without suppressing commands. The
+combined remote adapters retain raw watermark values and their stored payload
+shape. An explicitly targeted command with equal issue/PR numbers must name its
+stream; polling supplies it from the reader that returned the comment.

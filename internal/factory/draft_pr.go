@@ -120,7 +120,7 @@ func (s *Service) CreateDraftPullRequest(ctx context.Context, request DraftPullR
 		return DraftPullRequestResult{}, err
 	}
 	repository := registeredRepository(registration)
-	issue, err := s.deps.Tracker.Issue(ctx, repository, run.IssueNumber)
+	issue, err := s.runIssue(ctx, repository, *run)
 	if err != nil {
 		return DraftPullRequestResult{}, err
 	}
@@ -295,7 +295,7 @@ func (s *Service) planDraftPullRequest(ctx context.Context, client codehost.Pull
 	}
 	body := generatedPullRequestBody(run, packet, gates, intervention)
 	request := codehost.PullRequestRequest{
-		Title:      defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)),
+		Title:      localPullRequestTitle(packet),
 		Body:       body,
 		HeadBranch: run.Branch,
 		BaseBranch: packet.RepositoryConfig.TargetBranch,
@@ -325,7 +325,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	}
 	body := mergeGeneratedPullRequestBody(existing.Body, generatedPullRequestBody(run, packet, nil, intervention))
 	updateRequest := codehost.PullRequestRequest{
-		Title: defaultString(packet.Issue.Title, fmt.Sprintf("Issue #%d", packet.Issue.Number)), Body: body,
+		Title: localPullRequestTitle(packet), Body: body,
 		HeadBranch: run.Branch, BaseBranch: packet.RepositoryConfig.TargetBranch, Draft: true,
 	}
 	updated := existing
@@ -369,6 +369,9 @@ func ensureIssueIdentity(issue, fallback tracker.Issue, issueNumber int) tracker
 // It builds the Gates section from the observed gate results rather than
 // configured gates, rendering each result's actual status.
 func generatedPullRequestBody(run store.Run, packet SpecificationPacket, gates []gate.Result, intervention string) string {
+	if packet.LocalSource != nil {
+		return generatedLocalPullRequestBody(run, packet, gates)
+	}
 	if strings.TrimSpace(intervention) == "" {
 		intervention = "none"
 	}

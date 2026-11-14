@@ -9,6 +9,17 @@
 <p class="hero-links"><a href="/runs/{{.Run.ID}}/evaluation">Evaluation</a>{{with .Run.PullRequestURL}} <a href="{{.}}" rel="noreferrer noopener">Pull request #{{$.Run.PullRequestNumber}}</a>{{end}}</p>
 </div>
 
+{{with .OperatorError}}<p class="notice notice-alarm" role="alert">Local operator controls unavailable: {{.}}</p>{{end}}
+{{with .Operator}}<section class="callout" aria-labelledby="local-run-controls"><h2 id="local-run-controls">Local Run controls</h2>
+{{with .IssueID}}<p><a href="/issues/{{.}}">Local issue {{.}}</a></p>{{end}}
+<p>Bound to Run revision {{.Revision}}, Specification version {{.PacketVersion}}. Source <code>{{.SourceRevision}}</code>, content <code>{{.ContentDigest}}</code>. The coordinator rechecks every command.</p>
+{{if hasAction .Actions "answer_run"}}{{range .Questions}}<form class="command-form" data-session-command="answer_run" data-command-scope="run" data-subject-id="{{$.Operator.RunID}}" data-expected-revision="{{$.Operator.Revision}}">
+<input type="hidden" name="packet_version" data-type="number" value="{{$.Operator.PacketVersion}}"><input type="hidden" name="question_id" value="{{.ID}}"><input type="hidden" name="question_digest" value="{{.Digest}}">
+<label>{{.Prompt}} <textarea name="answer" rows="4" required></textarea></label><button type="submit">Answer this question</button><output data-command-status></output></form>{{end}}{{end}}
+{{range .Actions}}{{if or (eq . "cancel_run") (eq . "retry_run") (eq . "resume_run")}}<form class="command-form" data-session-command="{{.}}" data-command-scope="run" data-subject-id="{{$.Operator.RunID}}" data-expected-revision="{{$.Operator.Revision}}">
+<input type="hidden" name="packet_version" data-type="number" value="{{$.Operator.PacketVersion}}"><label>Operator note <input name="reason"></label><button type="submit">{{if eq . "cancel_run"}}Cancel Run{{else if eq . "retry_run"}}Retry Run{{else}}Resume Run{{end}}</button><output data-command-status></output></form>{{end}}{{end}}
+{{with .Commands}}{{template "local-command-outcomes" .}}{{end}}</section>{{end}}
+
 {{with .Run.PendingQuestions -}}
 <section class="callout" aria-labelledby="questions">
 <h2 id="questions">Pending questions</h2>

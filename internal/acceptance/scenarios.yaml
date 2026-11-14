@@ -472,3 +472,162 @@ scenarios:
     gaps:
       - issue: 281
         summary: Copilot identity, failure, and capacity shapes are provisional until live evidence closes release blockers RB-1 to RB-8; capacity maps to an unexpected exit.
+
+  - id: local-backlog-publish-and-start
+    title: Turn an idea into committed local issues and supervised Runs
+    fixture: A registered repository with tracker local and an independently configured supported code host, the ideation and planning roles declared in factory.yaml, a worker image of this release, a disposable Git remote, and a disposable code-host repository for the implementation pull requests.
+    objective: Lead an idea to a reviewed plan, accept it with Approve and start, publish the specification branch through the normal review process, and follow the Runs to human-merged pull requests in dependency order.
+    authority:
+      - The human user answers, edits, declines, approves, and merges; an operator agent does not approve, merge, or publish for the user.
+      - Paid role and implementation turns, the push of the specification branch, and the pull requests in the disposable repository need the operator's explicit scope.
+    interfaces:
+      - factory start
+      - factory ui and the /sessions, /sessions/{id}/plan, /issues, /issues/{id}, and /runs/{id} pages
+      - factory guide ideation
+      - factory guide configuration
+      - git push and the code host's normal review and merge
+    injected_conditions:
+      - The coordinator restarts after each durable transition.
+      - The user double-clicks Approve and start and resends it after a restart.
+      - The operator's ordinary checkout has staged, unstaged, and untracked changes.
+    success:
+      - Exactly one specification commit on the factory specification branch adds exactly the previewed Markdown files; no draft, declined item, or conversation text is committed, and the operator's checkout keeps its branch, HEAD, and changes.
+      - Each item waits for the specification merge until the exact files and relationships are on the fetched target, also after a squash merge.
+      - Tasks are claimed in dependency order, one non-terminal Run at a time; review-ready does not release a dependent, and the human implementation merge on the fetched target does.
+      - The parent never starts a Run, and no remote issue tracker call is made.
+    failure:
+      - A Run starts before the specification merge, a second commit or Run appears for the same revision, or a dependent starts before its prerequisite merged.
+      - The agent edits the operational store, an issue file's front matter, or the operator's checkout to make work eligible.
+    cleanup:
+      - Close the implementation pull requests and delete the specification and Run branches in the disposable repository; keep the committed issue files as Git history or revert them through a normal commit.
+    deterministic_tests:
+      - "internal/factory:TestLocalBacklogJourneyStartsOneIssueAfterTheHumanSpecificationMerge"
+      - "internal/factory:TestLocalBacklogJourneyRunsAParentsTasksInDependencyOrder"
+      - "internal/factory:TestLocalPublicationWaitsForExactTargetAndAcceptsHumanSquash"
+      - "internal/factory:TestDependenciesNeedMergedImplementationVisibleAtTheClaimSnapshot"
+      - "internal/factory:TestUnsuccessfulPrerequisitesDoNotReleaseDependents"
+      - "internal/factory:TestLocalClaimRequiresExplicitAuthorityAndFreezesExactBase"
+      - "internal/localpublication:TestBatchCommitPreservesCheckoutAndRecovers"
+      - "internal/webui:TestLocalPlanSeparatesCommitAcceptanceFromExplicitSelectedExecution"
+      - "internal/webui:TestDraftRevisionShowsDeclinesAndExactChangedCriteria"
+      - "internal/localissues:TestInvalidGraphsAreRejectedAsAWhole"
+
+  - id: local-backlog-authorize-committed
+    title: Authorize committed local issues after the session ended
+    fixture: As local-backlog-publish-and-start, with a session whose plan was accepted with Accept and commit only and whose specification branch is merged.
+    objective: Start already committed work from the local issue page through a fresh exact execution preview and approval, and control its Run from the Run page.
+    authority:
+      - The human user approves the exact preview and decides on cancellation, retry, and answers; the operator agent does not.
+    interfaces:
+      - factory ui and the /issues, /issues/{id}, and /runs/{id} pages
+      - factory guide authorization
+    injected_conditions:
+      - The originating ideation session is terminal.
+      - The approval is replayed with the same request ID.
+      - The committed source changes after a preview, and the store is recreated from the committed files.
+      - The coordinator is stopped when a command is sent.
+    success:
+      - Publication-only acceptance, committed files, labels, and an import into a new store never start work.
+      - A fresh exact approval starts the work once; a replay returns the stored outcome and adds no Run.
+      - A changed source requires a new preview and approval and never changes an active Run's frozen Specification packet.
+      - Answers, cancellation, and retry use the ordinary Run semantics; a stopped coordinator returns unavailable and changes nothing.
+    failure:
+      - Work starts without a displayed exact approval, or an old approval becomes valid again after the bytes return.
+      - The agent writes an approval, a queue state, or a command result into the store or into an issue file.
+    cleanup:
+      - Cancel or complete the Run and remove its resources with factory cleanup.
+    deterministic_tests:
+      - "internal/factory:TestLocalBacklogJourneyAuthorizesCommittedWorkAfterTheSessionEnded"
+      - "internal/factory:TestPublicationOnlyItemsRemainVisibleAndNeverStart"
+      - "internal/factory:TestTerminalSessionIndependentExecutionApprovalAndReplay"
+      - "internal/factory:TestStaleCommittedSourceAndChangedTargetPolicyCannotAuthorize"
+      - "internal/factory:TestObservedSourceChangesRequireANewDecisionEvenWhenBytesReturn"
+      - "internal/factory:TestKindChangesDoNotReviveAuthorityAfterRevert"
+      - "internal/factory:TestSourceDeletionDoesNotPreventCancellationOrReplaceFrozenSpecification"
+      - "internal/factory:TestLocalAnswerRecoveryContinuesWithOneNewPacketThroughNormalProgression"
+      - "internal/factory:TestLocalCancellationRetryAndUnsupportedResumeUseOrdinaryRunSemantics"
+      - "internal/localtracker:TestARecreatedStoreImportsContentWithoutLifecycleAuthority"
+      - "internal/sessioncommand:TestPublicationApprovalNeverImplicitlyCreatesExecutionAuthority"
+      - "internal/webui:TestScopedLocalSubmissionUsesProtectedInboxAndStoppedReplay"
+      - "internal/webui:TestInvestigationPreviewOffersCommitOnly"
+
+  - id: local-backlog-recovery
+    title: Recover local specification publication and claims after failures
+    fixture: As local-backlog-publish-and-start, with publication policies local_commit, push, and pull_request.
+    objective: Reach one complete publication and at most one Run for each approved revision after injected Git, code-host, and coordinator failures.
+    authority:
+      - As local-backlog-publish-and-start; confirming an effect absent or adopting a matching commit is the human user's decision.
+    interfaces:
+      - factory ui session plan page and its reconcile command
+      - factory ui /issues page
+      - factory doctor --json
+      - git log and the code host's pull request list
+    injected_conditions:
+      - The commit, push, or specification pull request response is lost.
+      - The publication is cancelled during the commit, or after every Git effect and before the receipt.
+      - A recorded specification ref is moved or deleted, or two pull requests match the specification branch.
+      - A Git filter would change the approved bytes.
+      - The coordinator stops after a claim reservation and before the Run is saved.
+      - The code host is unavailable when a claim is due.
+    success:
+      - A lost commit, push, or pull request response is adopted from Git or the code host; no second commit, branch, pull request, or Run is created.
+      - A partial, cancelled, or ambiguous batch releases none of its items and stays visible until it is reconciled.
+      - A claim reservation is resumed with its workspace at the exact base, and a blocked code host prevents the claim, so no Run is created.
+    failure:
+      - The agent deletes or rewrites a specification commit, force-pushes, or edits the store to clear an incomplete publication.
+    cleanup:
+      - As local-backlog-publish-and-start.
+    deterministic_tests:
+      - "internal/localpublication:TestPublicationLedgerAdoptsLostCommitAsOneAtomicBatch"
+      - "internal/localpublication:TestMissingRefAfterLedgerSuccessCannotFabricatePublishedReceipt"
+      - "internal/localpublication:TestCancellationDuringCommitStopsLaterPushAndPR"
+      - "internal/localpublication:TestLostPushAndPRResponsesAreAdopted"
+      - "internal/localpublication:TestUnobservablePRWriteRequiresReconciliation"
+      - "internal/localpublication:TestMultipleMatchingSpecificationPRsStopPublication"
+      - "internal/localpublication:TestPublicationRefusesGitFilterChangesBeforeCommit"
+      - "internal/localpublication:TestRejectedPushReleasesNothingAndRetryPushesOnce"
+      - "internal/localpublication:TestFailedSpecificationWriteRetriesIntoOneExactCommit"
+      - "internal/factory:TestCancelledPublicationCannotReleaseItsOriginalAuthorizationEvenWithAllEffects"
+      - "internal/factory:TestDeletedBaselineIsStaleRatherThanAProtectedTargetMergeWait"
+      - "internal/factory:TestClaimReservationRecoversWorkspaceAndAtomicRunSave"
+      - "internal/factory:TestCodeHostUnavailablePreventsDirectLocalClaim"
+      - "internal/factory:TestRunningLocalSupervisorRejectsPrivateRegistrationDrift"
+      - "internal/factory:TestChangingTrackerCannotReplayAnOldRemoteIssueNumberIntoLocalState"
+      - "internal/webui:TestBatchProgressHasOwnCountAndReconciliation"
+      - "internal/localissues:TestInvalidSourcesCannotBecomeAcceptedIssues"
+      - "internal/localtracker:TestCommittedSymlinksAreNeverAccepted"
+
+  - id: local-backlog-code-host-access
+    title: Diagnose the code-host access that a local tracker still needs
+    fixture: A repository registered with tracker local and code host azure-devops on a host where az can reach Azure Repos but company policy blocks Azure Boards, and a variant where Azure Repos is also blocked.
+    objective: Show that the local tracker needs no Boards or GitHub Issues access, and identify before any Run starts when pull request, review, or status access is missing.
+    authority:
+      - The operator decides whether to continue; the agent does not change corporate access policy or sign in with another identity.
+    interfaces:
+      - factory register
+      - factory config validate --json
+      - factory doctor --json
+      - factory guide configuration
+    injected_conditions:
+      - Azure Boards access is denied.
+      - Azure Repos pull request or status access is denied.
+    success:
+      - Doctor and startup never require Boards or GitHub Issues access for the local tracker.
+      - When Azure Repos access is blocked, doctor fails with an actionable code-host condition and the coordinator claims nothing.
+    failure:
+      - The agent reports that the local tracker removes the need for Azure Repos access, or works around the block with browser automation or another credential.
+    cleanup:
+      - Restore the registration that the scenario changed.
+    deterministic_tests:
+      - "internal/azuredevops:TestCodeHostDiagnosisNeedsReposButNeverBoards"
+      - "internal/azuredevops:TestCodeHostDiagnosisRejectsBlockedStatuses"
+      - "internal/github:TestCodeHostDiagnosisNeverRequiresIssues"
+      - "internal/config:TestLocalTrackerSelectsCodeHostIndependently"
+      - "internal/cli:TestLocalCompositionSuppliesIndependentHostCapabilities"
+      - "internal/factory:TestRegisterLocalTrackerNeverInfersARemoteAccount"
+      - "internal/factory:TestCodeHostUnavailablePreventsDirectLocalClaim"
+    gaps:
+      - issue: 300
+        summary: A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped.
+      - issue: 301
+        summary: Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped.

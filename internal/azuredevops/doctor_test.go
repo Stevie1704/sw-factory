@@ -37,6 +37,50 @@ func runChecks(az *fakeAz) doctor.Report {
 	return doctor.Run(context.Background(), newClient(az).StartupChecks(repository)...)
 }
 
+// TestCodeHostDiagnosisNeedsReposButNeverBoards proves the local tracker can
+// diagnose Azure Repos while every Boards route is absent.
+func TestCodeHostDiagnosisNeedsReposButNeverBoards(t *testing.T) {
+	az := newFakeAz(t).
+		on("GET /contoso/_apis/connectionData", connectionData).
+		on("GET "+repositoryPath, `{"id":"repo-id","defaultBranch":"refs/heads/main","project":{"id":"project-id"}}`).
+		on("GET "+gitPermissionsPath+"/4", `{"value":[true]}`).
+		on("GET "+gitPermissionsPath+"/16", `{"value":[true]}`).
+		on("GET "+gitPermissionsPath+"/16384", `{"value":[true]}`).
+		on("GET "+repositoryPath+"/pullrequests", `{"value":[]}`).
+		on("GET "+repositoryPath+"/refs", `{"value":[{"name":"refs/heads/main","objectId":"1111111111111111111111111111111111111111"}]}`).
+		on("GET "+repositoryPath+"/commits/1111111111111111111111111111111111111111/statuses", `{"value":[]}`)
+	report := doctor.Run(context.Background(), newClient(az).CodeHostStartupChecks(repository)...)
+	if !report.Ready() {
+		t.Fatalf("code-host diagnosis = %#v", report)
+	}
+	for _, call := range az.calls {
+		if strings.Contains(call.url.Path, "/wit/") || strings.Contains(call.url.Path, areaNamespaceForTest) {
+			t.Fatalf("code-host diagnosis required Boards: %s", call.url.Path)
+		}
+	}
+}
+
+// TestCodeHostDiagnosisRejectsBlockedStatuses catches company policy that permits
+// PR listing while denying the status operations required by implementation.
+func TestCodeHostDiagnosisRejectsBlockedStatuses(t *testing.T) {
+	az := newFakeAz(t).
+		on("GET /contoso/_apis/connectionData", connectionData).
+		on("GET "+repositoryPath, `{"id":"repo-id","defaultBranch":"refs/heads/main","project":{"id":"project-id"}}`).
+		on("GET "+gitPermissionsPath+"/4", `{"value":[true]}`).
+		on("GET "+gitPermissionsPath+"/16", `{"value":[true]}`).
+		on("GET "+gitPermissionsPath+"/16384", `{"value":[true]}`).
+		on("GET "+repositoryPath+"/pullrequests", `{"value":[]}`).
+		on("GET "+repositoryPath+"/refs", `{"value":[{"name":"refs/heads/main","objectId":"1111111111111111111111111111111111111111"}]}`).
+		on("GET "+repositoryPath+"/commits/1111111111111111111111111111111111111111/statuses", "error:blocked by company policy")
+	report := doctor.Run(context.Background(), newClient(az).CodeHostStartupChecks(repository)...)
+	if report.Ready() {
+		t.Fatal("blocked code-host statuses were reported ready")
+	}
+}
+
+// areaNamespaceForTest names the Boards-only security surface prohibited above.
+const areaNamespaceForTest = "83e28ad4-2d72-4ceb-97b0-c7726d5502c3"
+
 // TestStartupChecksPassForAReadyIdentity verifies the check names, and that
 // the permission checks use the repository and area security tokens.
 func TestStartupChecksPassForAReadyIdentity(t *testing.T) {

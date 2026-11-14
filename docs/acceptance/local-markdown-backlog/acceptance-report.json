@@ -1,0 +1,317 @@
+{
+  "schema_version": 1,
+  "manifest_schema_version": 1,
+  "generated_at": "2026-11-13T18:50:53.902927Z",
+  "release": {
+    "schema_version": 1,
+    "version": "development",
+    "build": "development",
+    "revision": "d7258ac477dc55c078a9f9be5b2f55b15589c5c4",
+    "modified": false,
+    "worker_base_image": "",
+    "platform": "darwin/arm64"
+  },
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "scenarios": [
+    {
+      "id": "onboard-from-release",
+      "title": "Onboard a small repository from an installed release",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "onboard-instructions-only",
+      "title": "Onboard without native skill support",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "resume-interrupted-onboarding",
+      "title": "Continue an interrupted onboarding with a fresh agent",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "diagnose-failures",
+      "title": "Diagnose common failures",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "recover-operations",
+      "title": "Recover through supported commands",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 181,
+          "summary": "Failure injection around every durable effect is still open; these tests do not replace it."
+        }
+      ]
+    },
+    {
+      "id": "inspect-history",
+      "title": "Inspect a historical run while another run is active",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "upgrade-maintenance",
+      "title": "Upgrade the installation and report unsupported restore",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 257,
+          "summary": "No upgrade preflight or resumable maintenance procedure ships yet."
+        },
+        {
+          "issue": 258,
+          "summary": "No supported backup and restore contract exists."
+        },
+        {
+          "issue": 204,
+          "summary": "Service supervision under launchd or systemd is not part of the upgrade yet."
+        }
+      ]
+    },
+    {
+      "id": "defect-report",
+      "title": "Report a defect to an authorized test destination and clean up",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "scoped-authority",
+      "title": "Act within scoped authority and escalate new decisions",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "contributor-maintenance",
+      "title": "Fix a small Factory defect from repository guidance",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-publish-github",
+      "title": "Turn an idea into reviewed, linked GitHub issues",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-publish-azure-devops",
+      "title": "Turn an idea into reviewed, linked Azure Boards work items",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-without-backlog",
+      "title": "End an ideation session without backlog work",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-recovery",
+      "title": "Recover an ideation session from interruption and stale input",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 265,
+          "summary": "factory reset and factory cleanup do not remove session-role Docker volumes or the snapshot worktree of a role active at coordinator stop (ADR 0023)."
+        }
+      ]
+    },
+    {
+      "id": "copilot-mixed-harness-recovery",
+      "title": "Run and recover a Copilot and mixed-harness workflow",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 281,
+          "summary": "Copilot identity, failure, and capacity shapes are provisional until live evidence closes release blockers RB-1 to RB-8; capacity maps to an unexpected exit."
+        }
+      ]
+    },
+    {
+      "id": "local-backlog-publish-and-start",
+      "title": "Turn an idea into committed local issues and supervised Runs",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+      },
+      "deterministic": {
+        "outcome": "pass",
+        "reason": "Gate and review are not driven for local issues; the journeys reach review-ready through a direct store write"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-authorize-committed",
+      "title": "Authorize committed local issues after the session ended",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-recovery",
+      "title": "Recover local specification publication and claims after failures",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+      },
+      "deterministic": {
+        "outcome": "pass"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-code-host-access",
+      "title": "Diagnose the code-host access that a local tracker still needs",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not run in the #298 acceptance; live provider, harness, and code-host runs were not authorized"
+      },
+      "deterministic": {
+        "outcome": "pass",
+        "reason": "covers diagnosis and claim refusal; completion without a code host is follow-up scope"
+      },
+      "gaps": [
+        {
+          "issue": 300,
+          "summary": "A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped."
+        },
+        {
+          "issue": 301,
+          "summary": "Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped."
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "live": {
+      "blocked": 0,
+      "fail": 0,
+      "not-run": 19,
+      "pass": 0
+    },
+    "deterministic": {
+      "blocked": 0,
+      "fail": 0,
+      "not-run": 15,
+      "pass": 4
+    }
+  },
+  "interventions_by_cause": {},
+  "duration_seconds": 0
+}
