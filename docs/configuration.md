@@ -1055,7 +1055,7 @@ the configured image must be built locally under the same image name; this is
 deliberate because the worker runtime never pulls. A registry publish workflow
 should replace it with the registry's manifest digest. The command prints the
 exact `worker_build` block to copy into `factory.yaml`. The defaults pin Codex
-`0.148.0`, Claude Code `2.1.232`, and npm `11.21.0`; override those build arguments explicitly
+`0.148.0`, Claude Code `2.1.325`, and npm `12.2.2`; override those build arguments explicitly
 when producing a new versioned image. The Go release is not an override: the
 script reads the approved release from the go.mod `toolchain` line, refuses a
 different `GO_VERSION`, and verifies the build metadata of the shipped helpers
