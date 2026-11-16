@@ -61,6 +61,10 @@ state.
    `System.LinkTypes.Hierarchy-Reverse` (parent) or
    `System.LinkTypes.Dependency-Reverse` (predecessor: the To item must be
    done first). Every relationship is native; there is no textual fallback.
+   ADR 0030 decisions 14 and 15 amend this decision for the CLI extension
+   route: `az boards work-item create` cannot set `multilineFieldsFormat`,
+   so the description is created as HTML that shows the Markdown text, and
+   an executable item also carries its `factory-repo:` tag.
 6. **Outcome classification from the az rest response.** `Unauthorized` and
    `Forbidden` are permission errors; `Bad Request` and `Not Found` are
    invalid mappings; a host-command timeout is ambiguous. Every other failure

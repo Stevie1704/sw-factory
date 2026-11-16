@@ -15,7 +15,7 @@ repositories can share one Azure project, so each executable Product Backlog
 Item (PBI) also needs an explicit repository owner. This record defines the
 route, its authentication boundary, the repository assignment contract, and
 the inventory that #304 to #306 implement. It amends ADR 0019 decision 1 and
-its PAT option, and ADR 0025 decisions 4 and 6.
+its PAT option, and ADR 0025 decisions 4, 5, and 6.
 
 ## Decision
 
@@ -183,12 +183,16 @@ its PAT option, and ADR 0025 decisions 4 and 6.
     is not reachable either: the recording lists two `wit/workItems`
     locations with max version 7.2, and `invoke.py` keeps the first one,
     the create route `{project}/_apis/wit/workItems/${type}`, so no PATCH by
-    ID exists. The default format of a large text field is HTML (Microsoft
+    ID exists. The recording lists no `wit` location with a `$batch` route
+    either; a batch update route in another organization is an unverified
+    candidate, not used. The default format of a large text field is HTML (Microsoft
     DevOps blog "Markdown support arrives for work items", July 2025).
     Factory therefore sends the approved Markdown as escaped HTML, one
     `<div>` per line, `<div><br></div>` for a blank line, and `&nbsp;` for
     leading spaces. No Markdown character becomes markup, the work item
-    shows the approved text, and `htmlText` reads it back as that text. The
+    shows the approved text, and `htmlText` reads it back as that text up to
+    its normalization: trailing spaces and surrounding blank lines are
+    dropped, and three or more line breaks become two. The
     approval still binds the Markdown; the HTML is a fixed function of it.
     The description goes as one `--description=<value>` argument, refused
     before approval when it exceeds one Linux argument (131,071 bytes). A

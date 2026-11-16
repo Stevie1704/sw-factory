@@ -62,7 +62,10 @@ type patchOperation struct {
 
 // CreatePlanItem creates exactly the rendered work item: its type, title,
 // Markdown description, correlation tag, and configured fields. It sets no
-// relation, never a factory state tag, and never an execution state.
+// relation, never a factory state tag, and never an execution state. On the
+// CLI extension route it uses az boards work-item create, which stores the
+// description as HTML that shows the Markdown text, and also writes the
+// repository assignment tag (ADR 0030 decisions 14 and 15).
 func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
 	if err := validatePlanRepository(repository); err != nil {
 		return tracker.PlanItemRef{}, err

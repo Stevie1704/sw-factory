@@ -106,6 +106,9 @@ func TestExtensionPreflightRefusesWithoutWrites(t *testing.T) {
 	}{
 		{"no explicit mapping", azuredevopstest.ScrumProcess(), nil, func(*tracker.PlanGraph) {}, tracker.PlanErrorInvalidMapping, "azure_devops.planning"},
 		{"process without PBIs", azuredevopstest.AgileProcess(), agileStory, func(*tracker.PlanGraph) {}, tracker.PlanErrorInvalidMapping, "Product Backlog Item"},
+		{"hierarchy against the backlog order", azuredevopstest.ScrumProcess(), &config.AzurePlanMapping{Levels: []config.AzurePlanLevel{
+			{Type: "Product Backlog Item", Kinds: []string{"parent"}}, {Type: "Epic", Kinds: []string{"task", "investigation"}},
+		}}, func(graph *tracker.PlanGraph) { graph.Items[1].TargetRepository = "" }, tracker.PlanErrorUnsupportedCapability, "backlog levels"},
 		{"unregistered target", azuredevopstest.ScrumProcess(), epicPBIMapping(), func(graph *tracker.PlanGraph) { graph.Items[1].TargetRepository = "other" }, tracker.PlanErrorInvalidMapping, "plan_repositories"},
 		{"target on the Epic", azuredevopstest.ScrumProcess(), epicPBIMapping(), func(graph *tracker.PlanGraph) { graph.Items[0].TargetRepository = "service" }, tracker.PlanErrorInvalidMapping, "not executable"},
 		{"title read as a file", azuredevopstest.ScrumProcess(), epicPBIMapping(), func(graph *tracker.PlanGraph) { graph.Items[1].Title = "@secrets" }, tracker.PlanErrorInvalidMapping, "'@'"},
