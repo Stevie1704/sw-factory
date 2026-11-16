@@ -171,6 +171,7 @@ func planGraph(sessionID string, plan store.PlanRevision) tracker.PlanGraph {
 			NodeID: node.ID, Kind: node.Kind, Title: node.Title, Body: node.Body,
 			AcceptanceCriteria: node.AcceptanceCriteria, ParentID: node.ParentID, DependsOn: node.DependsOn,
 			BriefRefs: node.BriefRefs, Correlation: tracker.PlanCorrelation(sessionID, plan.Revision, node.ID),
+			TargetRepository: node.TargetRepository,
 		})
 	}
 	return graph
@@ -193,6 +194,15 @@ type renderedItemJSON struct {
 	Fields      map[string]string `json:"fields"`
 	Labels      []string          `json:"labels"`
 	Correlation string            `json:"correlation"`
+	// TargetRepository is omitted without a target, so payloads approved
+	// before targets existed keep their bytes.
+	TargetRepository *renderedTargetJSON `json:"target_repository,omitempty"`
+}
+
+// renderedTargetJSON is the stored shape of one item's target repository.
+type renderedTargetJSON struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
 }
 
 // renderedMapping is the stored shape of the approved relationships.
@@ -223,10 +233,14 @@ func encodePreview(preview tracker.PlanPreview) ([]byte, []byte, error) {
 		if labels == nil {
 			labels = []string{}
 		}
-		payload.Items = append(payload.Items, renderedItemJSON{
+		encoded := renderedItemJSON{
 			NodeID: item.NodeID, Type: item.Type, Title: item.Title, Body: item.Body,
 			Fields: fields, Labels: labels, Correlation: item.Correlation,
-		})
+		}
+		if target := item.TargetRepository; target != nil {
+			encoded.TargetRepository = &renderedTargetJSON{Name: target.Name, ID: target.ID}
+		}
+		payload.Items = append(payload.Items, encoded)
 	}
 	mapping := renderedMapping{SchemaVersion: payloadSchemaVersion, Relationships: []renderedRelationJSON{}}
 	for _, relationship := range preview.Relationships {
@@ -270,10 +284,14 @@ func DecodePreview(payloadBytes, mappingBytes []byte) (tracker.PlanPreview, erro
 	}
 	preview := tracker.PlanPreview{Target: payload.Target}
 	for _, item := range payload.Items {
-		preview.Items = append(preview.Items, tracker.RenderedPlanItem{
+		decoded := tracker.RenderedPlanItem{
 			NodeID: item.NodeID, Type: item.Type, Title: item.Title, Body: item.Body,
 			Fields: item.Fields, Labels: item.Labels, Correlation: item.Correlation,
-		})
+		}
+		if target := item.TargetRepository; target != nil {
+			decoded.TargetRepository = &tracker.PlanTargetRepository{Name: target.Name, ID: target.ID}
+		}
+		preview.Items = append(preview.Items, decoded)
 	}
 	for _, relationship := range mapping.Relationships {
 		preview.Relationships = append(preview.Relationships, tracker.PlanRelationshipMapping{

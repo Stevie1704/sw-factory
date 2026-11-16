@@ -2,7 +2,10 @@
 
 This page describes how the Azure DevOps adapter publishes an approved
 ideation plan to Azure Boards (#274, ADR 0022, ADR 0025), and how to prove it
-against a disposable project.
+against a disposable project. It covers the `az rest` route with `az login`.
+For the `devops_extension` route with `az devops login` and a PAT (ADR
+0030), the Epic/PBI mapping, and repository assignment, see
+[the extension route acceptance record](azure-devops-extension-route.md).
 
 ## How a plan maps to Azure Boards
 

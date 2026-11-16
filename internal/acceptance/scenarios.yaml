@@ -631,3 +631,112 @@ scenarios:
         summary: A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped.
       - issue: 301
         summary: Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped.
+
+  - id: azure-extension-publish-and-execute
+    title: Publish an Epic with PBIs and run one PBI to a ready pull request with a PAT login
+    fixture: A disposable Azure DevOps Services project on the Scrum process with one Git repository, a registration with azure_devops.route devops_extension and the Epic/PBI planning mapping, the azure-devops CLI extension signed in with az devops login and no az login session, AZURE_DEVOPS_EXT_PAT unset, and a worker image of this release.
+    objective: Lead an idea to a reviewed plan, approve the exact preview, publish one Epic with two directly linked PBIs, authorize one PBI, and follow its Run to a ready draft pull request that links the PBI natively.
+    authority:
+      - The human user approves the preview, adds agent-ready, reviews, and merges; an operator agent does not.
+      - Paid role and implementation turns and the writes in the disposable project need the operator's explicit scope.
+      - The operator types the PAT at the az devops login prompt; the agent never handles it.
+    interfaces:
+      - az devops login --organization <URL>
+      - factory doctor --json
+      - factory start
+      - factory ui and the /sessions/{id}/plan page
+      - Azure Boards and Azure Repos web pages
+    injected_conditions:
+      - The coordinator stops while a work item create is in flight and restarts.
+      - The approval is resent after publication.
+      - A reviewer votes waiting for author with a finding.
+    success:
+      - Exactly one Epic and two PBIs exist; each PBI shows the Epic as Parent and the Epic shows both children; no Feature exists.
+      - Each PBI carries exactly its factory-plan correlation tag and its factory-repo assignment tag; no item carries agent-ready or a factory state tag after publication, and no Run starts until an authorized user adds agent-ready.
+      - The claimed PBI's draft pull request is in the registered repository, lists the PBI as a linked work item, carries commit statuses, and becomes ready after review feedback is addressed.
+      - No az rest call and no Entra token request is made; the PAT appears in no configuration, store, log, report, or worker environment.
+    failure:
+      - A work item or link is created twice, a PBI is created below a Feature or as a User Story, or publication adds agent-ready.
+      - The agent passes the PAT in a command line, a file, or an environment variable.
+    cleanup:
+      - Abandon the pull request, delete its branch, and remove the work items and factory tags in the disposable project; run az devops logout --organization <URL> and revoke the PAT.
+    deterministic_tests:
+      - "internal/factory:TestIdeationJourneyPublishesTheReviewedPlanToEachTracker"
+      - "internal/factory:TestIdeationJourneySurvivesRestartsAndDuplicateSubmissions"
+      - "internal/factory:TestIdeationJourneyRefusesStaleApprovalAndChangedMapping"
+      - "internal/factory:TestIdeationJourneyRecoversRemoteSuccessAfterACoordinatorStop"
+      - "internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories"
+      - "internal/factory:TestCreateDraftPullRequestLinksTheSourceWorkItemOfAFrozenRepository"
+      - "internal/azuredevops:TestExtensionPublishCreatesOneEpicWithTwoDirectPBIs"
+      - "internal/azuredevops:TestExtensionPublishReconcilesLostResponsesWithoutDuplicates"
+      - "internal/azuredevops:TestExtensionPreflightRefusesWithoutWrites"
+      - "internal/azuredevops:TestExtensionRelationWithALostResponseIsVerifiedNotRepeated"
+      - "internal/azuredevops:TestExtensionLostCreateResponseRecoversThePullRequestAndItsLink"
+      - "internal/azuredevops:TestExtensionCreateUpdateAndReadinessUseDedicatedCommands"
+      - "internal/azuredevops:TestExtensionReviewsAndCommentsReadThreadsThroughInvoke"
+      - "internal/azuredevops:TestExtensionCommitStatusesUseTheGitStatusesInvokeRoute"
+      - "internal/azuredevops:TestExtensionRunnerTurnsAMissingOrExpiredLoginIntoARepairInstruction"
+      - "internal/azuredevops:TestExtensionRunnerRedactsSecretsFromCLIErrors"
+      - "internal/azuredevops:TestExtensionRouteNeverFallsBackToAzRest"
+      - "internal/azuredevops:TestExtensionStartupChecksValidateIdentityAndPermissionsReadOnly"
+      - "internal/azuredevops:TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly"
+      - "internal/worker:TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment"
+      - "internal/config:TestAnOmittedAzureRouteKeepsTheAzRestRoute"
+      - "internal/config:TestValidateHostRejectsAnInvalidAzureRouteSelection"
+      - "internal/azuredevops:TestCLIHelperSDKContract"
+      - "internal/azuredevops:TestExtensionRunnerLoadsAndRemovesTheEmbeddedHelper"
+      - "internal/azuredevops:TestExtensionPreflightRefusesDeniedPermissions"
+      - "internal/azuredevops:TestExtensionPlanPermissionsRefusesAChildAreaDenial"
+      - "internal/azuredevops:TestExtensionClarificationLookupRecoversOnlyTheAuthenticatedAuthorsComment"
+      - "internal/azuredevops:TestExtensionCreatePlanItemUsesTheDedicatedCommand"
+    gaps: []
+
+  - id: azure-extension-repository-assignment
+    title: Run PBIs of one Azure project in two repositories with separate installations
+    fixture: As azure-extension-publish-and-execute, with two Git repositories in the project and one installation (host configuration, store, and factory start) per repository; the publishing installation lists the other repository in plan_repositories.
+    objective: Publish one Epic whose PBIs target both repositories and show that each installation claims, runs, and links only the PBIs assigned to its own repository.
+    authority:
+      - As azure-extension-publish-and-execute; adding or changing a factory-repo tag is the human user's decision.
+    interfaces:
+      - az repos show --project <project> --repository <name>
+      - factory doctor --json
+      - factory start --config <path> for each installation
+      - factory issue <PBI ID>
+      - Azure Boards and Azure Repos web pages
+    injected_conditions:
+      - Agent-ready PBIs with no, two, a malformed, an unknown, and another installation's factory-repo tag exist in the project.
+      - A maintainer changes the factory-repo tag of a claimed PBI.
+    success:
+      - The preview shows each PBI's target repository name and GUID, and the approval binds it.
+      - Each installation claims only PBIs whose single factory-repo tag names its repository GUID; every other agent-ready PBI is refused on factory issue with the tag to set and is never claimed by polling.
+      - Both metadata tags survive publication retries and every state-tag update.
+      - A retag after the claim does not change the Run's repository; each pull request is in the PBI's repository and lists the PBI as a linked work item.
+    failure:
+      - An installation claims a PBI of another repository, or a Run or pull request moves to another repository after the claim.
+      - The agent uses an Area Path, an existing pull request, or the Epic as the repository owner.
+    cleanup:
+      - As azure-extension-publish-and-execute for both repositories and installations.
+    deterministic_tests:
+      - "internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories"
+      - "internal/factory:TestClaimFreezesTheValidatedRepositoryAssignmentWithTheRun"
+      - "internal/factory:TestClaimRefusesAnInvalidRepositoryAssignmentBeforeAnyEffect"
+      - "internal/azuredevops:TestExtensionQueueListsOnlyWorkItemsAssignedToTheRegisteredRepository"
+      - "internal/azuredevops:TestClaimRepositoryAssignmentRefusesEveryInvalidAssignment"
+      - "internal/azuredevops:TestValidateRepositoryAssignmentRefusesEveryInvalidAssignment"
+      - "internal/azuredevops:TestExtensionReplaceIssueLabelsKeepsAssignmentAndCorrelationTags"
+      - "internal/azuredevops:TestExtensionPublishRefusesAnExistingItemWithAnotherTarget"
+      - "internal/azuredevops:TestExtensionPublishRevalidatesTargetsBeforeWrites"
+      - "internal/azuredevops:TestExtensionRetryRefusesAReassignedSuccessfulItem"
+      - "internal/azuredevops:TestExtensionAdoptionRefusesAReplacementBeforeUpdating"
+      - "internal/azuredevops:TestExtensionQueueContinuesPastIneligibleItems"
+      - "internal/azuredevops:TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository"
+      - "internal/azuredevops:TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository"
+      - "internal/azuredevops:TestEnsurePullRequestWorkItemRecoversAMissingAssociation"
+      - "internal/azuredevops:TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems"
+      - "internal/store:TestFrozenTrackerRepositoryCannotBeRedirected"
+      - "internal/publication:TestPreviewBindsEachItemsTargetRepository"
+      - "internal/webui:TestPreviewShowsEachItemsTargetRepository"
+      - "internal/effect:TestUpsertPullRequestLinksNothingWithoutASourceWorkItem"
+    gaps:
+      - issue: 302
+        summary: A plan node selects another repository only through target_repository in the stored or draft plan JSON; the plan editor has no control and the planning role gets no guidance for it.

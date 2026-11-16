@@ -25,6 +25,12 @@ func (c *Client) ReplaceIssueLabels(ctx context.Context, repository tracker.Repo
 	if err := validateIssueTarget(repository, number); err != nil {
 		return err
 	}
+	return c.backend().replaceIssueLabels(ctx, repository, number, labels)
+}
+
+// replaceIssueLabels replaces the tag list of one work item through az
+// rest.
+func (c restBackend) replaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
 	patch := []map[string]string{{"op": "add", "path": "/fields/System.Tags", "value": joinTags(labels)}}
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion), Body: patch, ContentType: "application/json-patch+json"}
 	if err := c.call(ctx, req, nil); err != nil {
@@ -87,8 +93,11 @@ func (c *Client) workItemComments(ctx context.Context, repository tracker.Reposi
 		var response struct {
 			Comments          []workItemCommentResponse `json:"comments"`
 			ContinuationToken string                    `json:"continuationToken"`
+			// HeaderToken is the X-MS-ContinuationToken header that az
+			// devops invoke copies into its output.
+			HeaderToken string `json:"continuation_token"`
 		}
-		if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), query, commentAPIVersion)}, &response); err != nil {
+		if err := c.backend().readComments(ctx, repository, number, query, &response); err != nil {
 			return nil, fmt.Errorf("list comments on work item %d: %w", number, err)
 		}
 		for _, comment := range response.Comments {
@@ -96,11 +105,21 @@ func (c *Client) workItemComments(ctx context.Context, repository tracker.Reposi
 				comments = append(comments, comment)
 			}
 		}
-		if response.ContinuationToken == "" || response.ContinuationToken == token {
+		next := response.ContinuationToken
+		if next == "" {
+			next = response.HeaderToken
+		}
+		if next == "" || next == token {
 			return comments, nil
 		}
-		token = response.ContinuationToken
+		token = next
 	}
+}
+
+// readComments reads one page of the comments of a work item through az
+// rest.
+func (c restBackend) readComments(ctx context.Context, repository tracker.Repository, number int, query url.Values, destination any) error {
+	return c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), query, commentAPIVersion)}, destination)
 }
 
 // CreateIssueComment posts one Markdown comment on a work item.
@@ -108,6 +127,11 @@ func (c *Client) CreateIssueComment(ctx context.Context, repository tracker.Repo
 	if err := validateIssueTarget(repository, number); err != nil {
 		return tracker.Comment{}, err
 	}
+	return c.backend().createComment(ctx, repository, number, body)
+}
+
+// createComment posts one Markdown comment through az rest.
+func (c restBackend) createComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
 	var response workItemCommentResponse
 	req := request{Method: "POST", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), markdownFormat(), commentAPIVersion), Body: map[string]string{"text": body}}
 	if err := c.call(ctx, req, &response); err != nil {
@@ -125,6 +149,12 @@ func (c *Client) FindStatusComment(ctx context.Context, repository tracker.Repos
 	if strings.TrimSpace(marker) == "" {
 		return tracker.Comment{}, errors.New("status comment marker is required")
 	}
+	return c.backend().findStatusComment(ctx, repository, number, marker)
+}
+
+// findStatusComment returns the comment of the authenticated identity that
+// contains marker, which az rest can read.
+func (c restBackend) findStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
 	coordinator, err := c.AuthenticatedLogin(ctx)
 	if err != nil {
 		return tracker.Comment{}, err
@@ -152,6 +182,11 @@ func (c *Client) EditIssueComment(ctx context.Context, repository tracker.Reposi
 	if err := validateIssueTarget(repository, number); err != nil {
 		return err
 	}
+	return c.backend().editComment(ctx, repository, number, id, body)
+}
+
+// editComment replaces the text of one work item comment through az rest.
+func (c restBackend) editComment(ctx context.Context, repository tracker.Repository, number, id int, body string) error {
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments/%d", number, id), markdownFormat(), commentAPIVersion), Body: map[string]string{"text": body}}
 	if err := c.call(ctx, req, nil); err != nil {
 		return fmt.Errorf("edit comment %d on work item %d: %w", id, number, err)

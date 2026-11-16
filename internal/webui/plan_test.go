@@ -337,6 +337,37 @@ func TestPreviewShowsTheRenderedPublicationAndBindsApproval(t *testing.T) {
 	)
 }
 
+// targetTracker wraps the fake planning tracker with a provider that
+// assigns plan node n-2 to a resolved target repository, as the Azure
+// DevOps extension route does for each PBI.
+type targetTracker struct {
+	*trackertest.PlanTracker
+}
+
+// PreflightPlan gives item n-2 the web repository as its target.
+func (w targetTracker) PreflightPlan(ctx context.Context, repository tracker.Repository, graph tracker.PlanGraph) (tracker.PlanPreview, error) {
+	preview, err := w.PlanTracker.PreflightPlan(ctx, repository, graph)
+	for index := range preview.Items {
+		if preview.Items[index].NodeID == "n-2" {
+			preview.Items[index].TargetRepository = &tracker.PlanTargetRepository{Name: "web", ID: "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"}
+		}
+	}
+	return preview, err
+}
+
+// TestPreviewShowsEachItemsTargetRepository verifies that the reviewer sees
+// the resolved target repository name and GUID that the approval binds.
+func TestPreviewShowsEachItemsTargetRepository(t *testing.T) {
+	t.Parallel()
+
+	ui := newPlanUI(t, planNodesForTest())
+	ui.tracker = targetTracker{PlanTracker: ui.fake}
+	ui.send(t, "preview-1", sessioncommand.KindPreviewPlan, ui.history(t).Session.Revision, `{"plan_revision":1}`)
+	ui.drain(t)
+	ui.previewOf(t, "preview-1")
+	assertContains(t, ui.page(t), "<dt>Target repository</dt><dd>web <code>9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a</code></dd>")
+}
+
 // approveBody returns the approve payload that binds result, as the approval
 // form sends it.
 func approveBody(result sessioncommand.PreviewResult) string {

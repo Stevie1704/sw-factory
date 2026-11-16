@@ -59,6 +59,18 @@ type BoundedPlanLookup interface {
 	PlanLookupBound() string
 }
 
+// PlanItemVerifier is an optional PlanPublisher capability. An adapter that
+// writes metadata beyond the correlation, for example a repository
+// assignment (ADR 0030), implements it, so that publication and
+// reconciliation adopt an item found by correlation only when that
+// metadata matches the approved item. A mismatch is never adopted and
+// never rewritten.
+type PlanItemVerifier interface {
+	// VerifyPlanItem returns an error that names the difference when the
+	// existing item ref does not match the approved item.
+	VerifyPlanItem(ctx context.Context, repository Repository, item RenderedPlanItem, ref PlanItemRef) error
+}
+
 // PlanGraph is the provider-neutral input of PreflightPlan: one approved or
 // reviewable plan revision. It carries plan content and traceability
 // identities only, never conversation turns.
@@ -96,6 +108,11 @@ type PlanGraphItem struct {
 	// PlanCorrelation. The adapter must render it into the published item so
 	// that FindPlanItems can find the item again.
 	Correlation string
+	// TargetRepository optionally names the registered repository that
+	// executes the node, for an adapter whose items belong to a project
+	// rather than a repository (Azure Boards, ADR 0030). Empty means no
+	// explicit target; a child never inherits its parent's target.
+	TargetRepository string
 }
 
 // PlanCorrelation returns the stable correlation key of one plan node:
@@ -146,6 +163,20 @@ type RenderedPlanItem struct {
 	Labels []string
 	// Correlation is the correlation key rendered into the item.
 	Correlation string
+	// TargetRepository is the resolved repository that executes the item,
+	// bound into the approval with the rest of the content. Nil means the
+	// item has no repository assignment.
+	TargetRepository *PlanTargetRepository
+}
+
+// PlanTargetRepository is the resolved execution target of one rendered
+// plan item (ADR 0030).
+type PlanTargetRepository struct {
+	// Name is the registered repository name the plan selected.
+	Name string
+	// ID is the stable provider repository identity, for example the Azure
+	// Repos GUID that the factory-repo tag names.
+	ID string
 }
 
 // PlanRelationshipKind is the provider-neutral kind of a plan relationship.

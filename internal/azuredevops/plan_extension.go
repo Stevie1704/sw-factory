@@ -1,0 +1,282 @@
+package azuredevops
+
+// This file holds the plan publication rules of the Azure DevOps CLI
+// extension route (ADR 0030): explicit Epic/PBI mapping, per-PBI repository
+// targets, and the argument rules of az boards work-item create.
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"maps"
+	"net/url"
+	"slices"
+	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
+
+	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
+)
+
+// checkPlanSupport refuses, before any call, a plan without an explicit
+// planning mapping: the default mapping would substitute types.
+func (c extensionBackend) checkPlanSupport(tracker.PlanGraph) error {
+	if c.Planning == nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+			"the devops_extension route needs an explicit azure_devops.planning mapping, for example Epic for kind parent and Product Backlog Item for kinds task and investigation; Factory does not substitute a default mapping")
+	}
+	return nil
+}
+
+// checkPlanSupport refuses, before any call, a plan node with a target
+// repository: the az rest route has no repository assignment, so the
+// target would be dropped silently.
+func (restBackend) checkPlanSupport(graph tracker.PlanGraph) error {
+	for _, item := range graph.Items {
+		if item.TargetRepository != "" {
+			return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability,
+				"node %s names target repository %q, but repository targets need azure_devops.route devops_extension", item.NodeID, item.TargetRepository)
+		}
+	}
+	return nil
+}
+
+// preparePlan assigns the plan targets and checks effective write permissions
+// through the authenticated CLI helper before approval or publication.
+func (c extensionBackend) preparePlan(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, graph tracker.PlanGraph, preview *tracker.PlanPreview) error {
+	if err := c.assignPlanTargets(ctx, repository, mapping, graph, preview); err != nil {
+		return err
+	}
+	return c.extensionPlanPermissions(ctx, repository, preview.Items)
+}
+
+// preparePlan checks the plan permissions of the az login identity.
+func (c restBackend) preparePlan(ctx context.Context, repository tracker.Repository, _ config.AzurePlanMapping, _ tracker.PlanGraph, _ *tracker.PlanPreview) error {
+	return c.checkPlanPermissions(ctx, repository)
+}
+
+// assignPlanTargets gives every executable item (the lowest mapped level)
+// its target repository: the node's explicit target, or the registered
+// repository when the node names none. A target is never taken from the
+// parent. Each executable item gets exactly one factory-repo tag beside its
+// correlation tag. A target on another level is refused, and every item must
+// fit the arguments of az boards work-item create.
+func (c *Client) assignPlanTargets(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, graph tracker.PlanGraph, preview *tracker.PlanPreview) error {
+	executable := mapping.Levels[len(mapping.Levels)-1].Type
+	explicit := map[string]string{}
+	for _, item := range graph.Items {
+		explicit[item.NodeID] = item.TargetRepository
+	}
+	resolved := map[string]tracker.PlanTargetRepository{}
+	for index := range preview.Items {
+		item := &preview.Items[index]
+		name := explicit[item.NodeID]
+		if item.Type != executable && name != "" {
+			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+				"node %s: a %s is not executable, so it takes no target repository; set the target on each of its %s items", item.NodeID, item.Type, executable)
+		}
+		if item.Type == executable {
+			if name == "" {
+				name = repository.Name
+			}
+			target, err := c.planTarget(ctx, repository, name, resolved)
+			if err != nil {
+				return err
+			}
+			item.TargetRepository = &target
+			item.Labels = append(item.Labels, RepositoryAssignmentTag(target.ID))
+		}
+		if err := validateExtensionPlanItem(*item); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// planTarget resolves one registered target repository to its GUID with az
+// repos show, once per name. A name that is neither the registered
+// repository nor one of PlanRepositories is refused.
+func (c *Client) planTarget(ctx context.Context, repository tracker.Repository, name string, resolved map[string]tracker.PlanTargetRepository) (tracker.PlanTargetRepository, error) {
+	allowed := append([]string{repository.Name}, c.PlanRepositories...)
+	index := slices.IndexFunc(allowed, func(candidate string) bool { return strings.EqualFold(candidate, name) })
+	if index < 0 {
+		return tracker.PlanTargetRepository{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+			"target repository %q is not registered; use %s or a repository of azure_devops.plan_repositories", name, repository.Name)
+	}
+	registered := allowed[index]
+	if target, ok := resolved[strings.ToLower(registered)]; ok {
+		return target, nil
+	}
+	identity, err := c.ResolveRepository(ctx, tracker.Repository{Owner: repository.Owner, Project: repository.Project, Name: registered})
+	if err != nil {
+		return tracker.PlanTargetRepository{}, classifyPlanError(err)
+	}
+	target := tracker.PlanTargetRepository{Name: registered, ID: identity.ID}
+	resolved[strings.ToLower(registered)] = target
+	return target, nil
+}
+
+// validateExtensionPlanItem returns a typed invalid-mapping error when item
+// cannot be passed to az boards work-item create: a value that Azure CLI
+// would read from a file, or a description that does not fit one
+// command-line argument after HTML encoding.
+func validateExtensionPlanItem(item tracker.RenderedPlanItem) error {
+	if _, err := extensionCreateArgs(tracker.Repository{}, item); err != nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: %v", item.NodeID, err)
+	}
+	return nil
+}
+
+// extensionCreateArgs returns the az boards work-item create arguments of
+// item. The type, title, and description each go as one --flag=value
+// argument, so a value that starts with '-' or spans lines is never parsed
+// as an option. The tags and configured fields follow --fields as
+// name=value pairs in a fixed order.
+func extensionCreateArgs(repository tracker.Repository, item tracker.RenderedPlanItem) ([]string, error) {
+	description, err := extensionDescription(item.Body)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"boards", "work-item", "create"}
+	for _, flag := range [][2]string{{"--type", item.Type}, {"--title", item.Title}, {"--description", description}} {
+		arg, err := cliText(flag[0], flag[1])
+		if err != nil {
+			return nil, err
+		}
+		if len(arg) > maxRequestBodyBytes {
+			return nil, fmt.Errorf("%s is %d bytes as one command-line argument, at most %d; shorten it", strings.TrimPrefix(flag[0], "--"), len(arg), maxRequestBodyBytes)
+		}
+		args = append(args, arg)
+	}
+	args = append(args, "--project", repository.Project, "--fields")
+	pairs := [][2]string{{"System.Tags", joinTags(item.Labels)}}
+	for _, name := range slices.Sorted(maps.Keys(item.Fields)) {
+		pairs = append(pairs, [2]string{name, item.Fields[name]})
+	}
+	for _, pair := range pairs {
+		if strings.HasPrefix(pair[1], "@") || strings.HasPrefix(pair[0], "-") {
+			return nil, fmt.Errorf("field %s cannot start its value with '@' on the devops_extension route, because Azure CLI reads such a value from a file", pair[0])
+		}
+		args = append(args, pair[0]+"="+pair[1])
+	}
+	return args, nil
+}
+
+// extensionDescription renders approved Markdown into the HTML description
+// format used by the dedicated create command. GFM preserves headings,
+// tables, code, links, and task lists; approved inline HTML is retained for
+// Azure Boards to process under the same policy as other HTML descriptions.
+func extensionDescription(markdown string) (string, error) {
+	var buffer bytes.Buffer
+	renderer := goldmark.New(goldmark.WithExtensions(extension.GFM), goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()))
+	if err := renderer.Convert([]byte(markdown), &buffer); err != nil {
+		return "", fmt.Errorf("render Azure Boards description: %w", err)
+	}
+	return buffer.String(), nil
+}
+
+// planRead reads the project resource at path through az rest.
+func (c restBackend) planRead(ctx context.Context, repository tracker.Repository, path string, query url.Values, _ invokeRequest, destination any) error {
+	return c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, query, apiVersion)}, destination)
+}
+
+// planRead reads the verified az devops invoke pair read of the ADR 0030
+// inventory.
+func (c extensionBackend) planRead(ctx context.Context, repository tracker.Repository, _ string, query url.Values, read invokeRequest, destination any) error {
+	return c.invoke(ctx, repository.Owner, planInvokeRequest(repository, query, read), destination)
+}
+
+// planInvokeRequest completes read for the extension route: the extension
+// API version, the project route when read names no route, and query as
+// its query parameters. Callers pass the query only as query, never in
+// read.
+func planInvokeRequest(repository tracker.Repository, query url.Values, read invokeRequest) invokeRequest {
+	read.APIVersion = extensionAPIVersion
+	if read.Route == nil {
+		read.Route = projectRoute(repository)
+	}
+	read.Query = queryParameters(query)
+	return read
+}
+
+// queryParameters converts query to the single-valued parameters of az
+// devops invoke, keeping the first value of each key. An empty query has
+// no parameters.
+func queryParameters(query url.Values) map[string]string {
+	if len(query) == 0 {
+		return nil
+	}
+	parameters := make(map[string]string, len(query))
+	for key := range query {
+		parameters[key] = query.Get(key)
+	}
+	return parameters
+}
+
+// linkType is the projection of one work-item link type.
+type linkType struct {
+	Name          string         `json:"name"`
+	ReferenceName string         `json:"referenceName"`
+	Attributes    map[string]any `json:"attributes"`
+}
+
+// listLinkTypes reads the link types of the organization with az boards
+// work-item relation list-type.
+func (c extensionBackend) listLinkTypes(ctx context.Context, repository tracker.Repository) ([]linkType, error) {
+	var types []linkType
+	err := c.extension(ctx, repository.Owner, []string{"boards", "work-item", "relation", "list-type"}, &types)
+	return types, err
+}
+
+// listLinkTypes reads the link types of the organization through az rest.
+func (c restBackend) listLinkTypes(ctx context.Context, repository tracker.Repository) ([]linkType, error) {
+	var response struct {
+		Value []linkType `json:"value"`
+	}
+	err := c.call(ctx, request{Method: "GET", URL: organizationURL(repository.Owner, "wit/workitemrelationtypes", nil, apiVersion)}, &response)
+	return response.Value, err
+}
+
+// checkLinkSelectable requires a unique friendly name for link, because
+// the relation commands select a link type by its name.
+func (extensionBackend) checkLinkSelectable(types []linkType, link string) error {
+	_, err := linkTypeName(types, link)
+	return err
+}
+
+// checkLinkSelectable accepts every enabled link: az rest selects a link
+// type by its reference name.
+func (restBackend) checkLinkSelectable([]linkType, string) error {
+	return nil
+}
+
+// linkTypeName returns the friendly name that az boards work-item relation
+// add and show use for the link type reference, for example "Parent" for
+// System.LinkTypes.Hierarchy-Reverse. The extension matches names
+// case-insensitively and takes the first match (relations.py), so a name
+// that two link types share is refused.
+func linkTypeName(types []linkType, reference string) (string, error) {
+	name := ""
+	for _, value := range types {
+		if value.ReferenceName == reference {
+			name = value.Name
+		}
+	}
+	if name == "" {
+		return "", tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "link type %s is missing in the organization", reference)
+	}
+	count := 0
+	for _, value := range types {
+		if strings.EqualFold(value.Name, name) {
+			count++
+		}
+	}
+	if count != 1 {
+		return "", tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability,
+			"link type name %q of %s is not unique in the organization, so az boards work-item relation add cannot select it", name, reference)
+	}
+	return name, nil
+}

@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	_ codehost.PullRequestClient        = (*Client)(nil)
-	_ codehost.PullRequestDraftClient   = (*Client)(nil)
-	_ codehost.PullRequestReviewReader  = (*Client)(nil)
-	_ codehost.PullRequestCommentReader = (*Client)(nil)
-	_ codehost.PullRequestCommentClient = (*Client)(nil)
-	_ codehost.CommitStatusPublisher    = (*Client)(nil)
-	_ codehost.CommitStatusReader       = (*Client)(nil)
+	_ codehost.PullRequestClient         = (*Client)(nil)
+	_ codehost.PullRequestDraftClient    = (*Client)(nil)
+	_ codehost.PullRequestReviewReader   = (*Client)(nil)
+	_ codehost.PullRequestCommentReader  = (*Client)(nil)
+	_ codehost.PullRequestCommentClient  = (*Client)(nil)
+	_ codehost.CommitStatusPublisher     = (*Client)(nil)
+	_ codehost.CommitStatusReader        = (*Client)(nil)
+	_ codehost.PullRequestWorkItemLinker = (*Client)(nil)
 )
 
 // maxDescriptionLength is the Azure Repos limit of a pull-request
@@ -112,7 +113,7 @@ func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Reposit
 	if err != nil || len(ids) == 0 {
 		return codehost.PullRequest{}, err
 	}
-	return c.pullRequestByID(ctx, repository, ids[0])
+	return c.backend().readPullRequest(ctx, repository, ids[0])
 }
 
 // FindPullRequestCandidates returns all exact branch matches in every status.
@@ -123,7 +124,7 @@ func (c *Client) FindPullRequestCandidates(ctx context.Context, repository track
 	}
 	var matches []codehost.PullRequest
 	for _, id := range ids {
-		pr, err := c.pullRequestByID(ctx, repository, id)
+		pr, err := c.backend().readPullRequest(ctx, repository, id)
 		if err != nil {
 			return nil, err
 		}
@@ -141,6 +142,11 @@ func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Rep
 	if err := validateBranches(headBranch, baseBranch); err != nil {
 		return nil, err
 	}
+	return c.backend().pullRequestIDs(ctx, repository, headBranch, baseBranch)
+}
+
+// pullRequestIDs searches the branch pair through az rest.
+func (c restBackend) pullRequestIDs(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]int, error) {
 	query := url.Values{
 		"searchCriteria.sourceRefName": {branchRef(headBranch)},
 		"searchCriteria.targetRefName": {branchRef(baseBranch)},
@@ -162,10 +168,10 @@ func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Rep
 	return ids, nil
 }
 
-// pullRequestByID reads one pull request. The list endpoint truncates the
-// description to 400 characters, so a body that regeneration preserves must
-// come from this read.
-func (c *Client) pullRequestByID(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+// readPullRequest reads one pull request through az rest. The list
+// endpoint truncates the description to 400 characters, so a body that
+// regeneration preserves must come from this read.
+func (c restBackend) readPullRequest(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
 	var response pullRequestResponse
 	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullrequests/%d", number), nil)}, &response); err != nil {
 		return codehost.PullRequest{}, fmt.Errorf("read pull request %d: %w", number, err)
@@ -178,6 +184,11 @@ func (c *Client) CreatePullRequest(ctx context.Context, repository tracker.Repos
 	if err := validatePullRequestRequest(repository, request); err != nil {
 		return codehost.PullRequest{}, err
 	}
+	return c.backend().createPullRequest(ctx, repository, request)
+}
+
+// createPullRequest creates one pull request through az rest.
+func (c restBackend) createPullRequest(ctx context.Context, repository tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	payload := map[string]any{
 		"sourceRefName": branchRef(request.HeadBranch),
 		"targetRefName": branchRef(request.BaseBranch),
@@ -197,6 +208,11 @@ func (c *Client) UpdatePullRequest(ctx context.Context, repository tracker.Repos
 	if err := validatePullRequestRequest(repository, request); err != nil {
 		return codehost.PullRequest{}, err
 	}
+	return c.backend().updatePullRequest(ctx, repository, number, request)
+}
+
+// updatePullRequest replaces the title and description through az rest.
+func (c restBackend) updatePullRequest(ctx context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	payload := map[string]any{"title": request.Title, "description": request.Body}
 	return c.sendPullRequest(ctx, repository, "PATCH", fmt.Sprintf("/pullrequests/%d", number), payload, fmt.Sprintf("update pull request %d", number))
 }
@@ -206,6 +222,11 @@ func (c *Client) SetPullRequestDraft(ctx context.Context, repository tracker.Rep
 	if err := validatePullRequestTarget(repository, number); err != nil {
 		return codehost.PullRequest{}, err
 	}
+	return c.backend().setPullRequestDraft(ctx, repository, number, draft)
+}
+
+// setPullRequestDraft sets or clears the draft flag through az rest.
+func (c restBackend) setPullRequestDraft(ctx context.Context, repository tracker.Repository, number int, draft bool) (codehost.PullRequest, error) {
 	return c.sendPullRequest(ctx, repository, "PATCH", fmt.Sprintf("/pullrequests/%d", number), map[string]any{"isDraft": draft}, fmt.Sprintf("set pull request %d draft=%t", number, draft))
 }
 
@@ -287,10 +308,22 @@ func (c *Client) CreateCommitStatus(ctx context.Context, repository tracker.Repo
 	if status.TargetURL != "" {
 		payload["targetUrl"] = status.TargetURL
 	}
-	if err := c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, "/commits/"+status.SHA+"/statuses", nil), Body: payload}, nil); err != nil {
+	if err := c.backend().postCommitStatus(ctx, repository, status.SHA, payload); err != nil {
 		return fmt.Errorf("publish commit status for %s: %w", status.SHA, err)
 	}
 	return nil
+}
+
+// postCommitStatus posts one commit status payload through az rest.
+func (c restBackend) postCommitStatus(ctx context.Context, repository tracker.Repository, sha string, payload map[string]any) error {
+	return c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, "/commits/"+sha+"/statuses", nil), Body: payload}, nil)
+}
+
+// readCommitStatuses reads one page of the statuses of a commit through az
+// rest.
+func (c restBackend) readCommitStatuses(ctx context.Context, repository tracker.Repository, sha string, skip int, destination any) error {
+	query := url.Values{"latestOnly": {"false"}, "top": {strconv.Itoa(statusPageSize)}, "skip": {strconv.Itoa(skip)}}
+	return c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/commits/"+sha+"/statuses", query)}, destination)
 }
 
 // statusPageSize is the page size of the commit status list.
@@ -319,8 +352,7 @@ func (c *Client) ListCommitStatuses(ctx context.Context, repository tracker.Repo
 				Context     statusContext `json:"context"`
 			} `json:"value"`
 		}
-		query := url.Values{"latestOnly": {"false"}, "top": {strconv.Itoa(statusPageSize)}, "skip": {strconv.Itoa(skip)}}
-		if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/commits/"+sha+"/statuses", query)}, &response); err != nil {
+		if err := c.backend().readCommitStatuses(ctx, repository, sha, skip, &response); err != nil {
 			return nil, fmt.Errorf("list commit statuses for %s: %w", sha, err)
 		}
 		for _, value := range response.Value {
@@ -410,10 +442,15 @@ func (c *Client) threads(ctx context.Context, repository tracker.Repository, num
 	var response struct {
 		Value []threadResponse `json:"value"`
 	}
-	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil)}, &response); err != nil {
+	if err := c.backend().readThreads(ctx, repository, number, &response); err != nil {
 		return nil, fmt.Errorf("list threads of pull request %d: %w", number, err)
 	}
 	return response.Value, nil
+}
+
+// readThreads reads the threads of one pull request through az rest.
+func (c restBackend) readThreads(ctx context.Context, repository tracker.Repository, number int, destination any) error {
+	return c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil)}, destination)
 }
 
 // voteStates maps reviewer votes to the neutral review vocabulary. "Waiting
@@ -449,7 +486,7 @@ func (c *Client) PullRequestReviews(ctx context.Context, repository tracker.Repo
 			continue
 		}
 		if logins == nil {
-			if logins, err = c.reviewerLogins(ctx, repository, number); err != nil {
+			if logins, err = c.backend().reviewerLogins(ctx, repository, number); err != nil {
 				return nil, err
 			}
 		}
@@ -470,8 +507,9 @@ func (c *Client) PullRequestReviews(ctx context.Context, repository tracker.Repo
 }
 
 // reviewerLogins maps the normalized identity id of every reviewer of a pull
-// request to its login. A vote adds the voter as a reviewer.
-func (c *Client) reviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
+// request to its login, read through az rest. A vote adds the voter as a
+// reviewer.
+func (c restBackend) reviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
 	var response struct {
 		Value []struct {
 			ID         string `json:"id"`
@@ -581,7 +619,7 @@ func (c *Client) CreatePullRequestComment(ctx context.Context, repository tracke
 		"status":   "closed",
 	}
 	var response threadResponse
-	if err := c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil), Body: payload}, &response); err != nil {
+	if err := c.backend().createThread(ctx, repository, number, payload, &response); err != nil {
 		return tracker.Comment{}, fmt.Errorf("create comment on pull request %d: %w", number, err)
 	}
 	if len(response.Comments) == 0 {
@@ -604,9 +642,20 @@ func (c *Client) EditPullRequestComment(ctx context.Context, repository tracker.
 	if !okPullRequest || !okThread || !okID || pullRequest != number {
 		return fmt.Errorf("%q is not a comment identity of pull request %d", commentID, number)
 	}
-	path := fmt.Sprintf("/pullRequests/%d/threads/%d/comments/%d", number, thread, id)
-	if err := c.call(ctx, request{Method: "PATCH", URL: repositoryURL(repository, path, nil), Body: map[string]string{"content": body}}, nil); err != nil {
+	if err := c.backend().editThreadComment(ctx, repository, number, thread, id, body); err != nil {
 		return fmt.Errorf("edit comment %d of thread %d on pull request %d: %w", id, thread, number, err)
 	}
 	return nil
+}
+
+// createThread posts one pull request thread through az rest.
+func (c restBackend) createThread(ctx context.Context, repository tracker.Repository, number int, payload map[string]any, destination any) error {
+	return c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil), Body: payload}, destination)
+}
+
+// editThreadComment replaces the content of one thread comment through az
+// rest.
+func (c restBackend) editThreadComment(ctx context.Context, repository tracker.Repository, number, thread, id int, body string) error {
+	path := fmt.Sprintf("/pullRequests/%d/threads/%d/comments/%d", number, thread, id)
+	return c.call(ctx, request{Method: "PATCH", URL: repositoryURL(repository, path, nil), Body: map[string]string{"content": body}}, nil)
 }

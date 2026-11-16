@@ -206,6 +206,9 @@ type PlanNodeJSON struct {
 	ParentID           string   `json:"parent_id"`
 	DependsOn          []string `json:"depends_on"`
 	BriefRefs          []string `json:"brief_refs"`
+	// TargetRepository optionally names the registered repository that
+	// executes the node (ADR 0030).
+	TargetRepository string `json:"target_repository,omitempty"`
 }
 
 // payload is a decoded command payload that checks its own bounds.
@@ -460,7 +463,7 @@ func PlanNodes(nodes []PlanNodeJSON) []store.PlanNode {
 	for _, node := range nodes {
 		converted = append(converted, store.PlanNode{
 			ID: node.ID, Kind: node.Kind, Title: node.Title, Body: node.Body, AcceptanceCriteria: node.AcceptanceCriteria,
-			ParentID: node.ParentID, DependsOn: node.DependsOn, BriefRefs: node.BriefRefs,
+			ParentID: node.ParentID, DependsOn: node.DependsOn, BriefRefs: node.BriefRefs, TargetRepository: node.TargetRepository,
 		})
 	}
 	return converted
@@ -472,7 +475,7 @@ func PlanNodesFromStore(nodes []store.PlanNode) []PlanNodeJSON {
 	for _, node := range nodes {
 		converted = append(converted, PlanNodeJSON{
 			ID: node.ID, Kind: node.Kind, Title: node.Title, Body: node.Body, AcceptanceCriteria: node.AcceptanceCriteria,
-			ParentID: node.ParentID, DependsOn: node.DependsOn, BriefRefs: node.BriefRefs,
+			ParentID: node.ParentID, DependsOn: node.DependsOn, BriefRefs: node.BriefRefs, TargetRepository: node.TargetRepository,
 		})
 	}
 	return converted

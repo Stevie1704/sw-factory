@@ -49,7 +49,8 @@ func AgileAzurePlanMapping() AzurePlanMapping {
 
 // adapterOwnedFields are the fields the adapter renders itself. A mapping must
 // not set them: the title and the description come from the plan, and the
-// tags carry only the correlation tag, never a factory state tag.
+// tags carry only the correlation tag and, on the CLI extension route, the
+// repository assignment tag, never a factory state tag.
 var adapterOwnedFields = []string{"System.Title", "System.Description", "System.Tags"}
 
 // Validate reports the first structural problem of the mapping. Whether the

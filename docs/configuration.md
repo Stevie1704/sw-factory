@@ -310,11 +310,12 @@ repositories:
 `factory register` infers only a GitHub identity. For Azure DevOps, write the
 registration into the host file by hand, then run `factory doctor`.
 
-- **Credential.** The factory calls the Azure DevOps REST API through
-  `az rest`. Install the Azure CLI and sign in with `az login` as the
-  company-managed identity that supervises the repository, for example
+- **Credential.** Without `route`, the factory calls the Azure DevOps REST
+  API through `az rest`. Install the Azure CLI and sign in with `az login` as
+  the company-managed identity that supervises the repository, for example
   `az login --service-principal` or `az login --identity`. The factory never
-  reads or stores the credential.
+  reads or stores the credential. An organization that supports only a PAT
+  selects the CLI extension route instead (see below).
 - **Authorized users.** `authorized_users` holds account names (user principal
   names) such as `alice@contoso.com`, because comment, vote, and work item
   update authors carry that name.
@@ -351,6 +352,181 @@ registration into the host file by hand, then run `factory doctor`.
 | `azure devops repository` | the organization, project, or repository cannot be read |
 | `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
 
+#### CLI extension route (PAT login)
+
+`azure_devops.route` selects how the factory reaches Azure DevOps (ADR 0030):
+
+| Value | Commands | Authentication |
+| --- | --- | --- |
+| omitted or `az_rest` | `az rest` (ADR 0019) | `az login` (Entra ID) |
+| `devops_extension` | `az boards`, `az repos`, and `az devops invoke` of the azure-devops extension | `az devops login` with a PAT |
+
+Any other value fails validation with `repositories[0].azure_devops.route`.
+An existing registration without `route` keeps the `az rest` route.
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      route: devops_extension
+      plan_repositories: [web]
+```
+
+- **Sign-in.** Install the Azure CLI and the extension
+  (`az extension add --name azure-devops`), then run
+  `az devops login --organization https://dev.azure.com/contoso` as the
+  account that runs the factory and enter the PAT at the `Token:` prompt. Do
+  not put the PAT in a command line, a shell history, or a repository file:
+  do not use `echo <PAT> |` or an exported `AZURE_DEVOPS_EXT_PAT`. The
+  factory never reads, collects, or stores the PAT. It runs every command
+  without prompts and without dynamic extension installs. A missing or
+  expired login fails with `run az devops login --organization <URL>`.
+- **Expiry and re-login.** A PAT has an expiry date. When it expires or is
+  revoked, every command fails with the login repair above; the factory
+  does not retry with another credential. Create a new PAT, run
+  `az devops login --organization <URL>` again as the same account, then run
+  `factory doctor`. To remove the stored PAT, run
+  `az devops logout --organization <URL>`.
+- **No Entra fallback.** The factory never runs `az rest` or requests an
+  Entra ID token on this route. The extension itself prefers an `az login`
+  session when one exists, so run the factory as a user without one when
+  only the PAT may be used.
+- **Explicit targets.** Every command names `--organization`, and
+  `--project` and `--repository` where the command accepts them. CLI
+  defaults from `az devops configure` and Git remotes are not used.
+- **Git is separate.** `az devops login` does not configure Git. Push and
+  fetch still use the Git credential helper or SSH agent of the host.
+- **Repository assignment.** Boards work items belong to the project, not a
+  repository. Each executable PBI carries exactly one tag
+  `factory-repo:<repository GUID>`, where the GUID is the `id` that
+  `az repos show --project "Factory Pilot" --repository service` prints. A
+  registration claims a PBI only when the tag names its own repository; a
+  missing, malformed, repeated, or different tag is refused with the tag to
+  set. Add the tag to existing PBIs by hand before execution. The tag never
+  authorizes a run; `agent-ready` from an authorized user still does. Area
+  Paths stay free for team and board organization. The PBI and the Epic
+  belong to the project; the pull request belongs to the repository and
+  links back to its PBI. One PBI executes in exactly one repository: split
+  work that changes two repositories into one PBI for each repository. A
+  claimed Run keeps the repository it was claimed for, also when the tag
+  changes later; a different repository needs a new claim.
+- **Two repositories in one project.** Register each repository in its own
+  host configuration with its own `operational_data_path`, and start one
+  factory per configuration (`factory start --config <path>`). Both name the
+  same organization and project with `route: devops_extension`.
+  `plan_repositories` lists the other repositories of the project that a
+  plan published from this installation may assign PBIs to; it must not
+  repeat `repository`, and only this route accepts it.
+- **Worker boundary.** Workers refuse every `AZURE_DEVOPS_EXT_*` and `*_PAT`
+  environment variable.
+- **Startup checks.** `factory doctor` runs read-only repository, paged Boards,
+  authenticated identity, and effective-permission probes and never writes.
+  It reports a missing or
+  expired login (`run az devops login`), a missing extension
+  (`run az extension add --name azure-devops`), a timeout, and an
+  unreachable service as different failures. It warns about agent-ready
+  work items that carry no usable `factory-repo` tag, because no
+  installation claims them. The bundled read-only CLI helper uses the installed
+  `azure-devops` extension's authenticated SDK connection to read the caller
+  and evaluate permissions. It is loaded from temporary private source for
+  each helper invocation and removed afterward; no additional extension
+  installation or Python setup is needed. Failed or denied checks block
+  startup. `factory doctor --json` is the read-only diagnosis:
+  it prints each check with its condition code and repair, and it changes
+  no work item, pull request, or tag.
+- **PAT scopes.** Create the PAT for the organization only, with the
+  shortest expiry that policy allows. The REST reference pages of the
+  operations in ADR 0030 list these scopes: **Work Items (Read & write)**
+  (`vso.work_write`) for the queue, tags, comments, process reads, and plan
+  publication; **Code (Read & write)** (`vso.code_write`) for the repository
+  identity, pull requests, threads, reviewers, refs, and commit statuses.
+  **Code (Status)** (`vso.code_status`) is an alternative scope for commit
+  statuses only. The PAT must also allow the connection-data and current-user
+  security evaluation SDK reads; `factory doctor` fails if organization policy
+  or token scope blocks either probe. These scopes come from documentation and are not
+  verified in a live run. The scopes do not replace permissions: the
+  account also needs at least Basic access, the repository permissions
+  Contribute, Create branch, and Contribute to pull requests on each
+  registered repository, View work items and Edit work items in this node
+  on the project's area, and Create tag definition in the project until
+  every factory tag exists.
+- **Status comments.** Recovery matches both the authenticated author and the
+  run marker. Copies by other users are ignored. Multiple matching comments
+  by the authenticated author are refused as ambiguous.
+- **Pull requests.** `az repos pr create`, `list`, `show`, and `update`
+  create, find, regenerate, and ready the draft pull request; threads,
+  comments, and commit statuses use the `git` area of `az devops invoke`.
+  `pr show`, `pr update`, and `pr reviewer list` are organization-scoped, so
+  the factory first checks that the pull request belongs to the registered
+  project and repository. The title and the description are each sent as
+  one argument; Azure CLI reads a value that starts with `@` from a file, so
+  a title, description, or branch that starts with `@` is refused before any
+  call. For a Run claimed from Azure Boards, the pull request is created in
+  the repository frozen at claim with `--work-items <PBI>`, and every
+  create, adoption, or retry verifies the link through
+  `az repos pr work-item list` and adds a missing one with
+  `az repos pr work-item add`. A local Markdown Run never sends its issue
+  number as a work-item ID. The code-host startup check proves the login
+  with `az repos show` and reads pull requests, the default branch, and its
+  statuses without Boards access. Its helper checks Contribute, Create branch,
+  and Contribute to pull requests on the resolved repository. An adopted PR
+  carrying a source PBI is checked against the frozen GUID before its body is
+  changed. Clarification publication and replay recover the authenticated
+  author's marked PR comment before creating another one.
+- **Plan publication.** This route requires an explicit
+  `azure_devops.planning` mapping (below); without one, the preview fails
+  and no default is substituted. The preview reads the process with
+  `az devops invoke` and `az boards work-item relation list-type` and
+  writes nothing. Before approval and again before publication, effective
+  permission checks cover each configured destination Area Path and creation
+  of new correlation and assignment tags. Each item of the lowest level is executable
+  and gets its node's target repository, or the registered repository when
+  the node names none; the preview shows the resolved name and GUID and
+  adds its `factory-repo` tag beside the `factory-plan` tag. A target on an
+  Epic or a name outside `repository` and `plan_repositories` is refused.
+  Publication creates each item with `az boards work-item create` and adds
+  each link with `az boards work-item relation add` on the child or the
+  dependent item (Parent to the Epic, Predecessor to the item that must be
+  done first). The create command cannot set the Markdown format, so the
+  description is rendered to HTML with GFM headings, lists, checkboxes, tables,
+  code, links, and approved inline HTML (ADR 0030 decision 15). An existing work item that
+  carries the correlation tag but another assignment or type is not adopted
+  or changed: publication stops and names the difference. A retry revalidates
+  even items whose earlier creates succeeded, before any further writes.
+  Intake, diagnosis, and correlation queries page past the CLI's 1000-item
+  result cap using work-item IDs, so older ineligible items do not hide newer
+  authorized work. Publication adds
+  no `agent-ready` tag. A plan node selects another repository only through
+  `target_repository` in the stored or draft plan JSON; the plan editor has
+  no control for it, and the planning role gets no guidance to set it.
+- **Status.** The route, its command seam, the assignment tag, the frozen
+  repository identity, Boards intake (#304), pull requests (#306), and plan
+  publication (#305) exist. ADR 0030 lists the command for each operation
+  and the operations that are still unresolved. The
+  [extension route acceptance record](acceptance/azure-devops-extension-route.md)
+  lists the scripted evidence, the known limits, and the
+  disposable-project procedure; no live run is recorded.
+
+An Epic/PBI planning mapping for a Scrum project, with no intermediate
+Feature level, groups PBIs for both repositories under one Epic. Each PBI
+names its own target; the Epic never passes its target to a child:
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      route: devops_extension
+      plan_repositories: [web]
+      planning:
+        levels:
+          - type: Epic
+            kinds: [parent]
+          - type: Product Backlog Item
+            kinds: [task, investigation]
+```
+
 #### Plan publication mapping
 
 An approved ideation plan publishes to Azure Boards work items (ADR 0025).
@@ -358,10 +534,11 @@ An approved ideation plan publishes to Azure Boards work items (ADR 0025).
 `investigation`) to the work-item types of the project's process. List the
 backlog levels from the top level down. Each level has a `type`, the plan
 `kinds` it receives, an optional `required` flag, and optional `fields`
-values by reference name. Without `planning`, the Agile mapping applies:
-`parent` is an Epic, the Feature level is optional, and `task` and
-`investigation` are User Stories. A Scrum project configures its backlog item
-type:
+values by reference name. On the `az rest` route, without `planning`, the
+Agile mapping applies: `parent` is an Epic, the Feature level is optional, and
+`task` and `investigation` are User Stories. The `devops_extension` route has
+no default and requires `planning` (see above). A Scrum project configures
+its backlog item type:
 
 ```yaml
     azure_devops:
@@ -396,14 +573,17 @@ type:
   `System.State` is a not-started (Proposed) state. `System.Title`,
   `System.Description`, and `System.Tags` are rendered by the factory and
   cannot be configured.
-- **Tags and authorization.** Each item gets exactly one tag,
+- **Tags and authorization.** Each item gets exactly one correlation tag,
   `factory-plan:<session>/<plan revision>/<node>`, which correlates it for
-  retries. It is not a run-state tag. Publication never adds `agent-ready`;
+  retries. It is not a run-state tag. On the `devops_extension` route each
+  executable item also gets exactly one `factory-repo:<repository GUID>`
+  assignment tag (ADR 0030 decision 10). Publication never adds `agent-ready`;
   execution still needs an authorized user to add it. Publication needs View
   and Edit work items and Create tag definition.
 - **Evidence.** `docs/acceptance/azure-devops-plan-publication.md` describes
-  the scripted coverage and the disposable-project procedure; live evidence
-  has not been recorded yet.
+  the scripted coverage and the disposable-project procedure of the `az rest`
+  route, and `docs/acceptance/azure-devops-extension-route.md` those of the
+  `devops_extension` route; live evidence has not been recorded for either.
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 

@@ -61,6 +61,9 @@ func (c *Client) PreflightPlan(ctx context.Context, repository tracker.Repositor
 	if err := validatePlanRepository(repository); err != nil {
 		return tracker.PlanPreview{}, err
 	}
+	if err := c.backend().checkPlanSupport(graph); err != nil {
+		return tracker.PlanPreview{}, err
+	}
 	mapping := c.planMapping()
 	if err := mapping.Validate(); err != nil {
 		return tracker.PlanPreview{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "azure_devops.planning: %v", err)
@@ -70,7 +73,7 @@ func (c *Client) PreflightPlan(ctx context.Context, repository tracker.Repositor
 		return tracker.PlanPreview{}, err
 	}
 	preview.Target = "azure-devops:" + repository.Owner + "/" + repository.Project
-	if err := c.checkPlanPermissions(ctx, repository); err != nil {
+	if err := c.backend().preparePlan(ctx, repository, mapping, graph, &preview); err != nil {
 		return tracker.PlanPreview{}, err
 	}
 	if err := c.checkProcess(ctx, repository, mapping, preview.Relationships); err != nil {
@@ -349,7 +352,7 @@ type backlogConfiguration struct {
 // value; and the link types of the preview exist.
 func (c *Client) checkProcess(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, relationships []tracker.PlanRelationshipMapping) error {
 	var types workItemTypeList
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, "wit/workitemtypes", nil, apiVersion)}, &types); err != nil {
+	if err := c.backend().planRead(ctx, repository, "wit/workitemtypes", nil, invokeRequest{Area: "wit", Resource: "workItemTypes"}, &types); err != nil {
 		return fmt.Errorf("read the work-item types of %s: %w", repository.Project, classifyPlanError(err))
 	}
 	for _, level := range mapping.Levels {
@@ -398,7 +401,7 @@ func (c *Client) fieldDefinitions(ctx context.Context, repository tracker.Reposi
 	var response struct {
 		Value []fieldDefinition `json:"value"`
 	}
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, "wit/fields", nil, apiVersion)}, &response); err != nil {
+	if err := c.backend().planRead(ctx, repository, "wit/fields", nil, invokeRequest{Area: "wit", Resource: "fields"}, &response); err != nil {
 		return nil, fmt.Errorf("read the fields of %s: %w", repository.Project, classifyPlanError(err))
 	}
 	for _, definition := range response.Value {
@@ -455,7 +458,7 @@ func checkFieldValue(workItemType, name, value string, definition fieldDefinitio
 // hierarchy that the process does not support fails before approval.
 func (c *Client) checkBacklogOrder(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping) error {
 	var backlogs backlogConfiguration
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, "work/backlogconfiguration", nil, apiVersion)}, &backlogs); err != nil {
+	if err := c.backend().planRead(ctx, repository, "work/backlogconfiguration", nil, invokeRequest{Area: "work", Resource: "backlogconfiguration"}, &backlogs); err != nil {
 		return fmt.Errorf("read the backlog levels of %s: %w", repository.Project, classifyPlanError(err))
 	}
 	ranks := map[string]int{}
@@ -501,7 +504,7 @@ func (c *Client) checkFields(ctx context.Context, repository tracker.Repository,
 		Value []workItemTypeField `json:"value"`
 	}
 	path := "wit/workitemtypes/" + url.PathEscape(level.Type) + "/fields"
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, url.Values{"$expand": {"allowedValues"}}, apiVersion)}, &response); err != nil {
+	if err := c.backend().planRead(ctx, repository, path, url.Values{"$expand": {"allowedValues"}}, invokeRequest{Area: "wit", Resource: "workItemTypesField", Route: projectRoute(repository, "type", level.Type)}, &response); err != nil {
 		return fmt.Errorf("read the fields of %q: %w", level.Type, classifyPlanError(err))
 	}
 	fields := map[string]workItemTypeField{}
@@ -591,24 +594,22 @@ func (c *Client) checkLinkTypes(ctx context.Context, repository tracker.Reposito
 	if len(needed) == 0 {
 		return nil
 	}
-	var response struct {
-		Value []struct {
-			ReferenceName string         `json:"referenceName"`
-			Attributes    map[string]any `json:"attributes"`
-		} `json:"value"`
-	}
-	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(repository.Owner, "wit/workitemrelationtypes", nil, apiVersion)}, &response); err != nil {
+	types, err := c.backend().listLinkTypes(ctx, repository)
+	if err != nil {
 		return fmt.Errorf("read the link types of %s: %w", repository.Owner, classifyPlanError(err))
 	}
 	for _, link := range needed {
 		enabled := false
-		for _, value := range response.Value {
+		for _, value := range types {
 			if value.ReferenceName == link {
 				enabled = value.Attributes["enabled"] != false
 			}
 		}
 		if !enabled {
 			return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability, "link type %s is missing or disabled in organization %s", link, repository.Owner)
+		}
+		if err := c.backend().checkLinkSelectable(types, link); err != nil {
+			return err
 		}
 	}
 	return nil

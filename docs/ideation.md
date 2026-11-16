@@ -12,7 +12,9 @@ The decision records are [ADR 0021](adr/0021-ideation-sessions-and-local-operato
 [ADR 0023](adr/0023-session-roles-run-on-headless-sessions.md) (session
 roles), [ADR 0024](adr/0024-browser-session-commands-through-a-durable-inbox.md)
 (browser commands), [ADR 0025](adr/0025-azure-devops-plan-publication-mapping.md)
-(Azure DevOps mapping), and
+(Azure DevOps mapping), [ADR 0030](adr/0030-azure-devops-cli-extension-route-and-repository-assignment.md)
+(the PAT-login extension route, its required Epic/PBI mapping, and the
+`factory-repo` repository assignment tag), and
 [ADR 0026](adr/0026-ideation-readiness-is-a-user-decision-on-the-displayed-brief.md)
 (readiness is the user's decision). This guide does not restate them.
 
@@ -41,7 +43,7 @@ The exact command API, its HTTP answers, and its request protection are in
 | --- | --- | --- |
 | Harness and model of the `ideation` and `planning` roles | `factory.yaml`: `role_harness_defaults`, `model_options`, optional `reasoning_effort_options` | [Factory-owned role, prompt, and stage registry](configuration.md#factory-owned-role-prompt-and-stage-registry) |
 | A worker image from this release, with the `grilling` skill in its smoke record | `factory.yaml`: `worker_build` | [Worker image build and digest pinning](configuration.md#worker-image-build-and-digest-pinning) |
-| Azure Boards work-item types per plan kind | Host registration: `azure_devops.planning` | [Plan publication mapping](configuration.md#plan-publication-mapping) |
+| Azure Boards work-item types per plan kind | Host registration: `azure_devops.planning`; required on the `devops_extension` route | [Plan publication mapping](configuration.md#plan-publication-mapping), [CLI extension route](configuration.md#cli-extension-route-pat-login) |
 | GitHub | Nothing extra; the registered repository is the target | [Session roles](agent-runtime.md#session-roles) |
 
 A repository without the two role keys can still run issues; only session

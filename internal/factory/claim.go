@@ -180,6 +180,11 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, fmt.Errorf("issue #%d has another factory state label", issueNumber)
 	}
 
+	trackerRepository, err := s.claimRepositoryAssignment(ctx, repository, issue)
+	if err != nil {
+		return IssueResult{}, err
+	}
+
 	route, err := resolveClaimRoute(issue.Body, repositoryConfig)
 	if err != nil {
 		return IssueResult{}, fmt.Errorf("validate frozen issue route for #%d: %w", issueNumber, err)
@@ -247,6 +252,7 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		TestRevisionBudget:  testRevisionBudget,
 		ProcessedCommentID:  processedCommentID,
 		SpecificationPacket: string(packetData),
+		TrackerRepository:   trackerRepository,
 		CreatedAt:           startedAt,
 		UpdatedAt:           startedAt,
 	}
@@ -278,6 +284,28 @@ func (s *Service) ClaimIssue(ctx context.Context, issueNumber int) (IssueResult,
 		return IssueResult{}, cleanupWorkspace(failureErr)
 	}
 	return IssueResult{Run: run, Packet: packet}, nil
+}
+
+// claimRepositoryAssignment revalidates, right before a claim, that the issue
+// is assigned to the registered repository when the tracker requires an
+// explicit assignment (ADR 0030), and returns the identity that the run
+// freezes. It returns nil for trackers that need no assignment.
+func (s *Service) claimRepositoryAssignment(ctx context.Context, repository tracker.Repository, issue tracker.Issue) (*store.TrackerRepository, error) {
+	validator, ok := s.deps.Tracker.(tracker.RepositoryAssignmentValidator)
+	if !ok {
+		return nil, nil
+	}
+	assignment, err := validator.ClaimRepositoryAssignment(ctx, repository, issue)
+	if err != nil || assignment == nil {
+		return nil, err
+	}
+	return &store.TrackerRepository{
+		Organization: assignment.Organization,
+		ProjectID:    assignment.ProjectID,
+		Project:      assignment.Project,
+		RepositoryID: assignment.RepositoryID,
+		Repository:   assignment.Repository,
+	}, nil
 }
 
 // claimCommentWatermark captures the latest existing issue comment before a

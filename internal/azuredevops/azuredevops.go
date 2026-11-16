@@ -89,6 +89,13 @@ type Client struct {
 	// Planning maps neutral plan kinds to the project's work-item types for
 	// plan publication. Nil selects config.AgileAzurePlanMapping.
 	Planning *config.AzurePlanMapping
+	// Route selects az rest (empty or az_rest) or the CLI extension route
+	// (ADR 0030). The extension route never runs az rest.
+	Route config.AzureRoute
+	// PlanRepositories names the other repositories of the registered
+	// project that a published PBI may target on the extension route (ADR
+	// 0030 decision 8). The registered repository is always a target.
+	PlanRepositories []string
 
 	// mu guards the caches below.
 	mu sync.Mutex
@@ -105,12 +112,18 @@ func NewClient(organization string, authorizedUsers []string) *Client {
 
 var _ tracker.AccountReader = (*Client)(nil)
 
-// runner returns the injected command runner or the production CLI runner.
+// runner returns the injected command runner or the production runner of
+// the client's route.
 func (c *Client) runner() CommandRunner {
 	if c.Runner == nil {
-		return commandRunner{}
+		return c.backend().defaultRunner()
 	}
 	return c.Runner
+}
+
+// defaultRunner is the host az binary for az rest.
+func (restBackend) defaultRunner() CommandRunner {
+	return commandRunner{}
 }
 
 // request is one REST call. Body is encoded as JSON; ContentType defaults to
@@ -152,6 +165,9 @@ func encodeRequestBody(body any) ([]byte, error) {
 // call sends one REST request through az rest and decodes the JSON response
 // into destination when it is not nil.
 func (c *Client) call(ctx context.Context, req request, destination any) error {
+	if c.extensionRoute() {
+		return fmt.Errorf("%s %s: %w", req.Method, redactedPath(req.URL), ErrExtensionOperationUnavailable)
+	}
 	args := []string{"rest", "--method", strings.ToLower(req.Method), "--url", req.URL, "--resource", devOpsResource}
 	if req.Body != nil {
 		encoded, err := encodeRequestBody(req.Body)
@@ -266,6 +282,19 @@ func (c *Client) AuthenticatedLogin(ctx context.Context) (string, error) {
 	if strings.TrimSpace(c.Organization) == "" {
 		return "", errors.New("Azure DevOps organization is required to read the authenticated identity")
 	}
+	login, err := c.backend().readLogin(ctx)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	c.login = login
+	c.mu.Unlock()
+	return login, nil
+}
+
+// readLogin reads the account name from the organization's connection data
+// through az rest. Its errors never contain az output.
+func (c restBackend) readLogin(ctx context.Context) (string, error) {
 	var response connectionDataResponse
 	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(c.Organization, "connectionData", nil, connectionDataAPIVersion)}, &response); err != nil {
 		var timeout *hostcmd.TimeoutError
@@ -278,10 +307,13 @@ func (c *Client) AuthenticatedLogin(ctx context.Context) (string, error) {
 	if login == "" || strings.ContainsAny(login, "\x00\r\n/") {
 		return "", errAccountUnavailable
 	}
-	c.mu.Lock()
-	c.login = login
-	c.mu.Unlock()
 	return login, nil
+}
+
+// resolveRepository is refused on az rest without a call: the repository
+// assignment of ADR 0030 exists only on the extension route.
+func (restBackend) resolveRepository(context.Context, tracker.Repository) (RepositoryIdentity, error) {
+	return RepositoryIdentity{}, errors.New("resolving an Azure Repos repository identity requires route devops_extension")
 }
 
 // authorized reports whether login is one of the authorized users.

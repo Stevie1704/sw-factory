@@ -874,6 +874,7 @@ func planNodesFromReport(values []report.PlanNode) []store.PlanNode {
 			ID: node.ID, Kind: node.Kind, Title: node.Title, Body: node.Body,
 			AcceptanceCriteria: append([]string(nil), node.AcceptanceCriteria...), ParentID: node.ParentID,
 			DependsOn: append([]string(nil), node.DependsOn...), BriefRefs: append([]string(nil), node.BriefRefs...),
+			TargetRepository: node.TargetRepository,
 		})
 	}
 	return nodes

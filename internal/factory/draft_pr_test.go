@@ -98,6 +98,9 @@ func TestCreateDraftPullRequestPushesTheCheckpointBeforeGatesAndCreatesOneDraft(
 	if len(workerRuntime.commands) != 3 || workerRuntime.commands[0].Command != policy.Setup || workerRuntime.commands[1].Command != "format" || workerRuntime.commands[2].Command != "test" {
 		t.Fatalf("gate commands = %#v, want one setup followed by ordered gates", workerRuntime.commands)
 	}
+	if pullRequests.createdRequests[0].WorkItem != nil {
+		t.Fatalf("created request links work item %#v, want none for a Run without a frozen Azure Boards repository", pullRequests.createdRequests[0].WorkItem)
+	}
 	body := pullRequests.createdRequests[0].Body
 	for _, expected := range []string{
 		"<!-- factory-generated:start -->", "Add the factory handoff", "Implement the supervised draft PR boundary.",

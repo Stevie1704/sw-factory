@@ -368,6 +368,20 @@ func TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment(t *testing.T)
 	}); err == nil {
 		t.Fatal("RunCommand() accepted a GitHub credential")
 	}
+	// The Azure DevOps CLI extension reads its PAT and other credentials from
+	// AZURE_DEVOPS_EXT_* variables (ADR 0030); no PAT-named variable may
+	// reach a worker.
+	for _, name := range []string{"AZURE_DEVOPS_EXT_PAT", "azure_devops_ext_pat", "AZURE_DEVOPS_EXT_GIT_SOURCE_PASSWORD_OR_PAT", "AZURE_DEVOPS_EXT_CONFIG_DIR", "SYSTEM_PAT"} {
+		if _, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
+			RunID:             request.RunID,
+			Command:           "printf nope",
+			EnvironmentPolicy: worker.EnvironmentPolicyClean,
+			Role:              "gate",
+			Environment:       map[string]string{name: "secret-value"},
+		}); err == nil || !strings.Contains(err.Error(), "not allowed in a worker") {
+			t.Fatalf("RunCommand() with %s error = %v, want a credential rejection", name, err)
+		}
+	}
 	if _, err := runtime.RunCommand(context.Background(), worker.CommandRequest{
 		RunID:             request.RunID,
 		Command:           "printf nope",

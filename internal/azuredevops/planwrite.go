@@ -29,7 +29,21 @@ func classifyPlanError(err error) error {
 	if errors.Is(err, errRequestBodyTooLarge) {
 		return &tracker.PlanError{Kind: tracker.PlanErrorInvalidMapping, Err: err}
 	}
+	// On the extension route (ADR 0030), a missing login and an operation
+	// that is not available yet both stop before any write.
+	var login *LoginRequiredError
+	if errors.As(err, &login) {
+		return &tracker.PlanError{Kind: tracker.PlanErrorPermission, Err: err}
+	}
+	if errors.Is(err, ErrExtensionOperationUnavailable) {
+		return &tracker.PlanError{Kind: tracker.PlanErrorUnsupportedCapability, Err: err}
+	}
 	message := err.Error()
+	for _, text := range extensionNoWriteTexts {
+		if strings.Contains(message, text) {
+			return &tracker.PlanError{Kind: tracker.PlanErrorInvalidMapping, Err: err}
+		}
+	}
 	switch {
 	case strings.Contains(message, "Unauthorized(") || strings.Contains(message, "Forbidden("):
 		return &tracker.PlanError{Kind: tracker.PlanErrorPermission, Err: err}
@@ -48,7 +62,10 @@ type patchOperation struct {
 
 // CreatePlanItem creates exactly the rendered work item: its type, title,
 // Markdown description, correlation tag, and configured fields. It sets no
-// relation, never a factory state tag, and never an execution state.
+// relation, never a factory state tag, and never an execution state. On the
+// CLI extension route it uses az boards work-item create, which stores the
+// description as HTML that shows the Markdown text, and also writes the
+// repository assignment tag (ADR 0030 decisions 14 and 15).
 func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
 	if err := validatePlanRepository(repository); err != nil {
 		return tracker.PlanItemRef{}, err
@@ -59,6 +76,11 @@ func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Reposito
 	if strings.TrimSpace(item.Type) == "" || !slices.Contains(item.Labels, correlationTag(item.Correlation)) {
 		return tracker.PlanItemRef{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: the item has no type or no correlation tag", item.NodeID)
 	}
+	return c.backend().createPlanItem(ctx, repository, item)
+}
+
+// createPlanItem creates the rendered item with one az rest JSON patch.
+func (c restBackend) createPlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
 	patch := createPatch(item)
 	var response struct {
 		ID int `json:"id"`
@@ -107,6 +129,12 @@ func (c *Client) FindPlanItems(ctx context.Context, repository tracker.Repositor
 	if strings.TrimSpace(correlation) == "" {
 		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "a correlation key is required")
 	}
+	return c.backend().findPlanItems(ctx, repository, correlation)
+}
+
+// findPlanItems queries the correlation tag with WIQL through az rest and
+// compares the tags of each match exactly.
+func (c restBackend) findPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
 	tag := correlationTag(correlation)
 	query := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Tags] CONTAINS '" +
 		strings.ReplaceAll(tag, "'", "''") + "' ORDER BY [System.Id]"
@@ -154,6 +182,12 @@ func (c *Client) CreatePlanRelationship(ctx context.Context, repository tracker.
 	if err != nil {
 		return err
 	}
+	return c.backend().createPlanRelationship(ctx, repository, from, to, link)
+}
+
+// createPlanRelationship adds the link with one az rest JSON patch on the
+// From work item.
+func (c restBackend) createPlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, link string) error {
 	patch := []patchOperation{{Op: "add", Path: "/relations/-", Value: map[string]string{"rel": link, "url": workItemAPIURL(repository, to)}}}
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", from), nil, apiVersion), Body: patch, ContentType: "application/json-patch+json"}
 	if err := c.call(ctx, req, nil); err != nil {
@@ -169,6 +203,12 @@ func (c *Client) FindPlanRelationship(ctx context.Context, repository tracker.Re
 	if err != nil {
 		return false, err
 	}
+	return c.backend().findPlanRelationship(ctx, repository, from, to, link)
+}
+
+// findPlanRelationship reads the relations of the From work item through
+// az rest and compares the link reference name.
+func (c restBackend) findPlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, link string) (bool, error) {
 	var response relationResponse
 	query := url.Values{"$expand": {"relations"}}
 	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", from), query, apiVersion)}, &response); err != nil {

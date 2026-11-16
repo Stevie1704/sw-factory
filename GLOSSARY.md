@@ -162,6 +162,20 @@ through the code-host port. The adapters are GitHub and Azure DevOps
 (Azure Repos, where a reviewer vote is a review).
 _Avoid_: GitHub (for the concept), forge
 
+**Azure CLI route**:
+The host-selected command family of an Azure DevOps registration
+(`azure_devops.route`): `az_rest` with an Entra ID `az login`, or
+`devops_extension` with `az boards`, `az repos`, and `az devops invoke`
+authenticated by `az devops login`. It is not a workflow route.
+_Avoid_: Auth mode, PAT mode
+
+**Repository assignment tag**:
+The Factory-managed `factory-repo:<repository GUID>` tag that assigns one
+Azure Boards PBI to the registered repository that may execute it. Exactly one
+must match the claiming registration's repository; the validated identity is
+then frozen with the run. It never authorizes execution.
+_Avoid_: Repository label, owner tag
+
 **Lifecycle observation**:
 One coordinator read of the tracked issue and pull request that can identify
 successful merge completion, an unmerged closure requiring cancellation, or a

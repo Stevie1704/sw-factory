@@ -50,6 +50,9 @@ state.
    the run-state labels ignore it. `FindPlanItems` queries WIQL for the tag in
    the project, in every state, and reads the matches back to compare the tag
    exactly. WIQL reads the work-item store, not a search index.
+   ADR 0030 amends this decision for the CLI extension route: an
+   executable item carries the correlation tag and exactly one
+   `factory-repo:<repository GUID>` assignment tag.
 5. **Exact content, no execution state.** A create sends the rendered type,
    title, a Markdown description (`multilineFieldsFormat`), the correlation
    tag, and the configured fields, and nothing else: no relation, no
@@ -58,12 +61,19 @@ state.
    `System.LinkTypes.Hierarchy-Reverse` (parent) or
    `System.LinkTypes.Dependency-Reverse` (predecessor: the To item must be
    done first). Every relationship is native; there is no textual fallback.
+   ADR 0030 decisions 14 and 15 amend this decision for the CLI extension
+   route: `az boards work-item create` cannot set `multilineFieldsFormat`,
+   so the description is created as HTML that shows the Markdown text, and
+   an executable item also carries its `factory-repo:` tag.
 6. **Outcome classification from the az rest response.** `Unauthorized` and
    `Forbidden` are permission errors; `Bad Request` and `Not Found` are
    invalid mappings; a host-command timeout is ambiguous. Every other failure
    leaves the outcome unknown, so publication reconciles by the correlation
    tag before it creates again. Authentication stays with `az login`; the
    adapter reads and stores no credential and adds no PAT handling.
+   ADR 0030 amends this decision for the CLI extension route, where
+   authentication is the CLI-managed `az devops login` and the az rest
+   classification does not apply.
 
 ## Consequences
 

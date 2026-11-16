@@ -156,9 +156,10 @@ func azureJourney(t *testing.T) journeyProvider {
 	}
 }
 
-// journeyProviders returns both publication adapters.
+// journeyProviders returns every publication adapter: GitHub, Azure DevOps
+// through az rest, and Azure DevOps through the CLI extension route.
 func journeyProviders(t *testing.T) []journeyProvider {
-	return []journeyProvider{githubJourney(t), azureJourney(t)}
+	return []journeyProvider{githubJourney(t), azureJourney(t), azureExtensionJourney(t, azuredevopstest.NewBoards(t, azuredevopstest.ScrumProcess()))}
 }
 
 // ideationJourney is one operator journey: a browser on the UI handler, the
