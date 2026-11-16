@@ -300,11 +300,23 @@ func (s *Service) planDraftPullRequest(ctx context.Context, client codehost.Pull
 		HeadBranch: run.Branch,
 		BaseBranch: packet.RepositoryConfig.TargetBranch,
 		Draft:      true,
+		WorkItem:   sourceWorkItem(run),
 	}
 	if existing.Number > 0 {
 		request.Body = mergeGeneratedPullRequestBody(existing.Body, body)
 	}
 	return request, existing.Number, nil
+}
+
+// sourceWorkItem returns the native work-item link of a Run with a frozen
+// Azure Boards repository, or nil. The frozen repository is the only gate:
+// a local Markdown or GitHub Run has none, so its issue number never
+// becomes an Azure work-item ID (ADR 0030).
+func sourceWorkItem(run store.Run) *codehost.WorkItemLink {
+	if run.TrackerRepository == nil {
+		return nil
+	}
+	return &codehost.WorkItemLink{ID: run.IssueNumber, RepositoryID: run.TrackerRepository.RepositoryID}
 }
 
 // regenerateDraftPullRequest refreshes a previously created PR without

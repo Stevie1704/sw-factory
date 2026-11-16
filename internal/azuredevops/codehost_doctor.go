@@ -12,14 +12,16 @@ import (
 
 var _ codehost.ReadinessChecker = (*Client)(nil)
 
-// CodeHostStartupChecks checks the existing Azure Repos az route without any
-// Boards areas, tags, or work-item API. A blocked az route stays a startup error.
+// CodeHostStartupChecks checks Azure Repos on the client's route without any
+// Boards areas, tags, or work-item API. A blocked route stays a startup
+// error. The devops_extension route uses read-only az repos probes.
 func (c *Client) CodeHostStartupChecks(repository tracker.Repository) []doctor.Check {
+	if c.extensionRoute() {
+		return c.extensionCodeHostStartupChecks(repository)
+	}
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
-			if _, err := c.AuthenticatedLogin(ctx); err != nil && c.extensionRoute() {
-				return doctor.Failure(doctor.Condition{Code: "azure_devops.code_host.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}, "Azure Repos authentication", extensionDiagnosisProblem, extensionDiagnosisAction(repository.Owner))
-			} else if err != nil {
+			if _, err := c.AuthenticatedLogin(ctx); err != nil {
 				return doctor.Failure(doctor.Condition{Code: "azure_devops.code_host.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}, "Azure Repos authentication", "az cannot establish the configured Azure Repos identity", "verify az login and company policy; local Markdown removes Boards access only, and no alternative Azure authentication route is implemented")
 			}
 			return doctor.Success("azure_devops.code_host.authentication.ready", "Azure Repos authentication")

@@ -195,13 +195,13 @@ host.
 | Link types: GET `wit/workitemrelationtypes` | `az boards work-item relation list-type` | Verified command. |
 | PR search by branch pair: GET `git/repositories/{repo}/pullrequests?searchCriteria...` | `az repos pr list --project --repository --source-branch --target-branch --status all --top` | Verified command. Invoke `git/pullRequests` resolves to the project-level `{project}/_apis/git/pullRequests/{pullRequestId}` and cannot list one repository. |
 | PR read: GET `git/repositories/{repo}/pullrequests/{n}` | `az repos pr show --id` | Verified command; organization-scoped, so the adapter must check the repository in the response. |
-| PR create: POST `git/repositories/{repo}/pullrequests` | `az repos pr create --project --repository --source-branch --target-branch --title --description --draft true --work-items <PBI>` | Verified command. `--description` takes one value per line. |
-| PR update and readiness: PATCH `pullrequests/{n}` | `az repos pr update --id --title --description` and `--draft false` | Verified command; organization-scoped. |
-| PR work-item link | `az repos pr work-item add --id --work-items` and `az repos pr work-item list --id` | Verified commands; organization-scoped (new for #306). |
+| PR create: POST `git/repositories/{repo}/pullrequests` | `az repos pr create --project --repository --source-branch --target-branch --title --description --draft true --work-items <PBI>` | Verified command. `--description` takes one value per line and joins the values with `\n` (`pull_request.py`). Implemented (#306): the title and the whole description each go as one `--flag=value` argument, which argparse binds as exactly one value, so a Markdown line such as `---` is never parsed as an option. Azure CLI replaces a value that starts with `@` (alone or after the first `=`) by a file's content (azure-cli core `_expand_file_prefixed_files`), so such a title, description, or branch is refused before the call. `--repository` takes a name or ID; with a source PBI the adapter passes the frozen GUID after `az repos show` confirms that the registered name still resolves to it. Source-verified, not run live. |
+| PR update and readiness: PATCH `pullrequests/{n}` | `az repos pr update --id --title --description` and `--draft false` | Verified command; organization-scoped. Implemented (#306) after a `pr show` repository check. |
+| PR work-item link | `az repos pr work-item add --id --work-items` and `az repos pr work-item list --id` | Verified commands; organization-scoped (new for #306). Both return work items with `id` (`pull_request.py`). Implemented: after a `pr show` check against the frozen GUID, list, add when missing, and list again; an unconfirmed add fails. |
 | PR threads (reviews and comments): GET/POST `pullRequests/{n}/threads` | `invoke --area git --resource pullRequestThreads` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/pullRequests/{pullRequestId}/threads/{threadId}`. |
 | PR thread comment edit: PATCH `threads/{t}/comments/{c}` | `invoke --area git --resource pullRequestThreadComments` | Resolves to `.../threads/{threadId}/comments/{commentId}`. |
-| PR reviewers: GET `pullRequests/{n}/reviewers` | `az repos pr reviewer list --id` | Verified command; organization-scoped. Alternative: `invoke git/pullRequestReviewers`, which resolves to the 7.2 project route. |
-| Commit statuses: POST/GET `commits/{sha}/statuses` | `invoke --area git --resource statuses` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/commits/{commitId}/statuses`. |
+| PR reviewers: GET `pullRequests/{n}/reviewers` | `az repos pr reviewer list --id` | Verified command; organization-scoped. Alternative: `invoke git/pullRequestReviewers`, which resolves to the 7.2 project route. Implemented (#306) with the dedicated command after a `pr show` repository check, because its output names no repository. |
+| Commit statuses: POST/GET `commits/{sha}/statuses` | `invoke --area git --resource statuses` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/commits/{commitId}/statuses`. `invoke.py` matches the area as well as the resource, so the two `CodeReview` `statuses` locations are not candidates. Query `top`, `skip`, `latestOnly` from the REST reference "Statuses - List" (7.1). |
 | Default-branch ref: GET `refs?filter=heads/<branch>` | `az repos ref list --project --repository --filter heads/<branch>` | Verified command. |
 | Code-host doctor active PR probe | `az repos pr list --status active --top 1` | Verified command. |
 
@@ -220,18 +220,19 @@ host.
   output. The stateful `Boards` fake answers `az repos show` for two
   repositories with distinct GUIDs in one project; the route-keyed test fake
   routes extension calls by command and invoke area/resource.
-- Until #304 and #306 port them, every Boards and Repos operation on the
-  extension route fails closed. The tracker and code-host startup checks
-  fail with an `az devops login` repair instead of passing or pointing to
-  `az login`, and a plan write reports `unsupported_capability`, which
-  proves no write. The az rest route, GitHub, and local Markdown behave as
-  before.
+- An operation that is not ported fails closed. Until #305 ports it, a plan
+  write reports `unsupported_capability`, which proves no write. The az rest
+  route, GitHub, and local Markdown behave as before.
 - #304 ports Boards intake: work item reads, the queue, state metadata,
   update history, comments, and tag updates (`boards_extension.go`), and
   read-only startup checks that run only `az repos show` and `az boards
   query` (`extension_doctor.go`). The checks tell a missing or expired login,
   a missing extension (`ExtensionMissingError`), a timeout, and an
   unreachable service apart.
+- #306 ports the Repos operations: pull requests, threads, comments,
+  reviewer reads, commit statuses, the native PBI link, and the code-host
+  startup check, whose write permissions stay an unverified warning. Finding
+  a coordinator pull-request comment by marker still needs the identity row.
 - `store.PlanNode` and `publication.planGraph` carry no target yet; #305
   adds the plan node field, its validation, and the adapter rendering.
 - **Residual authentication risk.** The extension tries an `az login` token

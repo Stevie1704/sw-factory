@@ -376,9 +376,10 @@ type RepositoryIdentity struct {
 
 // repositoryShowResponse is the projection of az repos show.
 type repositoryShowResponse struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Project *struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	DefaultBranch string `json:"defaultBranch"`
+	Project       *struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	} `json:"project"`
@@ -392,19 +393,26 @@ var canonicalGUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 // project. It refuses a response for another project or repository, or one
 // without GUIDs. Only the extension route supports it.
 func (c *Client) ResolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
+	identity, _, err := c.showRepository(ctx, repository)
+	return identity, err
+}
+
+// showRepository is ResolveRepository that also returns the full reference
+// name of the repository's default branch.
+func (c *Client) showRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, string, error) {
 	if err := validateRepository(repository); err != nil {
-		return RepositoryIdentity{}, err
+		return RepositoryIdentity{}, "", err
 	}
 	var response repositoryShowResponse
 	args := []string{"repos", "show", "--project", repository.Project, "--repository", repository.Name}
 	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
-		return RepositoryIdentity{}, fmt.Errorf("resolve Azure Repos repository %s: %w", repository, err)
+		return RepositoryIdentity{}, "", fmt.Errorf("resolve Azure Repos repository %s: %w", repository, err)
 	}
 	if response.Project == nil || !strings.EqualFold(response.Project.Name, repository.Project) || !canonicalGUID.MatchString(response.Project.ID) {
-		return RepositoryIdentity{}, fmt.Errorf("resolve Azure Repos repository %s: the response names another project", repository)
+		return RepositoryIdentity{}, "", fmt.Errorf("resolve Azure Repos repository %s: the response names another project", repository)
 	}
 	if !strings.EqualFold(response.Name, repository.Name) || !canonicalGUID.MatchString(response.ID) {
-		return RepositoryIdentity{}, fmt.Errorf("resolve Azure Repos repository %s: the response names another repository or no repository GUID", repository)
+		return RepositoryIdentity{}, "", fmt.Errorf("resolve Azure Repos repository %s: the response names another repository or no repository GUID", repository)
 	}
 	return RepositoryIdentity{
 		Organization: repository.Owner,
@@ -412,5 +420,5 @@ func (c *Client) ResolveRepository(ctx context.Context, repository tracker.Repos
 		Project:      response.Project.Name,
 		ID:           strings.ToLower(response.ID),
 		Name:         response.Name,
-	}, nil
+	}, response.DefaultBranch, nil
 }
