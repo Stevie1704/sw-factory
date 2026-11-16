@@ -179,6 +179,7 @@ Each operational contract has one owner:
 | Ideation sessions for users: configuration, flow, approval scope, recovery, and retention | [From an idea to a reviewed backlog](docs/ideation.md) |
 | Local Markdown issues: file format, identities, Git publication, execution authorization, scheduling, and the remaining code-host access | [Local Markdown issue contract](docs/local-markdown-issues.md) |
 | Release evidence of the local Markdown backlog | [Local Markdown backlog acceptance](docs/acceptance/local-markdown-backlog.md) |
+| Azure DevOps with a PAT through the CLI extension: setup, Epic/PBI mapping, repository assignment, scripted evidence, known limits, and the live procedure | [Azure DevOps extension route acceptance](docs/acceptance/azure-devops-extension-route.md) |
 | Harness adapters, invocations, structured reports, authentication, recovery, and reviews | [Agent runtime](docs/agent-runtime.md) |
 | GitHub Copilot CLI operator setup, credentials, smoke evidence, and failure actions | [GitHub Copilot CLI](docs/configuration.md#github-copilot-cli) |
 | Release evidence and open live blockers of the Copilot CLI harness | [Copilot CLI release evidence](docs/acceptance/copilot.md) |

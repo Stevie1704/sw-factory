@@ -46,13 +46,26 @@ var releaseEvidenceTest = regexp.MustCompile("`" + `(\.|[a-z][a-z0-9_/-]*):(Test
 // traceability record honest: every deterministic test it cites as evidence
 // for an acceptance criterion must exist.
 func TestCopilotReleaseEvidenceNamesExistingTests(t *testing.T) {
-	record, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "acceptance", "copilot.md"))
+	requireEvidenceTestsExist(t, "copilot.md")
+}
+
+// TestAzureExtensionRouteEvidenceNamesExistingTests keeps the Azure DevOps
+// extension route record of #307 honest in the same way.
+func TestAzureExtensionRouteEvidenceNamesExistingTests(t *testing.T) {
+	requireEvidenceTestsExist(t, "azure-devops-extension-route.md")
+}
+
+// requireEvidenceTestsExist fails unless the evidence record docs/acceptance/
+// <record> names at least one deterministic test and every named test exists.
+func requireEvidenceTestsExist(t *testing.T, record string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(repositoryRoot, "docs", "acceptance", record))
 	if err != nil {
 		t.Fatal(err)
 	}
-	references := releaseEvidenceTest.FindAllStringSubmatch(string(record), -1)
+	references := releaseEvidenceTest.FindAllStringSubmatch(string(content), -1)
 	if len(references) == 0 {
-		t.Fatal("docs/acceptance/copilot.md names no deterministic test")
+		t.Fatalf("docs/acceptance/%s names no deterministic test", record)
 	}
 	tests := map[string]map[string]bool{}
 	for _, reference := range references {
@@ -61,7 +74,7 @@ func TestCopilotReleaseEvidenceNamesExistingTests(t *testing.T) {
 			tests[directory] = testFunctions(t, filepath.Join(repositoryRoot, filepath.FromSlash(directory)))
 		}
 		if !tests[directory][name] {
-			t.Errorf("docs/acceptance/copilot.md names %s:%s, which does not exist", directory, name)
+			t.Errorf("docs/acceptance/%s names %s:%s, which does not exist", record, directory, name)
 		}
 	}
 }
