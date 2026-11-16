@@ -57,15 +57,15 @@ var (
 // StartupChecks returns the Azure DevOps authentication, repository, and
 // permission checks in deterministic order.
 func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
+	if c.extensionRoute() {
+		return c.extensionStartupChecks(repository)
+	}
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			const name = "azure devops authentication"
 			if _, err := c.AuthenticatedLogin(ctx); err != nil {
 				if result, ok := unresponsive("azure_devops.authentication.timeout", name, err); ok {
 					return result
-				}
-				if c.extensionRoute() {
-					return doctor.Failure(authenticationFailed, name, extensionDiagnosisProblem, extensionDiagnosisAction(repository.Owner))
 				}
 				return doctor.Failure(authenticationFailed, name, "the Azure CLI has no usable Azure DevOps identity", "run az login (for a service principal, az login --service-principal) for the identity that supervises the repository")
 			}

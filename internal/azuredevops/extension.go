@@ -109,6 +109,9 @@ func (r extensionRunner) Run(ctx context.Context, args []string) ([]byte, error)
 	if loginRequired(stderr) {
 		return nil, &LoginRequiredError{OrganizationURL: flagValue(args, "--organization")}
 	}
+	if extensionMissing(stderr) {
+		return nil, &ExtensionMissingError{}
+	}
 	message := sanitizeCLIMessage(stderr)
 	if message == "" {
 		return nil, fmt.Errorf("%s: %w", extensionOperation(args), err)
@@ -143,6 +146,28 @@ func loginRequired(stderr string) bool {
 	lower := strings.ToLower(stderr)
 	for _, message := range loginMessages {
 		if strings.Contains(lower, strings.ToLower(message)) {
+			return true
+		}
+	}
+	return false
+}
+
+// ExtensionMissingError reports that the azure-devops Azure CLI extension
+// is not installed. The extension route disables dynamic install, so the
+// Azure CLI reports its command groups as unknown instead of installing it.
+type ExtensionMissingError struct{}
+
+// Error returns the repair instruction for the operator.
+func (e *ExtensionMissingError) Error() string {
+	return "the azure-devops Azure CLI extension is not installed: run az extension add --name azure-devops"
+}
+
+// extensionMissing reports whether standard error is the Azure CLI's
+// unknown-command text for one of the extension's command groups
+// (azure-cli parser.py, with dynamic install off).
+func extensionMissing(stderr string) bool {
+	for _, group := range []string{"boards", "repos", "devops"} {
+		if strings.Contains(stderr, "'"+group+"' is misspelled or not recognized by the system") {
 			return true
 		}
 	}
