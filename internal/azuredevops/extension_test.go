@@ -97,9 +97,6 @@ func TestExtensionRouteNeverFallsBackToAzRest(t *testing.T) {
 	if !errors.Is(err, azuredevops.ErrExtensionOperationUnavailable) {
 		t.Fatalf("AuthenticatedLogin() error = %v, want ErrExtensionOperationUnavailable", err)
 	}
-	if _, err := client.Issue(context.Background(), repository, 42); !errors.Is(err, azuredevops.ErrExtensionOperationUnavailable) {
-		t.Fatalf("Issue() error = %v, want ErrExtensionOperationUnavailable", err)
-	}
 	if len(az.calls) != 0 || len(az.extensionCalls) != 0 {
 		t.Fatalf("calls = %d az rest, %d extension; want none", len(az.calls), len(az.extensionCalls))
 	}

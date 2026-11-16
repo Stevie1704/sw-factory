@@ -186,3 +186,15 @@ func TestAnExtensionClientWithoutARunnerUsesTheExtensionRunner(t *testing.T) {
 		t.Fatal("runner() without a route is not the az rest runner")
 	}
 }
+
+// TestExtensionRunnerReportsAMissingExtension verifies that the Azure CLI's
+// unknown-command text for an extension group, which it prints when dynamic
+// install is off, becomes an ExtensionMissingError.
+func TestExtensionRunnerReportsAMissingExtension(t *testing.T) {
+	installFakeAz(t, "echo \"ERROR: 'boards' is misspelled or not recognized by the system.\" >&2\nexit 2\n")
+	_, err := extensionRunner{timeout: 10 * time.Second}.Run(context.Background(), []string{"boards", "query", "--organization", "https://dev.azure.com/contoso"})
+	var missing *ExtensionMissingError
+	if !errors.As(err, &missing) || !strings.Contains(err.Error(), "az extension add --name azure-devops") {
+		t.Fatalf("Run() error = %v, want ExtensionMissingError", err)
+	}
+}
