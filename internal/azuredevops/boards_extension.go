@@ -150,7 +150,7 @@ func (c *Client) ClaimRepositoryAssignment(ctx context.Context, repository track
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateRepositoryAssignment(issue.Labels, identity); err != nil {
+	if err := c.validateAssignment(ctx, repository, issue.Labels, identity); err != nil {
 		return nil, fmt.Errorf("work item %d cannot be claimed by this installation: %w", issue.Number, err)
 	}
 	return &tracker.RepositoryAssignment{
@@ -199,7 +199,7 @@ func (c *Client) extensionEligibleIssues(ctx context.Context, repository tracker
 			return nil, err
 		}
 		for _, response := range batch {
-			if ValidateRepositoryAssignment(splitTags(response.Fields.Tags), identity) != nil {
+			if c.validateAssignment(ctx, repository, splitTags(response.Fields.Tags), identity) != nil {
 				continue
 			}
 			issue, err := c.eligibleIssue(ctx, repository, response)

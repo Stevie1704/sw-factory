@@ -422,3 +422,31 @@ func (c *Client) showRepository(ctx context.Context, repository tracker.Reposito
 		Name:         response.Name,
 	}, response.DefaultBranch, nil
 }
+
+// projectRepositories lists the repositories of the registered project
+// that the signed-in identity can read, with the read-only az repos list,
+// which prints a JSON array of repositories. It refuses an entry for
+// another project or without GUIDs.
+func (c *Client) projectRepositories(ctx context.Context, repository tracker.Repository) ([]RepositoryIdentity, error) {
+	var response []repositoryShowResponse
+	if err := c.extension(ctx, repository.Owner, []string{"repos", "list", "--project", repository.Project}, &response); err != nil {
+		return nil, fmt.Errorf("list the repositories of project %s: %w", repository.Project, err)
+	}
+	repositories := make([]RepositoryIdentity, 0, len(response))
+	for _, entry := range response {
+		if entry.Project == nil || !strings.EqualFold(entry.Project.Name, repository.Project) || !canonicalGUID.MatchString(entry.ID) {
+			return nil, fmt.Errorf("list the repositories of project %s: an entry names another project or no repository GUID", repository.Project)
+		}
+		repositories = append(repositories, RepositoryIdentity{Organization: repository.Owner, ProjectID: strings.ToLower(entry.Project.ID), Project: entry.Project.Name, ID: strings.ToLower(entry.ID), Name: entry.Name})
+	}
+	return repositories, nil
+}
+
+// validateAssignment is ValidateRepositoryAssignment for one work item of
+// repository, which lists the project's repositories only when a tag names
+// another GUID.
+func (c *Client) validateAssignment(ctx context.Context, repository tracker.Repository, labels []string, identity RepositoryIdentity) error {
+	return ValidateRepositoryAssignment(labels, identity, func() ([]RepositoryIdentity, error) {
+		return c.projectRepositories(ctx, repository)
+	})
+}

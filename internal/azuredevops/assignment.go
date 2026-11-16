@@ -3,6 +3,7 @@ package azuredevops
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -35,9 +36,12 @@ const (
 	// AssignmentMultiple means the work item has more than one assignment
 	// tag.
 	AssignmentMultiple AssignmentProblem = "multiple"
-	// AssignmentMismatched means the tag names a repository other than the
-	// registered one, for example a repository of another installation or
-	// an unknown GUID.
+	// AssignmentUnknown means the tag names a GUID that is not a repository
+	// of the project that the signed-in identity can read: a typo, a
+	// deleted repository, or a repository without read access.
+	AssignmentUnknown AssignmentProblem = "unknown"
+	// AssignmentMismatched means the tag names another repository of the
+	// project, which another installation owns.
 	AssignmentMismatched AssignmentProblem = "mismatched"
 )
 
@@ -50,6 +54,9 @@ type AssignmentError struct {
 	Expected RepositoryIdentity
 	// Found lists the assignment tags of the work item.
 	Found []string
+	// Assigned is the other repository of the project that a mismatched
+	// tag names; it is empty for every other problem.
+	Assigned string
 }
 
 // Error describes the refusal and the repair.
@@ -62,16 +69,22 @@ func (e *AssignmentError) Error() string {
 		return fmt.Sprintf("the work item has %d repository assignment tags (%s); keep exactly one, %s for repository %s", len(e.Found), strings.Join(e.Found, ", "), want, e.Expected.Name)
 	case AssignmentMalformed:
 		return fmt.Sprintf("the repository assignment tag %s does not name a repository GUID; use %s for repository %s", strings.Join(e.Found, ", "), want, e.Expected.Name)
+	case AssignmentUnknown:
+		return fmt.Sprintf("the repository assignment tag %s names no repository of project %s that this sign-in can read (a typo, a deleted repository, or no read access); replace it with %s to assign the work item to repository %s", strings.Join(e.Found, ", "), e.Expected.Project, want, e.Expected.Name)
 	default:
-		return fmt.Sprintf("the work item is assigned by %s to another repository, not to %s (%s); another installation owns it", strings.Join(e.Found, ", "), e.Expected.Name, want)
+		return fmt.Sprintf("the work item is assigned by %s to repository %s of project %s, whose installation claims it; replace the tag with %s only to move the work item to repository %s", strings.Join(e.Found, ", "), e.Assigned, e.Expected.Project, want, e.Expected.Name)
 	}
 }
 
 // ValidateRepositoryAssignment accepts labels only when they hold exactly
 // one well-formed assignment tag that names the expected repository GUID.
 // It is the authoritative check before a claim; query filtering is only an
-// optimization.
-func ValidateRepositoryAssignment(labels []string, expected RepositoryIdentity) error {
+// optimization. projectRepositories lists the repositories of the
+// registered project; it is called only for a single well-formed tag that
+// names another GUID, to tell an unknown GUID from another repository of
+// the project. When the list fails or does not hold the registered
+// repository, the assignment is still refused, without a class.
+func ValidateRepositoryAssignment(labels []string, expected RepositoryIdentity, projectRepositories func() ([]RepositoryIdentity, error)) error {
 	if !canonicalGUID.MatchString(expected.ID) {
 		return errors.New("the registered Azure Repos repository has no resolved GUID")
 	}
@@ -94,8 +107,32 @@ func ValidateRepositoryAssignment(labels []string, expected RepositoryIdentity) 
 	if !canonicalGUID.MatchString(id) {
 		return refuse(AssignmentMalformed)
 	}
-	if !strings.EqualFold(id, expected.ID) {
-		return refuse(AssignmentMismatched)
+	if strings.EqualFold(id, expected.ID) {
+		return nil
 	}
-	return nil
+	return classifyForeignAssignment(id, &AssignmentError{Expected: expected, Found: found}, projectRepositories)
+}
+
+// classifyForeignAssignment completes refused, a refusal of a tag that
+// names the GUID id other than the registered one, as unknown or
+// mismatched by the repositories of the project. Without a usable list it
+// returns an unclassified refusal that still names the tag to set.
+func classifyForeignAssignment(id string, refused *AssignmentError, projectRepositories func() ([]RepositoryIdentity, error)) error {
+	repositories, err := projectRepositories()
+	if err == nil && !slices.ContainsFunc(repositories, func(repository RepositoryIdentity) bool {
+		return strings.EqualFold(repository.ID, refused.Expected.ID)
+	}) {
+		err = errors.New("the list does not hold the registered repository")
+	}
+	if err != nil {
+		return fmt.Errorf("the repository assignment tag %s names another repository than %s (%s), and the repositories of project %s could not be listed to say which: %w",
+			strings.Join(refused.Found, ", "), refused.Expected.Name, RepositoryAssignmentTag(refused.Expected.ID), refused.Expected.Project, err)
+	}
+	refused.Problem = AssignmentUnknown
+	for _, repository := range repositories {
+		if strings.EqualFold(repository.ID, id) {
+			refused.Problem, refused.Assigned = AssignmentMismatched, repository.Name
+		}
+	}
+	return refused
 }

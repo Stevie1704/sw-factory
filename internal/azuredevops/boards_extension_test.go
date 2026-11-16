@@ -3,10 +3,12 @@ package azuredevops_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/azuredevops"
 	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
@@ -145,6 +147,13 @@ func repositoryShow(name, id string) string {
 	return `{"id":"` + id + `","name":"` + name + `","project":{"id":"` + azuredevopstest.ProjectID + `","name":"Factory Pilot"}}`
 }
 
+// routeReposList is the routing key of az repos list.
+const routeReposList = "repos list"
+
+// projectRepositoryList is the az repos list response of the shared
+// project: a JSON array of both scripted repositories.
+var projectRepositoryList = "[" + repositoryShow("service", azuredevopstest.RepositoryID) + "," + repositoryShow("web", azuredevopstest.WebRepositoryID) + "]"
+
 // sharedProjectQueue scripts one installation's view of the shared project:
 // work item 3 is assigned to service, 5 to web, 7 has no assignment, and 9
 // has two assignments. Alice added every agent-ready tag.
@@ -202,20 +211,32 @@ func TestClaimRepositoryAssignmentRefusesEveryInvalidAssignment(t *testing.T) {
 	t.Parallel()
 
 	webTag := "factory-repo:" + azuredevopstest.WebRepositoryID
-	for name, labels := range map[string][]string{
-		"missing":    {tracker.LabelAgentReady},
-		"malformed":  {tracker.LabelAgentReady, "factory-repo:service"},
-		"multiple":   {tracker.LabelAgentReady, assignedTag, webTag},
-		"mismatched": {tracker.LabelAgentReady, webTag},
-		"unknown":    {tracker.LabelAgentReady, "factory-repo:00000000-0000-4000-8000-000000000000"},
+	for name, tc := range map[string]struct {
+		labels  []string
+		problem azuredevops.AssignmentProblem
+	}{
+		"missing":    {[]string{tracker.LabelAgentReady}, azuredevops.AssignmentMissing},
+		"malformed":  {[]string{tracker.LabelAgentReady, "factory-repo:service"}, azuredevops.AssignmentMalformed},
+		"multiple":   {[]string{tracker.LabelAgentReady, assignedTag, webTag}, azuredevops.AssignmentMultiple},
+		"mismatched": {[]string{tracker.LabelAgentReady, webTag}, azuredevops.AssignmentMismatched},
+		"unknown":    {[]string{tracker.LabelAgentReady, "factory-repo:00000000-0000-4000-8000-000000000000"}, azuredevops.AssignmentUnknown},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			az := newFakeAz(t).on("repos show", repositoryShow("service", azuredevopstest.RepositoryID))
-			_, err := extensionClient(az).ClaimRepositoryAssignment(context.Background(), repository, tracker.Issue{Number: 42, Labels: labels})
+			az := newFakeAz(t).
+				on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
+				on(routeReposList, projectRepositoryList)
+			_, err := extensionClient(az).ClaimRepositoryAssignment(context.Background(), repository, tracker.Issue{Number: 42, Labels: tc.labels})
 			if err == nil || !strings.Contains(err.Error(), assignedTag) {
 				t.Fatalf("ClaimRepositoryAssignment() error = %v, want a refusal naming %s", err, assignedTag)
+			}
+			var refused *azuredevops.AssignmentError
+			if !errors.As(err, &refused) || refused.Problem != tc.problem {
+				t.Fatalf("ClaimRepositoryAssignment() error = %v, want problem %q", err, tc.problem)
+			}
+			if listed := az.extensionCalled(routeReposList); len(listed) > 1 || (len(listed) == 1 && listed[0].Flag("--project") != "Factory Pilot") {
+				t.Fatalf("repos list calls = %+v, want at most one for project Factory Pilot", listed)
 			}
 		})
 	}

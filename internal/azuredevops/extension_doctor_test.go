@@ -94,24 +94,51 @@ func TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly(t *testing.T)
 
 // TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems verifies
 // that agent-ready PBIs without a usable assignment, which the queue never
-// lists, are named with the tag to add, while PBIs assigned to another
-// installation's repository are not.
+// lists, are named with the tag to add, including PBIs whose tag names an
+// unknown GUID, while PBIs assigned to another repository of the project
+// are not. The project's repositories are listed once per check.
 func TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems(t *testing.T) {
 	t.Parallel()
 
 	webTag := "factory-repo:" + azuredevopstest.WebRepositoryID
+	unknownTag := "factory-repo:" + unknownRepositoryID
 	az := newFakeAz(t).
 		on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
+		on(routeReposList, projectRepositoryList).
 		on(routeQuery, `[{"id":3,"fields":{"System.Id":3,"System.Tags":"agent-ready; `+assignedTag+`"}},
 			{"id":5,"fields":{"System.Id":5,"System.Tags":"agent-ready; `+webTag+`"}},
 			{"id":7,"fields":{"System.Id":7,"System.Tags":"agent-ready"}},
-			{"id":9,"fields":{"System.Id":9,"System.Tags":"agent-ready; factory-repo:service"}}]`)
+			{"id":9,"fields":{"System.Id":9,"System.Tags":"agent-ready; factory-repo:service"}},
+			{"id":11,"fields":{"System.Id":11,"System.Tags":"agent-ready; `+unknownTag+`"}},
+			{"id":13,"fields":{"System.Id":13,"System.Tags":"agent-ready; `+unknownTag+`"}}]`)
 	boards := extensionChecks(az).Results[2]
-	if boards.Status != doctor.StatusWarning || !strings.Contains(boards.Problem, "7, 9") || strings.Contains(boards.Problem, "5") || !strings.Contains(boards.Action, assignedTag) {
-		t.Fatalf("boards = %#v, want a warning naming work items 7 and 9 and the tag to add", boards)
+	if boards.Status != doctor.StatusWarning || !strings.Contains(boards.Problem, "7, 9, 11, 13") || strings.Contains(boards.Problem, "5") || !strings.Contains(boards.Action, assignedTag) {
+		t.Fatalf("boards = %#v, want a warning naming work items 7, 9, 11, and 13 and the tag to add", boards)
+	}
+	if listed := az.extensionCalled(routeReposList); len(listed) != 1 || listed[0].Flag("--project") != "Factory Pilot" {
+		t.Fatalf("repos list calls = %+v, want one for project Factory Pilot", listed)
 	}
 	if wiql := az.extensionCalled(routeQuery)[0].Flag("--wiql"); !strings.Contains(wiql, "[System.Tags]") || !strings.HasPrefix(wiql, "SELECT [System.Id], [System.Tags]") {
 		t.Fatalf("doctor WIQL = %q, want the tags selected", wiql)
+	}
+}
+
+// TestExtensionStartupChecksDoNotGuessForeignAssignmentsWithoutARepositoryList
+// verifies that, when the project's repositories cannot be listed, the
+// doctor still warns about missing and malformed assignments but does not
+// report a PBI whose tag names another GUID, because that GUID may be
+// another repository of the project.
+func TestExtensionStartupChecksDoNotGuessForeignAssignmentsWithoutARepositoryList(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).
+		on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
+		on(routeReposList, "error:az repos list: timeout").
+		on(routeQuery, `[{"id":7,"fields":{"System.Id":7,"System.Tags":"agent-ready"}},
+			{"id":11,"fields":{"System.Id":11,"System.Tags":"agent-ready; factory-repo:`+unknownRepositoryID+`"}}]`)
+	boards := extensionChecks(az).Results[2]
+	if boards.Status != doctor.StatusWarning || !strings.Contains(boards.Problem, "items 7 have") || strings.Contains(boards.Problem, "11") {
+		t.Fatalf("boards = %#v, want a warning naming only work item 7", boards)
 	}
 }
 

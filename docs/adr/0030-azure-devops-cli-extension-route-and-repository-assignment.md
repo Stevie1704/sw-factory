@@ -76,10 +76,17 @@ its PAT option, and ADR 0025 decisions 4, 5, and 6.
    must name the registered project and repository and carry GUIDs. Before a
    claim, on the polling path and on the direct issue and claim paths, exact
    validation accepts only exactly one well-formed tag that names the
-   registered repository's GUID. Missing, malformed, multiple, and
-   mismatched assignments (an unknown GUID or another installation's
-   repository) are refused with a diagnostic that names the tag to set. A
-   query filter is only an optimization. An assignment never grants
+   registered repository's GUID. Missing, malformed, multiple, unknown,
+   and mismatched assignments are refused with a diagnostic that names the
+   tag to set. A single well-formed tag that names another GUID is told
+   apart with the read-only `az repos list --project`: a GUID that is not a
+   repository of the project that the signed-in identity can read (a typo, a
+   deleted repository, or no read access) is unknown; a GUID of another
+   repository of the project is mismatched, and the diagnostic names that
+   repository, whose installation owns the work item. The list runs only
+   for such a tag. When it fails, or does not hold the registered
+   repository, the claim is still refused, without a class. A query filter
+   is only an optimization. An assignment never grants
    `agent-ready` authorization, and an Epic's assignment is never inherited.
    Existing unassigned PBIs need an explicit tag before execution on this
    route.
@@ -233,6 +240,7 @@ host.
 | --- | --- | --- |
 | Identity: GET `_apis/connectionData` | none | **Not available (#304).** `Location` is not a ResourceAreas name in the recording, so invoke refuses it; `IMS` and `Identity` are ResourceAreas names, but the recording holds no location of theirs for a self resource. Every command that accepts `me` (`identities.py`) resolves it internally and prints no identity. The doctor reports `azure_devops.identity.not_available` as skipped, and `AuthenticatedLogin` fails with `ErrExtensionOperationUnavailable`. Status comments are recovered by marker alone (decision 12). |
 | Repository identity: GET `git/repositories/{repo}` | `az repos show --project --repository` | Verified command; implemented as `ResolveRepository`. |
+| Project repositories: GET `git/repositories` | `az repos list --project` | Verified command (`repository.py` `list_repos` returns `get_repositories(project)`, printed as a JSON array of repositories); not run. Read-only; lists only the repositories that the identity can read. Tells an unknown assignment GUID from another repository of the project. |
 | Permission checks: GET `_apis/permissions/{ns}/{bit}` | none | **Not available (#304).** `Security` is not a ResourceAreas name, so invoke refuses it. `az devops security permission show --namespace-id --subject --token` (verified command) needs a subject that the identity row cannot supply; `security_permission.py` passes a subject without `@` or `.` unchanged, so `me` does not resolve. The doctor reports `azure_devops.permissions.not_available` as skipped and names the permissions to verify by hand. |
 | Root area ID: GET `wit/classificationnodes/Areas` | `invoke --area wit --resource classificationNodes` route `structureGroup=areas` | Resolves to `{project}/_apis/wit/classificationNodes/{structureGroup}/{*path}`. |
 | Project tags: GET `wit/tags` | `invoke --area wit --resource tags` | Resolves to `{project}/_apis/wit/tags/{tagIdOrName}`. |
@@ -275,16 +283,19 @@ host.
   route to the tracker and the independent code host.
 - `azuredevopstest.ParseExtensionCall` refuses `az rest`, an unknown group,
   and a call without explicit organization, `--detect false`, and JSON
-  output. The stateful `Boards` fake answers `az repos show` for two
-  repositories with distinct GUIDs in one project; the route-keyed test fake
+  output. The stateful `Boards` fake answers `az repos show` and `az repos
+  list` for two repositories with distinct GUIDs in one project; the route-keyed test fake
   routes extension calls by command and invoke area/resource.
 - An operation that is not ported fails closed. The az rest route, GitHub,
   and local Markdown behave as before; the az rest route refuses a plan
   node with a target instead of dropping it.
 - #304 ports Boards intake: work item reads, the queue, state metadata,
   update history, comments, and tag updates (`boards_extension.go`), and
-  read-only startup checks that run only `az repos show` and `az boards
-  query` (`extension_doctor.go`). The checks tell a missing or expired login,
+  read-only startup checks that run only `az repos show`, `az boards
+  query`, and, for a tag that names another GUID, `az repos list`
+  (`extension_doctor.go`). The boards check warns about agent-ready PBIs
+  with a missing, malformed, multiple, or unknown assignment, never about
+  one assigned to another repository of the project. The checks tell a missing or expired login,
   a missing extension (`ExtensionMissingError`), a timeout, and an
   unreachable service apart.
 - #306 ports the Repos operations: pull requests, threads, comments,

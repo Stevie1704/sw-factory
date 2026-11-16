@@ -210,6 +210,8 @@ func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, 
 	switch call.Route() {
 	case "repos show":
 		return RepositoryResponse(call)
+	case "repos list":
+		return RepositoryListResponse(call)
 	case "devops invoke GET wit/workItemTypes":
 		types := []map[string]any{}
 		for _, value := range b.process {
@@ -471,4 +473,28 @@ func RepositoryResponse(call ExtensionCall) (any, error) {
 		}
 	}
 	return nil, errors.New("ERROR: TF401019: The Git repository with name or identifier " + wanted + " does not exist or you do not have permissions for the operation you are attempting.")
+}
+
+// RepositoryListResponse answers az repos list for the scripted project
+// with a JSON array of every scripted repository, ordered by name, and
+// fails for another project with the Azure DevOps error text.
+func RepositoryListResponse(call ExtensionCall) (any, error) {
+	if !strings.EqualFold(call.Flag("--project"), Project) && call.Flag("--project") != ProjectID {
+		return nil, errors.New("ERROR: TF200016: The following project does not exist: " + call.Flag("--project"))
+	}
+	names := make([]string, 0, len(repositoryIDs))
+	for name := range repositoryIDs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	repositories := []map[string]any{}
+	for _, name := range names {
+		repositories = append(repositories, map[string]any{
+			"id":            repositoryIDs[name],
+			"name":          name,
+			"defaultBranch": "refs/heads/main",
+			"project":       map[string]string{"id": ProjectID, "name": Project},
+		})
+	}
+	return repositories, nil
 }

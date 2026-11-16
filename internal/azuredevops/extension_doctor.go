@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -33,8 +34,9 @@ const (
 var signedInRefusals = []string{"TF401019", "TF200016"}
 
 // extensionStartupChecks returns the read-only startup checks of the
-// extension route. They run only az repos show and az boards query, never
-// write, and never ask for az login. Identity and permission checks have no
+// extension route. They run only az repos show, az boards query, and, for an
+// assignment tag that names another GUID, az repos list; they never write
+// and never ask for az login. Identity and permission checks have no
 // verified command on this route and report themselves as skipped.
 func (c *Client) extensionStartupChecks(repository tracker.Repository) []doctor.Check {
 	organizationURL := extensionOrganizationURL(repository.Owner)
@@ -69,8 +71,12 @@ func (c *Client) extensionStartupChecks(repository tracker.Repository) []doctor.
 // extensionBoardsResult queries the project's agent-ready work items, which
 // proves Boards read access, and warns about those without a usable
 // repository assignment: the queue never lists them, so the operator would
-// otherwise learn of them only from a direct claim. Work items assigned to
-// another repository belong to another installation and are not reported.
+// otherwise learn of them only from a direct claim. A tag that names an
+// unknown GUID is unusable too. Work items assigned to another repository
+// of the project belong to another installation and are not reported; when
+// az repos list fails, a tag naming another GUID is not reported either,
+// because the doctor cannot tell which kind it is. The project's
+// repositories are listed at most once per check.
 func (c *Client) extensionBoardsResult(ctx context.Context, repository tracker.Repository) doctor.Result {
 	const name = "azure devops boards"
 	wiql := "SELECT [System.Id], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
@@ -92,17 +98,20 @@ func (c *Client) extensionBoardsResult(ctx context.Context, repository tracker.R
 		// The repository check reports why the assignment cannot be checked.
 		return doctor.Success("azure_devops.boards.ready", name)
 	}
+	projectRepositories := sync.OnceValues(func() ([]RepositoryIdentity, error) {
+		return c.projectRepositories(ctx, repository)
+	})
 	unassigned := []string{}
 	for _, item := range found {
 		var refused *AssignmentError
-		if errors.As(ValidateRepositoryAssignment(splitTags(item.Fields.Tags), identity), &refused) && refused.Problem != AssignmentMismatched {
+		if errors.As(ValidateRepositoryAssignment(splitTags(item.Fields.Tags), identity, projectRepositories), &refused) && refused.Problem != AssignmentMismatched {
 			unassigned = append(unassigned, strconv.Itoa(item.ID))
 		}
 	}
 	if len(unassigned) > 0 {
 		return doctor.Warning(boardsUnassigned, name,
 			fmt.Sprintf("agent-ready work items %s have no usable repository assignment, so no installation claims them", strings.Join(unassigned, ", ")),
-			fmt.Sprintf("add the tag %s to each one that repository %s implements, and keep exactly one factory-repo tag per work item", RepositoryAssignmentTag(identity.ID), identity.Name))
+			fmt.Sprintf("set the tag %s on each one that repository %s implements, replacing a malformed or unknown factory-repo tag, and keep exactly one factory-repo tag per work item", RepositoryAssignmentTag(identity.ID), identity.Name))
 	}
 	return doctor.Success("azure_devops.boards.ready", name)
 }
