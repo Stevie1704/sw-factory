@@ -42,6 +42,17 @@ func (e *LoginRequiredError) Error() string {
 	return "Azure DevOps CLI sign-in is missing or expired for " + e.OrganizationURL + ": run az devops login --organization " + e.OrganizationURL
 }
 
+// extensionDiagnosisProblem is the startup diagnosis of the extension route
+// until #304 ports identity and permission checks: Factory cannot yet prove
+// the CLI-managed identity, so it fails instead of passing.
+const extensionDiagnosisProblem = "the devops_extension route cannot verify the Azure DevOps identity yet"
+
+// extensionDiagnosisAction tells the operator how to repair the extension
+// route's sign-in; it never points to az login.
+func extensionDiagnosisAction(organization string) string {
+	return "run az devops login --organization " + extensionOrganizationURL(organization) + "; startup checks on this route arrive with #304"
+}
+
 // NewClientForRoute returns a client for one organization on the selected
 // route. The az rest route matches NewClient.
 func NewClientForRoute(organization string, authorizedUsers []string, route config.AzureRoute) *Client {
@@ -124,7 +135,6 @@ var loginMessages = []string{
 	"you need to run the login command",
 	"az devops login",
 	"requires user authentication",
-	"TF400813",
 }
 
 // loginRequired reports whether standard error says that the credential is
@@ -143,8 +153,9 @@ func loginRequired(stderr string) bool {
 const maxCLIMessageRunes = 300
 
 // secretLike matches long opaque runs such as PATs and bearer tokens. GUIDs
-// and Azure DevOps error codes are shorter and stay readable.
-var secretLike = regexp.MustCompile(`[A-Za-z0-9+/=_.\-]{40,}`)
+// and Azure DevOps error codes are shorter, and '/' and '.' end a run, so
+// URLs and file paths stay readable.
+var secretLike = regexp.MustCompile(`[A-Za-z0-9+=_\-]{40,}`)
 
 // sanitizeCLIMessage returns the first nonempty line of stderr without
 // control characters, with token-like runs and the PAT environment value

@@ -108,8 +108,12 @@ func NewClient(organization string, authorizedUsers []string) *Client {
 
 var _ tracker.AccountReader = (*Client)(nil)
 
-// runner returns the injected command runner or the production CLI runner.
+// runner returns the injected command runner or the production runner of
+// the client's route.
 func (c *Client) runner() CommandRunner {
+	if c.Runner == nil && c.extensionRoute() {
+		return extensionRunner{timeout: CommandTimeout}
+	}
 	if c.Runner == nil {
 		return commandRunner{}
 	}

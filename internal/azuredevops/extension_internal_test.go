@@ -172,3 +172,17 @@ func TestInvokeRefusesAnAPIVersionTheExtensionCannotParse(t *testing.T) {
 		t.Fatalf("invoke() with 7.1-preview error = %v", err)
 	}
 }
+
+// TestAnExtensionClientWithoutARunnerUsesTheExtensionRunner verifies that a
+// client on the extension route never falls back to the az rest runner,
+// which returns standard error verbatim.
+func TestAnExtensionClientWithoutARunnerUsesTheExtensionRunner(t *testing.T) {
+	t.Parallel()
+
+	if _, ok := (&Client{Route: config.AzureRouteDevOpsExtension}).runner().(extensionRunner); !ok {
+		t.Fatal("runner() is not the extension runner")
+	}
+	if _, ok := (&Client{}).runner().(commandRunner); !ok {
+		t.Fatal("runner() without a route is not the az rest runner")
+	}
+}

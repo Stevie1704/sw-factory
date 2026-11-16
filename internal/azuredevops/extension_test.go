@@ -9,6 +9,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/azuredevops"
 	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
@@ -101,6 +102,54 @@ func TestExtensionRouteNeverFallsBackToAzRest(t *testing.T) {
 	}
 	if len(az.calls) != 0 || len(az.extensionCalls) != 0 {
 		t.Fatalf("calls = %d az rest, %d extension; want none", len(az.calls), len(az.extensionCalls))
+	}
+}
+
+// TestExtensionRouteStartupChecksNeverDirectToAzLogin verifies that the
+// tracker and code-host startup checks on the extension route fail without
+// telling the operator to run az login and without running az rest.
+func TestExtensionRouteStartupChecksNeverDirectToAzLogin(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t)
+	client := extensionClient(az)
+	for name, checks := range map[string][]doctor.Check{"tracker": client.StartupChecks(repository), "code host": client.CodeHostStartupChecks(repository)} {
+		report := doctor.Run(context.Background(), checks...)
+		first := report.Results[0]
+		if first.Status != doctor.StatusFailed || strings.Contains(first.Action, "az login") || !strings.Contains(first.Action, "az devops login") {
+			t.Fatalf("%s authentication = %#v, want a failure that never asks for az login", name, first)
+		}
+	}
+	if len(az.calls) != 0 {
+		t.Fatalf("az rest calls = %d, want none", len(az.calls))
+	}
+}
+
+// TestExtensionRoutePlanWritesFailWithoutAWrite verifies that a plan write on
+// the extension route before #305 reports a no-change error, so publication
+// never treats it as an unknown outcome.
+func TestExtensionRoutePlanWritesFailWithoutAWrite(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t)
+	item := tracker.RenderedPlanItem{NodeID: "a", Type: "Epic", Title: "A", Body: "B", Labels: []string{"factory-plan:s/1/a"}, Correlation: "s/1/a"}
+	_, err := extensionClient(az).CreatePlanItem(context.Background(), repository, item)
+	if !tracker.WriteNotApplied(err) {
+		t.Fatalf("CreatePlanItem() error = %v, want a no-change plan error", err)
+	}
+	if len(az.calls) != 0 {
+		t.Fatalf("az rest calls = %d, want none", len(az.calls))
+	}
+}
+
+// TestExtensionRouteLoginFailureIsANoChangePlanError verifies that a
+// missing or expired az devops login proves that no plan write happened.
+func TestExtensionRouteLoginFailureIsANoChangePlanError(t *testing.T) {
+	t.Parallel()
+
+	err := azuredevops.ClassifyPlanErrorForTest(&azuredevops.LoginRequiredError{OrganizationURL: "https://dev.azure.com/contoso"})
+	if kind, _ := tracker.PlanErrorKindOf(err); kind != tracker.PlanErrorPermission {
+		t.Fatalf("classified error = %v, want a permission plan error", err)
 	}
 }
 
