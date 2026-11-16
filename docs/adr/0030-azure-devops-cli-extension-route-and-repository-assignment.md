@@ -106,8 +106,12 @@ its PAT option, and ADR 0025 decisions 4 and 6.
    the resolved name and GUID that the preview shows. The approval payload
    stores it as `target_repository` and omits it when absent, so payloads
    approved before this record keep their exact bytes, and a changed target
-   changes the bound bytes and needs a new approval. #305 fills the target
-   and validates it against `PlanTargetRepositories`.
+   changes the bound bytes and needs a new approval. `store.PlanNode`, the
+   browser and planning-report shapes, and `publication.planGraph` carry the
+   optional name; #305 resolves and validates it against
+   `PlanTargetRepositories` (decision 14). Publish renders the preview
+   again, so a target that is no longer registered or resolves to another
+   GUID fails before any write.
 10. **Every published PBI carries correlation and assignment tags.** This
     replaces ADR 0025 decision 4's "exactly one tag": a published item on
     the extension route carries exactly one `factory-plan:` correlation tag
@@ -120,7 +124,7 @@ its PAT option, and ADR 0025 decisions 4 and 6.
 11. **ADR 0025 decision 6 is route-specific.** On the az rest route,
     classification and `az login` stay as they are. On the extension route,
     `LoginRequiredError` is a permission failure that proves no write, and a
-    timeout stays ambiguous; #305 maps the remaining extension texts.
+    timeout stays ambiguous; decision 14 maps the remaining extension texts.
 12. **The extension route has no signed-in identity, so a status comment is
     found by its marker alone.** No verified command or invoke resource
     returns the caller (inventory: identity). `AuthenticatedLogin` therefore
@@ -143,6 +147,56 @@ its PAT option, and ADR 0025 decisions 4 and 6.
     one returns the `AssignmentError` repair, and the doctor's Boards check
     warns about agent-ready PBIs without a usable assignment. `Issue` does not validate the
     assignment, so a tag edit after the claim cannot stop an active run.
+14. **Plan publication on the extension route uses the dedicated Boards
+    commands and an explicit Epic/PBI mapping (#305).** The route requires
+    `azure_devops.planning`; without it, preflight fails and never
+    substitutes the Agile default. The Epic/PBI workflow is
+    `[{type: Epic, kinds: [parent]}, {type: Product Backlog Item, kinds:
+    [task, investigation]}]`, so each PBI links directly to its Epic with no
+    Feature. Items of the lowest mapped level are executable. Each one gets
+    its node's explicit target, or the registered repository when the node
+    names none; it never takes the Epic's target, and a target on any other
+    level is refused. Preflight resolves each target with `az repos show`,
+    renders one `factory-repo:` tag beside the correlation tag, and reads
+    the process through the invoke rows below. Permission evaluation is not
+    available (decision 12), so preflight does not report it as passed. A
+    create, the correlation lookup, and each link use `az boards work-item
+    create`, `az boards query` plus the batch read, and `az boards work-item
+    relation add` and `show`. The relation commands select a link type by
+    its friendly name, which preflight and each write read from `az boards
+    work-item relation list-type` by reference name; a name that two link
+    types share is refused. The link is added on the From item: `--id
+    <child> --relation-type Parent --target-id <epic>` and `--id <dependent>
+    --relation-type Predecessor --target-id <prerequisite>` (Microsoft link
+    type reference: Parent is `System.LinkTypes.Hierarchy-Reverse`,
+    Predecessor is `System.LinkTypes.Dependency-Reverse`, "linking to a work
+    item that should complete before the current item").
+    `tracker.PlanItemVerifier` lets publication and reconciliation adopt a
+    work item found by correlation only when its type and assignment tags
+    match the approved item. Only the extension texts that `work_item.py`
+    raises for a refused field rule and that `relations.py` raises before
+    its update prove no write; every other failure stays ambiguous.
+15. **The description is created as HTML that shows the Markdown text.**
+    `az boards work-item create` sends only `/fields/...` operations
+    (`work_item.py` `_create_work_item_field_patch_operation`), and so does
+    `az boards work-item update`. A follow-up format change through invoke
+    is not reachable either: the recording lists two `wit/workItems`
+    locations with max version 7.2, and `invoke.py` keeps the first one,
+    the create route `{project}/_apis/wit/workItems/${type}`, so no PATCH by
+    ID exists. The default format of a large text field is HTML (Microsoft
+    DevOps blog "Markdown support arrives for work items", July 2025).
+    Factory therefore sends the approved Markdown as escaped HTML, one
+    `<div>` per line, `<div><br></div>` for a blank line, and `&nbsp;` for
+    leading spaces. No Markdown character becomes markup, the work item
+    shows the approved text, and `htmlText` reads it back as that text. The
+    approval still binds the Markdown; the HTML is a fixed function of it.
+    The description goes as one `--description=<value>` argument, refused
+    before approval when it exceeds one Linux argument (131,071 bytes). A
+    title, type, or field value that starts with `@` is refused, because
+    Azure CLI would read a file. **Unresolved:** Markdown rendering
+    (headings, lists, code blocks) on create; the work item shows the
+    Markdown source. Whether the service keeps every escaped character and
+    block exactly is not verified live.
 
 ## Operation inventory
 
@@ -180,19 +234,19 @@ host.
 | Project tags: GET `wit/tags` | `invoke --area wit --resource tags` | Resolves to `{project}/_apis/wit/tags/{tagIdOrName}`. |
 | Work item read: GET `wit/workitems/{id}` | `invoke --area wit --resource workItemsBatch` POST with `ids=[id]` | Implemented (#304) through the batch row. `az boards work-item show --id --expand` is a verified command, but it deserializes into the extension's 5.0 `WorkItem` model, which has no `multilineFieldsFormat`, so a Markdown description would be read as HTML. The batch route is project-scoped, and the adapter also checks `System.TeamProject`. |
 | Batch read: GET `wit/workitems?ids=` | `invoke --area wit --resource workItemsBatch` POST | Resolves to `{project}/_apis/wit/workItemsBatch` (single location). Implemented (#304) with body `{"ids":[...],"errorPolicy":"omit"}`, 200 IDs a batch, from the REST reference "Work Items - Get Work Items Batch"; not run. Whether its raw JSON carries `multilineFieldsFormat` is not verified live. |
-| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Implemented for intake (#304). `query_work_items` sends no project with the WIQL, so `@project` has no context: the WIQL names `[System.TeamProject]` explicitly. The command returns at most 1000 items and prints nothing for an empty result. Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
+| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Implemented for intake (#304) and for the plan correlation lookup (#305). `query_work_items` sends no project with the WIQL, so `@project` has no context: the WIQL names `[System.TeamProject]` explicitly. The command returns at most 1000 items and prints nothing for an empty result. Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
 | Type states: GET `wit/workitemtypes/{type}/states` | `invoke --area wit --resource workItemTypeStates` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/states`. Implemented (#304). |
 | Update history: GET `wit/workItems/{id}/updates` | `invoke --area wit --resource updates` | Resolves to `{project}/_apis/wit/workItems/{id}/updates/{updateNumber}`. Implemented (#304) with `$top`/`$skip` paging. |
 | Tag replace: PATCH `wit/workitems/{id}` `/fields/System.Tags` | `az boards work-item update --id --fields System.Tags=...` | Verified command; organization-scoped. Implemented (#304): the adapter first reads the item through the project-scoped batch row, refuses another project, and keeps every `factory-repo:` and `factory-plan:` tag of the current value (decision 10). |
-| Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. **Unresolved:** the command sends only `/fields/...` operations (`work_item.py`), so it cannot set `/multilineFieldsFormat/System.Description=Markdown`; the Markdown description of ADR 0025 decision 5 needs a decision in #305. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
-| Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. |
-| Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. |
+| Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. Implemented (#305) with `--type=`, `--title=`, `--description=` as one argument each, `--project`, and `--fields System.Tags=<correlation; assignment> <configured fields>`. The command sends only `/fields/...` operations (`work_item.py`), so the description is created as HTML that shows the Markdown text (decision 15). **Unresolved:** Markdown format on create. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
+| Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. Implemented (#305): `--id <child> --relation-type Parent --target-id <epic>` and `--id <dependent> --relation-type Predecessor --target-id <prerequisite>`, with the name read by reference name from `list-type`. The command validates the target IDs by WIQL before its update and reads the item back after it; a response without the link is ambiguous. |
+| Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. Implemented (#305) as the relation lookup. |
 | Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location; the recorded location has `resourceVersion` 4 and `releasedVersion` 0.0, so it exists only as a preview). Implemented (#304). The response gains `continuation_token` from the `X-MS-ContinuationToken` header, which the list follows. `7.1-preview` is a documented version form (REST API versioning: `{major}.{minor}[-{stage}[.{resource-version}]]`), and the SDK's `_negotiate_request_version` sends it unchanged. **Unresolved:** which resource version the service selects without one is not verified; every create and edit therefore refuses a result whose `format` is not `markdown`. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
-| Process types: GET `wit/workitemtypes` | `invoke --area wit --resource workItemTypes` | Resolves to `{project}/_apis/wit/workItemTypes/{type}`. |
-| Field definitions: GET `wit/fields` | `invoke --area wit --resource fields` | Resolves to `{project}/_apis/wit/fields/{fieldNameOrRefName}`. |
-| Type fields: GET `wit/workitemtypes/{type}/fields?$expand=allowedValues` | `invoke --area wit --resource workItemTypesField` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/fields/{field}`. |
-| Backlog configuration: GET `work/backlogconfiguration` | `invoke --area work --resource backlogconfiguration` | Resolves to `{project}/{team}/_apis/work/backlogconfiguration`; behavior without a `team` route parameter is not verified. |
-| Link types: GET `wit/workitemrelationtypes` | `az boards work-item relation list-type` | Verified command. |
+| Process types: GET `wit/workitemtypes` | `invoke --area wit --resource workItemTypes` | Resolves to `{project}/_apis/wit/workItemTypes/{type}`. Implemented (#305) for plan preflight; not run. |
+| Field definitions: GET `wit/fields` | `invoke --area wit --resource fields` | Resolves to `{project}/_apis/wit/fields/{fieldNameOrRefName}`. Implemented (#305) for plan preflight; not run. |
+| Type fields: GET `wit/workitemtypes/{type}/fields?$expand=allowedValues` | `invoke --area wit --resource workItemTypesField` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/fields/{field}`. Implemented (#305) for plan preflight; not run. |
+| Backlog configuration: GET `work/backlogconfiguration` | `invoke --area work --resource backlogconfiguration` | Resolves to `{project}/{team}/_apis/work/backlogconfiguration`; behavior without a `team` route parameter is not verified. Implemented (#305) for plan preflight without `team`, as the az rest route already calls it; not run. |
+| Link types: GET `wit/workitemrelationtypes` | `az boards work-item relation list-type` | Verified command. Implemented (#305) for preflight and for the link names. |
 | PR search by branch pair: GET `git/repositories/{repo}/pullrequests?searchCriteria...` | `az repos pr list --project --repository --source-branch --target-branch --status all --top` | Verified command. Invoke `git/pullRequests` resolves to the project-level `{project}/_apis/git/pullRequests/{pullRequestId}` and cannot list one repository. |
 | PR read: GET `git/repositories/{repo}/pullrequests/{n}` | `az repos pr show --id` | Verified command; organization-scoped, so the adapter must check the repository in the response. |
 | PR create: POST `git/repositories/{repo}/pullrequests` | `az repos pr create --project --repository --source-branch --target-branch --title --description --draft true --work-items <PBI>` | Verified command. `--description` takes one value per line and joins the values with `\n` (`pull_request.py`). Implemented (#306): the title and the whole description each go as one `--flag=value` argument, which argparse binds as exactly one value, so a Markdown line such as `---` is never parsed as an option. Azure CLI replaces a value that starts with `@` (alone or after the first `=`) by a file's content (azure-cli core `_expand_file_prefixed_files`), so such a title, description, or branch is refused before the call. `--repository` takes a name or ID; with a source PBI the adapter passes the frozen GUID after `az repos show` confirms that the registered name still resolves to it. Source-verified, not run live. |
@@ -220,9 +274,9 @@ host.
   output. The stateful `Boards` fake answers `az repos show` for two
   repositories with distinct GUIDs in one project; the route-keyed test fake
   routes extension calls by command and invoke area/resource.
-- An operation that is not ported fails closed. Until #305 ports it, a plan
-  write reports `unsupported_capability`, which proves no write. The az rest
-  route, GitHub, and local Markdown behave as before.
+- An operation that is not ported fails closed. The az rest route, GitHub,
+  and local Markdown behave as before; the az rest route refuses a plan
+  node with a target instead of dropping it.
 - #304 ports Boards intake: work item reads, the queue, state metadata,
   update history, comments, and tag updates (`boards_extension.go`), and
   read-only startup checks that run only `az repos show` and `az boards
@@ -233,8 +287,16 @@ host.
   reviewer reads, commit statuses, the native PBI link, and the code-host
   startup check, whose write permissions stay an unverified warning. Finding
   a coordinator pull-request comment by marker still needs the identity row.
-- `store.PlanNode` and `publication.planGraph` carry no target yet; #305
-  adds the plan node field, its validation, and the adapter rendering.
+- #305 ports plan publication (decisions 14 and 15): `plan_extension.go`
+  holds preflight, target resolution, and the create arguments;
+  `planwrite_extension.go` holds the create, the correlation lookup, the
+  relation commands, `VerifyPlanItem`, and the no-write texts. Scripted
+  evidence only: the `azuredevopstest.Boards` fake models `/fields`-only
+  creates and friendly relation names; it does not model the reverse
+  (Child, Successor) end that Azure DevOps adds on the target item. The
+  planning prompt and the plan editor do not offer a target control yet;
+  a node without a target executes on the publishing installation's
+  repository.
 - **Residual authentication risk.** The extension tries an `az login` token
   before a PAT (`services.py` `_get_credentials`), and
   `AZURE_DEVOPS_EXT_PAT` takes precedence over the stored `az devops login`
@@ -243,7 +305,8 @@ host.
   `az login` session. Factory adds no environment isolation it cannot
   verify.
 - Identity and permission evaluation are not available on this route
-  (decision 12). Markdown descriptions on create need a decision in #305.
+  (decision 12). Markdown rendering of a created description stays
+  unresolved (decision 15).
   The comment API version `7.1-preview` and the `multilineFieldsFormat` of
   the batch read need live evidence; a comment that the service does not
   store as Markdown fails instead of passing.

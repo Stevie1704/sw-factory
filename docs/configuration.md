@@ -446,12 +446,29 @@ An existing registration without `route` keeps the `az rest` route.
   comment by its marker needs the signed-in identity, which this route
   cannot read yet (ADR 0030, identity row); until it can, that lookup fails
   instead of matching another author's comment.
+- **Plan publication.** This route requires an explicit
+  `azure_devops.planning` mapping (below); without one, the preview fails
+  and no default is substituted. The preview reads the process with
+  `az devops invoke` and `az boards work-item relation list-type` and
+  writes nothing. It cannot evaluate permissions on this route, so it does
+  not report them as passed. Each item of the lowest level is executable
+  and gets its node's target repository, or the registered repository when
+  the node names none; the preview shows the resolved name and GUID and
+  adds its `factory-repo` tag beside the `factory-plan` tag. A target on an
+  Epic or a name outside `repository` and `plan_repositories` is refused.
+  Publication creates each item with `az boards work-item create` and adds
+  each link with `az boards work-item relation add` on the child or the
+  dependent item (Parent to the Epic, Predecessor to the item that must be
+  done first). The create command cannot set the Markdown format, so the
+  description is stored as HTML that shows the approved Markdown text
+  without rendering it (ADR 0030 decision 15). An existing work item that
+  carries the correlation tag but another assignment or type is not adopted
+  or changed: publication stops and names the difference. Publication adds
+  no `agent-ready` tag.
 - **Status.** The route, its command seam, the assignment tag, the frozen
-  repository identity, Boards intake (#304), and pull requests (#306)
-  exist. Plan publication on this route arrives with #305; until then it
-  fails with an error and never falls back to `az rest`. ADR 0030
-  lists the command for each operation and the operations that are still
-  unresolved.
+  repository identity, Boards intake (#304), pull requests (#306), and plan
+  publication (#305) exist. ADR 0030 lists the command for each operation
+  and the operations that are still unresolved.
 
 An Epic/PBI planning mapping for a Scrum project, with no intermediate
 Feature level, groups PBIs for both repositories under one Epic. Each PBI
