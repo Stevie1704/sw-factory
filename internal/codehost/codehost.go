@@ -61,6 +61,29 @@ type PullRequestRequest struct {
 	BaseBranch string
 	// Draft requests a draft pull request on creation and update.
 	Draft bool
+	// WorkItem is the source work item that the pull request must link
+	// natively, or nil. Only a Run with a frozen Azure Boards repository
+	// sets it (ADR 0030), so a local Markdown issue number never becomes
+	// an Azure work-item ID.
+	WorkItem *WorkItemLink `json:",omitempty"`
+}
+
+// WorkItemLink is the native traceability target of a pull request of an
+// Azure Boards-backed Run: the Product Backlog Item ID and the repository
+// GUID frozen with the Run.
+type WorkItemLink struct {
+	// ID is the Azure Boards work-item ID of the Run's issue.
+	ID int
+	// RepositoryID is the frozen Azure Repos repository GUID.
+	RepositoryID string
+}
+
+// PullRequestWorkItemLinker verifies the native work-item association of a
+// pull request and adds a missing one, without creating a pull request. It
+// recovers an association that a lost create response or an adopted pull
+// request left out.
+type PullRequestWorkItemLinker interface {
+	EnsurePullRequestWorkItem(context.Context, tracker.Repository, int, WorkItemLink) error
 }
 
 // PullRequestClient is the host-side seam for idempotent draft pull-request

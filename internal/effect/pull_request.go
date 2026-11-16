@@ -24,10 +24,35 @@ type pullRequestHandler struct {
 // mutation. The expected number prevents a replay from silently attaching to
 // another pull request. It is exported because the pre-journal compatibility
 // path performs the same idempotent mutation without a reservation.
+//
+// A request with a source work item also verifies, on every path, that the
+// pull request links it natively, and adds a missing association. A replay
+// after a lost create response or an interrupted association therefore
+// recovers the link without creating another pull request.
 func UpsertPullRequest(ctx context.Context, client codehost.PullRequestClient, repository tracker.Repository, expectedNumber int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	if client == nil {
 		return codehost.PullRequest{}, errors.New("pull-request client is required")
 	}
+	var linker codehost.PullRequestWorkItemLinker
+	if request.WorkItem != nil {
+		var ok bool
+		if linker, ok = client.(codehost.PullRequestWorkItemLinker); !ok {
+			return codehost.PullRequest{}, fmt.Errorf("the code host cannot link work item %d to a pull request natively", request.WorkItem.ID)
+		}
+	}
+	pullRequest, err := upsertPullRequest(ctx, client, repository, expectedNumber, request)
+	if err != nil || linker == nil {
+		return pullRequest, err
+	}
+	if err := linker.EnsurePullRequestWorkItem(ctx, repository, pullRequest.Number, *request.WorkItem); err != nil {
+		return codehost.PullRequest{}, fmt.Errorf("link pull request #%d to work item %d: %w", pullRequest.Number, request.WorkItem.ID, err)
+	}
+	return pullRequest, nil
+}
+
+// upsertPullRequest finds the branch pull request and updates it, or
+// creates one when none exists.
+func upsertPullRequest(ctx context.Context, client codehost.PullRequestClient, repository tracker.Repository, expectedNumber int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	existing, err := client.FindPullRequest(ctx, repository, request.HeadBranch, request.BaseBranch)
 	if err != nil {
 		return codehost.PullRequest{}, err
