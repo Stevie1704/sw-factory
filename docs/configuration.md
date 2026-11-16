@@ -376,11 +376,18 @@ An existing registration without `route` keeps the `az rest` route.
 - **Sign-in.** Install the Azure CLI and the extension
   (`az extension add --name azure-devops`), then run
   `az devops login --organization https://dev.azure.com/contoso` as the
-  account that runs the factory and enter the PAT at the prompt. Do not put
-  the PAT in a command line, a shell history, or a repository file. The
+  account that runs the factory and enter the PAT at the `Token:` prompt. Do
+  not put the PAT in a command line, a shell history, or a repository file:
+  do not use `echo <PAT> |` or an exported `AZURE_DEVOPS_EXT_PAT`. The
   factory never reads, collects, or stores the PAT. It runs every command
   without prompts and without dynamic extension installs. A missing or
   expired login fails with `run az devops login --organization <URL>`.
+- **Expiry and re-login.** A PAT has an expiry date. When it expires or is
+  revoked, every command fails with the login repair above; the factory
+  does not retry with another credential. Create a new PAT, run
+  `az devops login --organization <URL>` again as the same account, then run
+  `factory doctor`. To remove the stored PAT, run
+  `az devops logout --organization <URL>`.
 - **No Entra fallback.** The factory never runs `az rest` or requests an
   Entra ID token on this route. The extension itself prefers an `az login`
   session when one exists, so run the factory as a user without one when
@@ -398,7 +405,12 @@ An existing registration without `route` keeps the `az rest` route.
   missing, malformed, repeated, or different tag is refused with the tag to
   set. Add the tag to existing PBIs by hand before execution. The tag never
   authorizes a run; `agent-ready` from an authorized user still does. Area
-  Paths stay free for team and board organization.
+  Paths stay free for team and board organization. The PBI and the Epic
+  belong to the project; the pull request belongs to the repository and
+  links back to its PBI. One PBI executes in exactly one repository: split
+  work that changes two repositories into one PBI for each repository. A
+  claimed Run keeps the repository it was claimed for, also when the tag
+  changes later; a different repository needs a new claim.
 - **Two repositories in one project.** Register each repository in its own
   host configuration with its own `operational_data_path`, and start one
   factory per configuration (`factory start --config <path>`). Both name the
@@ -419,7 +431,23 @@ An existing registration without `route` keeps the `az rest` route.
   signed-in identity or evaluates its permissions. Check by hand that the
   PAT's identity has Contribute, Create branch, and Contribute to pull
   requests on the repository, View and Edit work items in the project, and
-  Create tag definition.
+  Create tag definition. `factory doctor --json` is the read-only diagnosis:
+  it prints each check with its condition code and repair, and it changes
+  no work item, pull request, or tag.
+- **PAT scopes.** Create the PAT for the organization only, with the
+  shortest expiry that policy allows. The REST reference pages of the
+  operations in ADR 0030 list these scopes: **Work Items (Read & write)**
+  (`vso.work_write`) for the queue, tags, comments, process reads, and plan
+  publication; **Code (Read & write)** (`vso.code_write`) for the repository
+  identity, pull requests, threads, reviewers, refs, and commit statuses.
+  **Code (Status)** (`vso.code_status`) is an alternative scope for commit
+  statuses only. These scopes come from the documentation and are not
+  verified in a live run. The scopes do not replace permissions: the
+  account also needs at least Basic access, the repository permissions
+  Contribute, Create branch, and Contribute to pull requests on each
+  registered repository, View work items and Edit work items in this node
+  on the project's area, and Create tag definition in the project until
+  every factory tag exists.
 - **Status comments.** Without a signed-in identity, the factory finds a
   run's status comment by its marker alone. When more than one comment
   holds the marker, the run stops with an error; delete the copies the
@@ -464,11 +492,16 @@ An existing registration without `route` keeps the `az rest` route.
   without rendering it (ADR 0030 decision 15). An existing work item that
   carries the correlation tag but another assignment or type is not adopted
   or changed: publication stops and names the difference. Publication adds
-  no `agent-ready` tag.
+  no `agent-ready` tag. A plan node selects another repository only through
+  `target_repository` in the stored or draft plan JSON; the plan editor has
+  no control for it, and the planning role gets no guidance to set it.
 - **Status.** The route, its command seam, the assignment tag, the frozen
   repository identity, Boards intake (#304), pull requests (#306), and plan
   publication (#305) exist. ADR 0030 lists the command for each operation
-  and the operations that are still unresolved.
+  and the operations that are still unresolved. The
+  [extension route acceptance record](acceptance/azure-devops-extension-route.md)
+  lists the scripted evidence, the known limits, and the
+  disposable-project procedure; no live run is recorded.
 
 An Epic/PBI planning mapping for a Scrum project, with no intermediate
 Feature level, groups PBIs for both repositories under one Epic. Each PBI

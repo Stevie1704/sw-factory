@@ -373,7 +373,10 @@ remote tracker PR rendering keeps its normal remote issue links.
 The local tracker removes the need for GitHub Issues or Azure Boards access
 only. Model and network access, Git transport, and code-host access for pull
 requests, reviews, and commit statuses are still necessary. The Azure Repos
-code host still uses `az` (ADR 0019).
+code host still uses `az`: `az rest` with `az login` (ADR 0019), or, with
+`azure_devops.route: devops_extension`, `az repos` and `az devops invoke`
+with `az devops login` (ADR 0030). A local Markdown Run never sends its
+issue number as an Azure work-item ID.
 
 `factory doctor` and coordinator startup check the selected code host before
 any claim. When access is blocked, the result is an explicit failure with an
@@ -381,7 +384,7 @@ actionable condition, and the coordinator claims nothing:
 
 | Condition | Meaning | Action |
 | --- | --- | --- |
-| `azure_devops.code_host.authentication.failed` | `az` cannot establish the configured Azure Repos identity. | Check `az login` and company policy. |
+| `azure_devops.code_host.authentication.failed` | `az` cannot establish the configured Azure Repos identity. | On the `az rest` route, check `az login` and company policy. On the `devops_extension` route, run `az devops login --organization <URL>` again (a missing extension needs `az extension add --name azure-devops`). |
 | `azure_devops.code_host.access.unavailable` | The `az` route to Azure Repos pull requests, permissions, refs, or statuses is blocked or lacks permission. | Check company policy for the Azure Repos APIs. If it blocks them, this installation cannot complete the issue-to-pull-request flow. |
 | `github.code_host.authentication.failed` | `gh` cannot authenticate. | Run `gh auth login`. |
 | `github.code_host.access.unavailable` | GitHub pull request, review, or status access is unavailable. | Check `gh` network access and the contents, pull-request, and commit-status permissions. |
