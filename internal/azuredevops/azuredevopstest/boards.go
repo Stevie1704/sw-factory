@@ -104,6 +104,11 @@ type Item struct {
 	Fields    map[string]any
 	Formats   map[string]string
 	Relations []Relation
+	// Updates is the tag history of the item, oldest first, as the work
+	// item updates resource returns it.
+	Updates []Update
+	// Comments are the work item comments, oldest first.
+	Comments []Comment
 }
 
 // Tags returns the tags of the item.
@@ -142,6 +147,8 @@ type Boards struct {
 	calls  []Call
 	// extensionCalls records the extension-route commands (ADR 0030).
 	extensionCalls []ExtensionCall
+	// pullRequests are the pull requests of the scripted repositories.
+	pullRequests []PullRequest
 }
 
 // NewBoards returns an empty project with the given process and
