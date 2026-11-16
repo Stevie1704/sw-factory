@@ -302,20 +302,23 @@ func TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories(t *testing.T) {
 		t.Fatalf("direct claim of an unauthorized PBI = %v, want a refusal that names %s", err, tracker.LabelAgentReady)
 	}
 
-	// The maintainer authorizes both PBIs and four PBIs without a usable
-	// assignment in the same project.
+	// The maintainer authorizes four PBIs without a usable assignment in the
+	// same project. Neither queue lists them, and a direct claim refuses each
+	// one without an effect.
 	unknownTag := azuredevops.RepositoryAssignmentTag("0f0e0d0c-0b0a-4908-8706-050403020100")
 	invalid := map[string]int{
 		"missing":   boards.Seed("Product Backlog Item", "Unassigned"),
 		"ambiguous": boards.Seed("Product Backlog Item", "Two repositories", serviceTag, webTag),
 		"malformed": boards.Seed("Product Backlog Item", "Repository name", "factory-repo:service"),
 		"unknown":   boards.Seed("Product Backlog Item", "Unknown repository", unknownTag),
-		"foreign":   docs.ID,
 	}
-	for _, id := range []int{export.ID, docs.ID, invalid["missing"], invalid["ambiguous"], invalid["malformed"], invalid["unknown"]} {
+	for _, id := range invalid {
 		boards.AddTags(id, azureAuthorizedUser, tracker.LabelAgentReady)
 	}
-	for name, id := range invalid {
+	service.poll(factory.PollNoWork)
+	web.poll(factory.PollNoWork)
+	refuseDirectClaim := func(name string, id int) {
+		t.Helper()
 		before := sortedTags(t, boards, id)
 		_, err := service.service.ClaimIssue(t.Context(), id)
 		if err == nil || !strings.Contains(err.Error(), serviceTag) {
@@ -325,9 +328,17 @@ func TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories(t *testing.T) {
 			t.Fatalf("refused %s claim left a Run or changed tags %v", name, sortedTags(t, boards, id))
 		}
 	}
+	for name, id := range invalid {
+		refuseDirectClaim(name, id)
+	}
 
-	// Each installation's queue claims only its own PBI.
+	// The web PBI is authorized first: the service installation neither
+	// polls nor directly claims it, and the web installation claims it.
+	boards.AddTags(docs.ID, azureAuthorizedUser, tracker.LabelAgentReady)
+	service.poll(factory.PollNoWork)
+	refuseDirectClaim("foreign", docs.ID)
 	webRun := web.poll(factory.PollClaimed).Run
+	boards.AddTags(export.ID, azureAuthorizedUser, tracker.LabelAgentReady)
 	serviceRun := service.poll(factory.PollClaimed).Run
 	if webRun.IssueNumber != docs.ID || serviceRun.IssueNumber != export.ID {
 		t.Fatalf("claims = web #%d, service #%d; want web #%d and service #%d", webRun.IssueNumber, serviceRun.IssueNumber, docs.ID, export.ID)
@@ -348,7 +359,7 @@ func TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories(t *testing.T) {
 		t.Fatalf("web PBI tags after claim = %v, want the state tag with both metadata tags", got)
 	}
 	for name, id := range invalid {
-		if name != "foreign" && slices.Contains(sortedTags(t, boards, id), tracker.LabelAgentRunning) {
+		if slices.Contains(sortedTags(t, boards, id), tracker.LabelAgentRunning) {
 			t.Fatalf("the %s PBI was claimed", name)
 		}
 	}
@@ -388,5 +399,8 @@ func TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories(t *testing.T) {
 	}
 	if ready := boards.PullRequests()[0]; ready.Draft || ready.RepositoryID != azuredevopstest.RepositoryID {
 		t.Fatalf("pull request after readiness = %+v, want ready in the service repository", ready)
+	}
+	if calls := boards.Calls(); len(calls) != 0 {
+		t.Fatalf("az rest calls = %d, want none on the extension route", len(calls))
 	}
 }

@@ -149,6 +149,10 @@ func TestExtensionPublishReconcilesLostResponsesWithoutDuplicates(t *testing.T) 
 	if adopted := operation(t, third, "item/n-2"); adopted.Detail != "found by correlation lookup" {
 		t.Fatalf("item/n-2 = %#v, want it adopted by correlation lookup", adopted)
 	}
+	cache := s.itemsByTitle()["Cache images/Product Backlog Item"]
+	if !slices.Equal(cache.Tags(), []string{"factory-plan:session-1/1/n-2", serviceTag}) || !slices.Equal(docs.Tags(), []string{"factory-plan:session-1/1/n-3", webTag}) {
+		t.Fatalf("PBI tags after the retries = %v and %v, want each PBI's correlation and assignment tag", cache.Tags(), docs.Tags())
+	}
 	s.assertExtensionInert()
 }
 
