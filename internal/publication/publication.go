@@ -171,6 +171,7 @@ func planGraph(sessionID string, plan store.PlanRevision) tracker.PlanGraph {
 			NodeID: node.ID, Kind: node.Kind, Title: node.Title, Body: node.Body,
 			AcceptanceCriteria: node.AcceptanceCriteria, ParentID: node.ParentID, DependsOn: node.DependsOn,
 			BriefRefs: node.BriefRefs, Correlation: tracker.PlanCorrelation(sessionID, plan.Revision, node.ID),
+			TargetRepository: node.TargetRepository,
 		})
 	}
 	return graph

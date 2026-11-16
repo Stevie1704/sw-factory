@@ -68,6 +68,7 @@
       parent_id: node.parent_id || "",
       depends_on: (node.depends_on || []).slice(),
       brief_refs: (node.brief_refs || []).slice(),
+      target_repository: node.target_repository || "",
       repairs: []
     };
   }

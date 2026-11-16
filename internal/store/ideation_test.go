@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -392,6 +393,9 @@ func TestPlanRevisionRejectsBrokenReferences(t *testing.T) {
 		{"missing title", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].Title = " "; return nodes }},
 		{"missing kind", func(nodes []store.PlanNode) []store.PlanNode { nodes[0].Kind = ""; return nodes }},
 		{"no nodes", func([]store.PlanNode) []store.PlanNode { return nil }},
+		{"target with a path", func(nodes []store.PlanNode) []store.PlanNode { nodes[1].TargetRepository = "web/other"; return nodes }},
+		{"target with a control", func(nodes []store.PlanNode) []store.PlanNode { nodes[1].TargetRepository = "web\n"; return nodes }},
+		{"blank target", func(nodes []store.PlanNode) []store.PlanNode { nodes[1].TargetRepository = " "; return nodes }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -409,6 +413,44 @@ func TestPlanRevisionRejectsBrokenReferences(t *testing.T) {
 				t.Fatal("SavePlanRevision() accepted a broken plan graph")
 			}
 		})
+	}
+}
+
+// TestPlanRevisionKeepsEachNodesTargetRepository verifies that a node's
+// explicit target repository survives a restart and that a node without a
+// target encodes no target key, so plans saved before targets keep their
+// bytes.
+func TestPlanRevisionKeepsEachNodesTargetRepository(t *testing.T) {
+	t.Parallel()
+
+	opened, path := openIdeationStoreForTest(t)
+	session := createIdeationSessionForTest(t, opened, "session-1")
+	session, _, err := opened.SaveBriefRevision(t.Context(), ideationWrite(session, store.IdeationStateAwaitingUser), briefForTest("Problem."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := planNodesForTest()
+	nodes[1].TargetRepository = "web"
+	if _, _, err := opened.SavePlanRevision(t.Context(), ideationWrite(session, store.IdeationStateDraftReview), store.PlanRevision{
+		SourceBriefRevision: 1, ContextRevision: "abc1234", Nodes: nodes,
+	}); err != nil {
+		t.Fatalf("SavePlanRevision() error = %v", err)
+	}
+	reopened := reopenIdeationStoreForTest(t, opened, path)
+	history, err := reopened.IdeationHistory(t.Context(), "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := history.Plans[0].Nodes
+	if got[1].TargetRepository != "web" || got[0].TargetRepository != "" || got[2].TargetRepository != "" {
+		t.Fatalf("stored targets = %q, %q, %q; want only node 2 targeting web", got[0].TargetRepository, got[1].TargetRepository, got[2].TargetRepository)
+	}
+	encoded, err := json.Marshal(store.PlanNode{ID: "n-1", Kind: "task", Title: "T"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "TargetRepository") {
+		t.Fatalf("node without a target encodes %s, want no target key", encoded)
 	}
 }
 

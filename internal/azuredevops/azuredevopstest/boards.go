@@ -240,7 +240,7 @@ func (b *Boards) Run(ctx context.Context, args []string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if IsExtensionCall(args) {
-		return b.runExtension(args)
+		return b.runExtension(ctx, args)
 	}
 	call, err := ParseCall(args)
 	if err != nil {

@@ -122,23 +122,6 @@ func TestExtensionRouteStartupChecksNeverDirectToAzLogin(t *testing.T) {
 	}
 }
 
-// TestExtensionRoutePlanWritesFailWithoutAWrite verifies that a plan write on
-// the extension route before #305 reports a no-change error, so publication
-// never treats it as an unknown outcome.
-func TestExtensionRoutePlanWritesFailWithoutAWrite(t *testing.T) {
-	t.Parallel()
-
-	az := newFakeAz(t)
-	item := tracker.RenderedPlanItem{NodeID: "a", Type: "Epic", Title: "A", Body: "B", Labels: []string{"factory-plan:s/1/a"}, Correlation: "s/1/a"}
-	_, err := extensionClient(az).CreatePlanItem(context.Background(), repository, item)
-	if !tracker.WriteNotApplied(err) {
-		t.Fatalf("CreatePlanItem() error = %v, want a no-change plan error", err)
-	}
-	if len(az.calls) != 0 {
-		t.Fatalf("az rest calls = %d, want none", len(az.calls))
-	}
-}
-
 // TestExtensionRouteLoginFailureIsANoChangePlanError verifies that a
 // missing or expired az devops login proves that no plan write happened.
 func TestExtensionRouteLoginFailureIsANoChangePlanError(t *testing.T) {

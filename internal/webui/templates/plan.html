@@ -220,6 +220,7 @@
 <dt>Plan node</dt><dd><code>{{.NodeID}}</code></dd>
 <dt>Kind / work-item type</dt><dd>{{.Type}}</dd>
 <dt>Correlation</dt><dd><code>{{.Correlation}}</code></dd>
+{{with .TargetRepository}}<dt>Target repository</dt><dd>{{.Name}} <code>{{.ID}}</code></dd>{{end}}
 {{with .Labels}}<dt>Labels</dt><dd>{{range $index, $label := .}}{{if $index}}, {{end}}<code>{{$label}}</code>{{end}}</dd>{{end}}
 {{range .FieldList}}<dt>Field <code>{{.Name}}</code></dt><dd>{{.Value}}</dd>{{end}}
 </dl>

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/azuredevops"
 	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/publication"
@@ -25,11 +26,12 @@ const conversationSecret = "PRIVATE-TURN-TEXT-a51c"
 // boardsSession is one approved session in a real SQLite store, published
 // to a scripted Azure Boards project.
 type boardsSession struct {
-	t       *testing.T
-	path    string
-	store   *store.Store
-	boards  *azuredevopstest.Boards
-	mapping *config.AzurePlanMapping
+	t      *testing.T
+	path   string
+	store  *store.Store
+	boards *azuredevopstest.Boards
+	// client is the planning adapter the publisher uses.
+	client *azuredevops.Client
 }
 
 // approvedBoardsSession stores a session with a parent and two tasks (n-3
@@ -37,13 +39,24 @@ type boardsSession struct {
 // DevOps preview under mapping, and returns the session.
 func approvedBoardsSession(t *testing.T, boards *azuredevopstest.Boards, mapping *config.AzurePlanMapping) *boardsSession {
 	t.Helper()
+	return approvedSession(t, boards, planClient(boards, mapping), []store.PlanNode{
+		{ID: "n-1", Kind: "parent", Title: "Faster onboarding", Body: "Parent.", AcceptanceCriteria: []string{"One command."}, BriefRefs: []string{"scope-1"}},
+		{ID: "n-3", Kind: "task", Title: "Document setup", Body: "Docs.", AcceptanceCriteria: []string{"Documented."}, ParentID: "n-1", DependsOn: []string{"n-2"}},
+		{ID: "n-2", Kind: "investigation", Title: "Cache images", Body: "Child.", AcceptanceCriteria: []string{"Cached."}, ParentID: "n-1"},
+	})
+}
+
+// approvedSession stores a session whose plan is nodes, approves the preview
+// that client renders, and returns the session.
+func approvedSession(t *testing.T, boards *azuredevopstest.Boards, client *azuredevops.Client, nodes []store.PlanNode) *boardsSession {
+	t.Helper()
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "data", "factory.db")
 	opened, err := store.Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &boardsSession{t: t, path: path, store: opened, boards: boards, mapping: mapping}
+	s := &boardsSession{t: t, path: path, store: opened, boards: boards, client: client}
 	t.Cleanup(func() { _ = s.store.Close() })
 	session, err := opened.CreateIdeationSession(ctx, store.IdeationSession{ID: "session-1", RepositoryPath: "/repos/service", State: workflow.DefaultSessionLifecycle().InitialState(), CreatedAt: publicationNow})
 	if err != nil {
@@ -64,11 +77,7 @@ func approvedBoardsSession(t *testing.T, boards *azuredevopstest.Boards, mapping
 	}
 	if session, _, err = opened.SavePlanRevision(ctx, s.write(session, workflow.SessionEventPlanDrafted), store.PlanRevision{
 		SourceBriefRevision: brief.Revision, ContextRevision: planContext,
-		Nodes: []store.PlanNode{
-			{ID: "n-1", Kind: "parent", Title: "Faster onboarding", Body: "Parent.", AcceptanceCriteria: []string{"One command."}, BriefRefs: []string{"scope-1"}},
-			{ID: "n-3", Kind: "task", Title: "Document setup", Body: "Docs.", AcceptanceCriteria: []string{"Documented."}, ParentID: "n-1", DependsOn: []string{"n-2"}},
-			{ID: "n-2", Kind: "investigation", Title: "Cache images", Body: "Child.", AcceptanceCriteria: []string{"Cached."}, ParentID: "n-1"},
-		},
+		Nodes: nodes,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +104,7 @@ func (s *boardsSession) write(session store.IdeationSession, event workflow.Sess
 // publisher returns a publisher over the store and the scripted project.
 func (s *boardsSession) publisher() *publication.Publisher {
 	return &publication.Publisher{
-		Store: s.store, Tracker: planClient(s.boards, s.mapping), Repository: repository,
+		Store: s.store, Tracker: s.client, Repository: repository,
 		Lifecycle: workflow.DefaultSessionLifecycle(), Now: func() time.Time { return publicationNow },
 	}
 }

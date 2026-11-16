@@ -77,6 +77,7 @@ func trackerAdapter(configPath string) tracker.Client {
 	if azure := registration.AzureDevOps; !azure.IsZero() {
 		client := azuredevops.NewClientForRoute(azure.Organization, registration.AuthorizedUsers, azure.EffectiveRoute())
 		client.Planning = azure.Planning
+		client.PlanRepositories = azure.PlanRepositories
 		return client
 	}
 	return github.NewClient()

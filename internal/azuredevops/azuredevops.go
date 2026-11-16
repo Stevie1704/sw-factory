@@ -92,6 +92,10 @@ type Client struct {
 	// Route selects az rest (empty or az_rest) or the CLI extension route
 	// (ADR 0030). The extension route never runs az rest.
 	Route config.AzureRoute
+	// PlanRepositories names the other repositories of the registered
+	// project that a published PBI may target on the extension route (ADR
+	// 0030 decision 8). The registered repository is always a target.
+	PlanRepositories []string
 
 	// mu guards the caches below.
 	mu sync.Mutex
