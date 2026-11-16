@@ -10,12 +10,12 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
-// extensionCodeHostStartupChecks diagnoses Azure Repos on the extension
+// codeHostStartupChecks diagnoses Azure Repos on the extension
 // route with read-only az repos and az devops invoke probes. It needs
 // neither Boards nor az login. The extension route has no verified
 // permission evaluation (ADR 0030), so the write permissions are reported
 // as unverified, never as passed.
-func (c *Client) extensionCodeHostStartupChecks(repository tracker.Repository) []doctor.Check {
+func (c extensionBackend) codeHostStartupChecks(repository tracker.Repository) []doctor.Check {
 	defaultBranch := ""
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {

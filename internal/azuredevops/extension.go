@@ -387,11 +387,24 @@ var canonicalGUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 // without GUIDs. Only the extension route supports it; the az rest route
 // refuses it without a call.
 func (c *Client) ResolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
-	if !c.extensionRoute() {
-		return RepositoryIdentity{}, errors.New("resolving an Azure Repos repository identity requires route devops_extension")
-	}
+	return c.backend().resolveRepository(ctx, repository)
+}
+
+// resolveRepository resolves the registered repository with az repos show.
+func (c extensionBackend) resolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
 	identity, _, err := c.showRepository(ctx, repository)
 	return identity, err
+}
+
+// defaultRunner is the production extension runner.
+func (extensionBackend) defaultRunner() CommandRunner {
+	return extensionRunner{timeout: CommandTimeout}
+}
+
+// readLogin fails closed: no verified extension command returns the
+// signed-in identity (ADR 0030).
+func (extensionBackend) readLogin(context.Context) (string, error) {
+	return "", fmt.Errorf("read the authenticated Azure DevOps identity: %w", ErrExtensionOperationUnavailable)
 }
 
 // showRepository is ResolveRepository that also returns the full reference

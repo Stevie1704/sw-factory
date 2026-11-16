@@ -16,9 +16,11 @@ var _ codehost.ReadinessChecker = (*Client)(nil)
 // Boards areas, tags, or work-item API. A blocked route stays a startup
 // error. The devops_extension route uses read-only az repos probes.
 func (c *Client) CodeHostStartupChecks(repository tracker.Repository) []doctor.Check {
-	if c.extensionRoute() {
-		return c.extensionCodeHostStartupChecks(repository)
-	}
+	return c.backend().codeHostStartupChecks(repository)
+}
+
+// codeHostStartupChecks are the az rest route's Azure Repos checks.
+func (c restBackend) codeHostStartupChecks(repository tracker.Repository) []doctor.Check {
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			if _, err := c.AuthenticatedLogin(ctx); err != nil {

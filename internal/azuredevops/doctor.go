@@ -57,9 +57,12 @@ var (
 // StartupChecks returns the Azure DevOps authentication, repository, and
 // permission checks in deterministic order.
 func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
-	if c.extensionRoute() {
-		return c.extensionStartupChecks(repository)
-	}
+	return c.backend().startupChecks(repository)
+}
+
+// startupChecks are the az rest route's authentication, repository, and
+// permission checks.
+func (c restBackend) startupChecks(repository tracker.Repository) []doctor.Check {
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
 			const name = "azure devops authentication"

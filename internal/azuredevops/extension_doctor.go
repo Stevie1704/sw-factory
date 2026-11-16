@@ -33,12 +33,12 @@ const (
 // caller receives: a missing or unreadable project or repository.
 var signedInRefusals = []string{"TF401019", "TF200016"}
 
-// extensionStartupChecks returns the read-only startup checks of the
+// startupChecks returns the read-only startup checks of the
 // extension route. They run only az repos show, az boards query, and, for an
 // assignment tag that names another GUID, az repos list; they never write
 // and never ask for az login. Identity and permission checks have no
 // verified command on this route and report themselves as skipped.
-func (c *Client) extensionStartupChecks(repository tracker.Repository) []doctor.Check {
+func (c extensionBackend) startupChecks(repository tracker.Repository) []doctor.Check {
 	organizationURL := extensionOrganizationURL(repository.Owner)
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {

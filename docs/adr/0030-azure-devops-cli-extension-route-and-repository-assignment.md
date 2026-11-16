@@ -280,7 +280,11 @@ host.
   `Client.ResolveRepository`. `assignment.go` holds
   `RepositoryAssignmentTag`, `IsRepositoryAssignmentTag`, and
   `ValidateRepositoryAssignment`. The composition root passes the selected
-  route to the tracker and the independent code host.
+  route to the tracker and the independent code host. `route.go` holds the
+  `backend` interface: `Client` keeps the route-neutral validation and
+  mapping and composes the `restBackend` or `extensionBackend` that its
+  Route selects in one place, so a further route implements `backend`
+  instead of adding a branch to each operation.
 - `azuredevopstest.ParseExtensionCall` refuses `az rest`, an unknown group,
   and a call without explicit organization, `--detect false`, and JSON
   output. The stateful `Boards` fake answers `az repos show` and `az repos
