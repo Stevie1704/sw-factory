@@ -155,6 +155,41 @@ scripts/smoke-skills.sh`. That smoke is a paid call; it needs explicit scope.
 repository. `factory doctor` runs the complete startup diagnosis. Repeat the
 named action and `factory doctor` until it prints `doctor: ready`.
 
+### Azure DevOps with a PAT
+
+Some organizations allow only a personal access token. Then the registration
+sets `azure_devops.route: devops_extension` and a `planning` mapping from
+Epic to Product Backlog Item; the configuration guide has the YAML.
+The operator prepares the host once:
+
+```sh
+az extension add --name azure-devops
+az devops login --organization https://dev.azure.com/<org>   # type the PAT at Token:
+factory doctor --json
+```
+
+Never type the token in an argument, an `echo` pipe, an exported variable,
+or a file in the repository. Factory never asks for it. The extension uses
+an existing `az login` session first, so a PAT-only setup runs Factory as
+an account without one. The DevOps login does not set up Git: push and
+fetch keep their own credential helper or SSH agent.
+
+Each Product Backlog Item names its repository with one tag,
+`factory-repo:<repository GUID>`; `az repos show` prints the GUID. One
+installation (host config, store, `factory start`) serves one repository,
+and two repositories of one project are two installations. Area Paths do
+not select a repository.
+
+Diagnose without writes: `factory doctor --json`. Typical repairs:
+
+| Symptom | Repair |
+| --- | --- |
+| `run az devops login --organization <URL>` | The PAT is missing, expired, or revoked. The operator makes a new PAT and signs in again. |
+| `run az extension add --name azure-devops` | Install the extension; Factory never installs it. |
+| identity or permission check `skipped` | Expected on this route. The operator confirms the permissions by hand. |
+| warning about agent-ready items without a usable assignment | Add exactly one `factory-repo` tag that names the right repository. |
+| a claim refused with a `factory-repo` tag in the message | The tag is missing, repeated, malformed, or names another repository. |
+
 ### Local Markdown tracker
 
 When policy blocks GitHub Issues or Azure Boards, the operator can select the
@@ -170,7 +205,8 @@ factory register --tracker local --code-host github \
 Azure Repos as code host uses the private YAML route of the configuration
 guide. The local tracker removes issue-tracker access only. `factory doctor`
 still checks code-host access for pull requests, reviews, and statuses, and
-Azure Repos still uses `az`. When the code host is blocked, doctor fails with
+Azure Repos still uses `az` on its selected route (`az login` or
+`az devops login`). When the code host is blocked, doctor fails with
 `github.code_host.access.unavailable` or
 `azure_devops.code_host.access.unavailable`, and no run can start. Report this
 to the operator; do not work around it. `factory guide ideation` describes the

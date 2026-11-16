@@ -38,9 +38,12 @@ Tracker mapping:
   dependencies when the host offers them, and otherwise shows the textual
   fallback before approval.
 - Azure DevOps maps plan kinds to work-item types with
-  `azure_devops.planning` in the host registration. Without it, the Agile
-  mapping applies: `parent` is an Epic, and `task` and `investigation` are
-  User Stories.
+  `azure_devops.planning` in the host registration. Without it, the `az
+  rest` route uses the Agile mapping: `parent` is an Epic, and `task` and
+  `investigation` are User Stories. The `devops_extension` route (PAT login)
+  has no default; its usual mapping is Epic to Product Backlog Item, and each
+  published PBI gets a `factory-repo` tag that names the one repository
+  where it runs. Publication still grants no execution.
 
 ## Run a session
 

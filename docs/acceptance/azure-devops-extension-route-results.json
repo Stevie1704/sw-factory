@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "host_harness": null,
+  "worker_digest": "",
+  "worker_harnesses": [],
+  "results": [
+    {
+      "scenario": "azure-extension-publish-and-execute",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "scripted az only; the implementation turn and the Gate are not driven on this route: the journey records the implementation stage through the store, and review feedback and readiness run through the real client, not a coordinator pass"
+    },
+    {
+      "scenario": "azure-extension-publish-and-execute",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+    },
+    {
+      "scenario": "azure-extension-repository-assignment",
+      "evidence": "deterministic",
+      "outcome": "pass",
+      "reason": "scripted az only; two installations share one scripted project"
+    },
+    {
+      "scenario": "azure-extension-repository-assignment",
+      "evidence": "live",
+      "outcome": "not-run",
+      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+    }
+  ]
+}

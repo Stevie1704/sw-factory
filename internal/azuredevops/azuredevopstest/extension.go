@@ -204,6 +204,9 @@ func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, 
 	if call.Command[0] == "devops" && route["project"] != Project {
 		return nil, fmt.Errorf("ERROR: project %q of %s is not the scripted project", route["project"], call.Route())
 	}
+	if response, ok, err := b.answerRepos(call); ok {
+		return response, err
+	}
 	switch call.Route() {
 	case "repos show":
 		return RepositoryResponse(call)
@@ -234,6 +237,12 @@ func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, 
 		return b.extensionBatch(call)
 	case "boards work-item relation add":
 		return b.extensionLink(call)
+	case "devops invoke GET wit/updates":
+		return b.extensionUpdates(call)
+	case "devops invoke GET wit/comments", "devops invoke POST wit/comments", "devops invoke PATCH wit/comments":
+		return b.extensionComments(call)
+	case "boards work-item update":
+		return b.extensionUpdateTags(call)
 	case "boards work-item relation show":
 		id, _ := strconv.Atoi(call.Flag("--id"))
 		return b.friendlyItem(id)
