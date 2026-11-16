@@ -408,9 +408,31 @@ An existing registration without `route` keeps the `az rest` route.
   repeat `repository`, and only this route accepts it.
 - **Worker boundary.** Workers refuse every `AZURE_DEVOPS_EXT_*` and `*_PAT`
   environment variable.
-- **Status.** The route, its command seam, the assignment tag, and the
-  frozen repository identity exist. Boards intake, plan publication, and pull
-  requests on this route arrive with #304 to #306; until then each such
+- **Pull requests.** `az repos pr create`, `list`, `show`, and `update`
+  create, find, regenerate, and ready the draft pull request; threads,
+  comments, and commit statuses use the `git` area of `az devops invoke`.
+  `pr show`, `pr update`, and `pr reviewer list` are organization-scoped, so
+  the factory first checks that the pull request belongs to the registered
+  project and repository. The title and the description are each sent as
+  one argument; Azure CLI reads a value that starts with `@` from a file, so
+  a title, description, or branch that starts with `@` is refused before any
+  call. For a Run claimed from Azure Boards, the pull request is created in
+  the repository frozen at claim with `--work-items <PBI>`, and every
+  create, adoption, or retry verifies the link through
+  `az repos pr work-item list` and adds a missing one with
+  `az repos pr work-item add`. A local Markdown Run never sends its issue
+  number as a work-item ID. The code-host startup check proves the login
+  with `az repos show` and reads pull requests, the default branch, and its
+  statuses without Boards access. It cannot evaluate the Contribute, Create
+  branch, and Contribute to pull requests permissions on this route, so it
+  reports them as an unverified warning; confirm them for the
+  `az devops login` identity. Finding the factory's own pull-request
+  comment by its marker needs the signed-in identity, which this route
+  cannot read yet (ADR 0030, identity row); until it can, that lookup fails
+  instead of matching another author's comment.
+- **Status.** The route, its command seam, the assignment tag, the frozen
+  repository identity, and pull requests exist. Boards intake and plan
+  publication on this route arrive with #304 and #305; until then each such
   operation fails with an error and never falls back to `az rest`. ADR 0030
   lists the command for each operation and the operations that are still
   unresolved.

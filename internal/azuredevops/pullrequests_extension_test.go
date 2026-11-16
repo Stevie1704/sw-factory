@@ -3,11 +3,14 @@ package azuredevops_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/azuredevops"
 	"github.com/Stevie1704/sw-factory/internal/azuredevops/azuredevopstest"
 	"github.com/Stevie1704/sw-factory/internal/codehost"
+	"github.com/Stevie1704/sw-factory/internal/effect"
 )
 
 // serviceRepository is the az repos projection of the registered
@@ -274,6 +277,61 @@ func TestEnsurePullRequestWorkItemRefusesAWrongRepositoryOrAnUnverifiedLink(t *t
 		on("repos pr work-item add", `[]`)
 	if err := extensionClient(unverified).EnsurePullRequestWorkItem(context.Background(), repository, 17, sourceItem); err == nil || !strings.Contains(err.Error(), "42") {
 		t.Fatalf("EnsurePullRequestWorkItem() error = %v, want an unverified association naming PBI 42", err)
+	}
+}
+
+// TestExtensionLostCreateResponseRecoversThePullRequestAndItsLink verifies
+// the retry after a create whose response was lost: the branch search
+// adopts the pull request that the lost call created, and the missing PBI
+// association is added without a second create.
+func TestExtensionLostCreateResponseRecoversThePullRequestAndItsLink(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).
+		on("repos show", `{"id":"`+azuredevopstest.RepositoryID+`","name":"service","project":{"id":"`+azuredevopstest.ProjectID+`","name":"Factory Pilot"}}`).
+		on("repos pr list", `[]`, `[`+extensionPullRequest+`]`).
+		on("repos pr create", "error:the operation timed out").
+		on("repos pr show", extensionPullRequest).
+		on("repos pr work-item list", `[]`, `[{"id":42}]`).
+		on("repos pr work-item add", `[{"id":42}]`)
+	client := extensionClient(az)
+	request := codehost.PullRequestRequest{Title: "Add export", Body: "body", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true, WorkItem: &sourceItem}
+
+	if _, err := effect.UpsertPullRequest(context.Background(), client, repository, 0, request); err == nil {
+		t.Fatal("first UpsertPullRequest() error = nil, want the lost response")
+	}
+	recovered, err := effect.UpsertPullRequest(context.Background(), client, repository, 0, request)
+	if err != nil || recovered.Number != 17 {
+		t.Fatalf("retry UpsertPullRequest() = %#v/%v, want the adopted pull request 17", recovered, err)
+	}
+	creates, adds := 0, 0
+	for _, call := range az.extensionCalls {
+		switch call.Route() {
+		case "repos pr create":
+			creates++
+		case "repos pr work-item add":
+			adds++
+		}
+	}
+	if creates != 1 || adds != 1 {
+		t.Fatalf("creates = %d, adds = %d; want one create and one recovered association", creates, adds)
+	}
+}
+
+// TestExtensionPullRequestOperationsReportAMissingLogin verifies that an
+// expired or missing az devops login surfaces as LoginRequiredError from
+// the pull-request operations, with the az devops login repair.
+func TestExtensionPullRequestOperationsReportAMissingLogin(t *testing.T) {
+	t.Parallel()
+
+	client := extensionClient(loginRequiredRunner{})
+	_, err := client.FindPullRequest(context.Background(), repository, "factory/run-1", "main")
+	var login *azuredevops.LoginRequiredError
+	if !errors.As(err, &login) || !strings.Contains(err.Error(), "az devops login --organization https://dev.azure.com/contoso") {
+		t.Fatalf("FindPullRequest() error = %v, want LoginRequiredError", err)
+	}
+	if err := client.CreateCommitStatus(context.Background(), repository, codehost.CommitStatus{SHA: strings.Repeat("c", 40), State: codehost.CommitStatusPending, Context: "factory/test"}); !errors.As(err, &login) {
+		t.Fatalf("CreateCommitStatus() error = %v, want LoginRequiredError", err)
 	}
 }
 
