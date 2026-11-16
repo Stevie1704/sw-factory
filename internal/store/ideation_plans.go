@@ -131,6 +131,13 @@ type PlanNode struct {
 	DependsOn []string
 	// BriefRefs names the source brief items this node traces to.
 	BriefRefs []string
+	// TargetRepository optionally names the registered repository that
+	// executes the node, for a tracker whose items belong to a project
+	// rather than a repository (Azure Boards, ADR 0030). Empty means no
+	// explicit target; a child never inherits its parent's target. It is
+	// omitted from the stored JSON when empty, so plans saved before it keep
+	// their bytes.
+	TargetRepository string `json:",omitempty"`
 }
 
 // PlanRevision is one immutable version of a session's plan graph.
@@ -351,6 +358,24 @@ func ValidatePlanIntegrity(nodes []PlanNode) error {
 				return fmt.Errorf("plan node %q dependency %q must name another node of the plan", node.ID, dependency)
 			}
 		}
+		if err := validatePlanTarget(node); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePlanTarget accepts an empty target or one plain repository name:
+// no surrounding space, path, query, escape, or control characters. Whether
+// the name is a registered repository is the tracker adapter's check.
+func validatePlanTarget(node PlanNode) error {
+	target := node.TargetRepository
+	if target == "" {
+		return nil
+	}
+	if strings.TrimSpace(target) != target || len(target) > maxPlanTitleBytes || strings.ContainsAny(target, "/\\?#%") ||
+		strings.IndexFunc(target, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return fmt.Errorf("plan node %q target repository %q must be a plain repository name", node.ID, target)
 	}
 	return nil
 }

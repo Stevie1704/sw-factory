@@ -3,6 +3,7 @@ package publication
 import (
 	"testing"
 
+	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
@@ -14,6 +15,23 @@ func previewWithTarget(target *tracker.PlanTargetRepository) tracker.PlanPreview
 			NodeID: "task-a", Type: "Product Backlog Item", Title: "Task A", Body: "Body",
 			Labels: []string{"factory-plan:s/1/task-a"}, Correlation: "s/1/task-a", TargetRepository: target,
 		}},
+	}
+}
+
+// TestPlanGraphCarriesEachNodesExplicitTarget verifies that the
+// provider-neutral graph names exactly the target each stored node selects
+// and that a child without a target does not take its parent's target.
+func TestPlanGraphCarriesEachNodesExplicitTarget(t *testing.T) {
+	t.Parallel()
+
+	graph := planGraph("s", store.PlanRevision{Revision: 1, Nodes: []store.PlanNode{
+		{ID: "epic", Kind: "parent", Title: "Epic", TargetRepository: "service"},
+		{ID: "a", Kind: "task", Title: "A", ParentID: "epic", TargetRepository: "web"},
+		{ID: "b", Kind: "task", Title: "B", ParentID: "epic"},
+	}})
+	got := []string{graph.Items[0].TargetRepository, graph.Items[1].TargetRepository, graph.Items[2].TargetRepository}
+	if got[0] != "service" || got[1] != "web" || got[2] != "" {
+		t.Fatalf("graph targets = %q, want service, web, and none", got)
 	}
 }
 

@@ -126,6 +126,9 @@ type PlanNode struct {
 	DependsOn []string `json:"depends_on,omitempty"`
 	// BriefRefs names the source brief items of the node.
 	BriefRefs []string `json:"brief_refs,omitempty"`
+	// TargetRepository optionally names the registered repository that
+	// executes the node (ADR 0030). A child never inherits it.
+	TargetRepository string `json:"target_repository,omitempty"`
 }
 
 // PlanDraft is the structured result of one planning invocation. The
