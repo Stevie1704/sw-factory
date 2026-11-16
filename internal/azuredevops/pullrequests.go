@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	_ codehost.PullRequestClient        = (*Client)(nil)
-	_ codehost.PullRequestDraftClient   = (*Client)(nil)
-	_ codehost.PullRequestReviewReader  = (*Client)(nil)
-	_ codehost.PullRequestCommentReader = (*Client)(nil)
-	_ codehost.PullRequestCommentClient = (*Client)(nil)
-	_ codehost.CommitStatusPublisher    = (*Client)(nil)
-	_ codehost.CommitStatusReader       = (*Client)(nil)
+	_ codehost.PullRequestClient         = (*Client)(nil)
+	_ codehost.PullRequestDraftClient    = (*Client)(nil)
+	_ codehost.PullRequestReviewReader   = (*Client)(nil)
+	_ codehost.PullRequestCommentReader  = (*Client)(nil)
+	_ codehost.PullRequestCommentClient  = (*Client)(nil)
+	_ codehost.CommitStatusPublisher     = (*Client)(nil)
+	_ codehost.CommitStatusReader        = (*Client)(nil)
+	_ codehost.PullRequestWorkItemLinker = (*Client)(nil)
 )
 
 // maxDescriptionLength is the Azure Repos limit of a pull-request

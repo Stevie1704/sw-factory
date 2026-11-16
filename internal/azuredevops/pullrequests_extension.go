@@ -126,20 +126,101 @@ func (c *Client) extensionCreatePullRequest(ctx context.Context, repository trac
 	if err != nil {
 		return codehost.PullRequest{}, err
 	}
-	target, err := cliText("--target-branch", request.BaseBranch)
+	targetBranch, err := cliText("--target-branch", request.BaseBranch)
 	if err != nil {
 		return codehost.PullRequest{}, err
 	}
-	args := append([]string{"repos", "pr", "create", "--project", repository.Project, "--repository", repository.Name, source, target}, text...)
-	args = append(args, "--draft", strconv.FormatBool(request.Draft))
+	target, frozen, workItems, err := c.pullRequestTarget(ctx, repository, request.WorkItem)
+	if err != nil {
+		return codehost.PullRequest{}, fmt.Errorf("create pull request: %w", err)
+	}
+	args := append([]string{"repos", "pr", "create", "--project", repository.Project, "--repository", target, source, targetBranch}, text...)
+	args = append(append(args, "--draft", strconv.FormatBool(request.Draft)), workItems...)
 	var response extensionPullRequestResponse
 	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
 		return codehost.PullRequest{}, fmt.Errorf("create pull request: %w", err)
 	}
-	if err := response.belongsTo(repository, ""); err != nil {
+	if err := response.belongsTo(repository, frozen); err != nil {
 		return codehost.PullRequest{}, fmt.Errorf("create pull request: %w", err)
 	}
 	return response.pullRequest(repository), nil
+}
+
+// pullRequestTarget returns the --repository value of a new pull request,
+// the frozen repository GUID its response must name, and the --work-items
+// arguments. Without a work item it targets the registered repository
+// name. With one, the registered repository must still resolve to the
+// GUID frozen with the Run; the pull request is then created in that GUID
+// with the source work item, so a renamed or replaced repository receives
+// nothing.
+func (c *Client) pullRequestTarget(ctx context.Context, repository tracker.Repository, link *codehost.WorkItemLink) (string, string, []string, error) {
+	if link == nil {
+		return repository.Name, "", nil, nil
+	}
+	if link.ID <= 0 || !canonicalGUID.MatchString(link.RepositoryID) {
+		return "", "", nil, errors.New("the source work item needs a positive ID and a frozen repository GUID")
+	}
+	identity, err := c.ResolveRepository(ctx, repository)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if !strings.EqualFold(identity.ID, link.RepositoryID) {
+		return "", "", nil, fmt.Errorf("registered repository %s resolves to %s, not the frozen repository %s of the Run", repository, identity.ID, strings.ToLower(link.RepositoryID))
+	}
+	return identity.ID, identity.ID, []string{"--work-items", strconv.Itoa(link.ID)}, nil
+}
+
+// EnsurePullRequestWorkItem verifies that pull request number of the
+// frozen repository links the source work item natively, and adds the
+// association through az repos pr work-item add when a lost response or an
+// adopted pull request left it out. It never creates a pull request, and it
+// fails unless the association list confirms the link.
+func (c *Client) EnsurePullRequestWorkItem(ctx context.Context, repository tracker.Repository, number int, link codehost.WorkItemLink) error {
+	if !c.extensionRoute() {
+		return errNoWorkItemRoute
+	}
+	if err := validatePullRequestTarget(repository, number); err != nil {
+		return err
+	}
+	if link.ID <= 0 || !canonicalGUID.MatchString(link.RepositoryID) {
+		return errors.New("the source work item needs a positive ID and a frozen repository GUID")
+	}
+	if _, err := c.extensionPullRequest(ctx, repository, number, link.RepositoryID); err != nil {
+		return fmt.Errorf("link work item %d: %w", link.ID, err)
+	}
+	linked, err := c.pullRequestLinksWorkItem(ctx, repository, number, link.ID)
+	if err != nil || linked {
+		return err
+	}
+	args := []string{"repos", "pr", "work-item", "add", "--id", strconv.Itoa(number), "--work-items", strconv.Itoa(link.ID)}
+	if err := c.extension(ctx, repository.Owner, args, nil); err != nil {
+		return fmt.Errorf("link work item %d to pull request %d: %w", link.ID, number, err)
+	}
+	linked, err = c.pullRequestLinksWorkItem(ctx, repository, number, link.ID)
+	if err != nil {
+		return err
+	}
+	if !linked {
+		return fmt.Errorf("pull request %d does not list work item %d after linking it", number, link.ID)
+	}
+	return nil
+}
+
+// pullRequestLinksWorkItem reports whether az repos pr work-item list names
+// work item id for pull request number.
+func (c *Client) pullRequestLinksWorkItem(ctx context.Context, repository tracker.Repository, number, id int) (bool, error) {
+	var response []struct {
+		ID int `json:"id"`
+	}
+	if err := c.extension(ctx, repository.Owner, []string{"repos", "pr", "work-item", "list", "--id", strconv.Itoa(number)}, &response); err != nil {
+		return false, fmt.Errorf("list work items of pull request %d: %w", number, err)
+	}
+	for _, item := range response {
+		if item.ID == id {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // extensionUpdatePullRequest checks that pull request number belongs to the

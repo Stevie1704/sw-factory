@@ -159,6 +159,124 @@ func TestExtensionPullRequestTextIsCheckedBeforeAnyCall(t *testing.T) {
 	}
 }
 
+// sourceItem is PBI 42 of a Run frozen to the registered repository.
+var sourceItem = codehost.WorkItemLink{ID: 42, RepositoryID: azuredevopstest.RepositoryID}
+
+// TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository verifies
+// that a pull request of an Azure Boards-backed Run is created in the
+// frozen repository GUID with the source PBI through --work-items.
+func TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).
+		on("repos show", `{"id":"`+azuredevopstest.RepositoryID+`","name":"service","project":{"id":"`+azuredevopstest.ProjectID+`","name":"Factory Pilot"}}`).
+		on("repos pr create", extensionPullRequest)
+	request := codehost.PullRequestRequest{Title: "Add export", Body: "body", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true, WorkItem: &sourceItem}
+
+	created, err := extensionClient(az).CreatePullRequest(context.Background(), repository, request)
+	if err != nil || created.Number != 17 {
+		t.Fatalf("CreatePullRequest() = %#v/%v, want pull request 17", created, err)
+	}
+	create := az.extensionCalls[1]
+	if az.extensionCalls[0].Route() != "repos show" || create.Route() != "repos pr create" {
+		t.Fatalf("calls = %v, want the repository resolved before create", az.extensionCalls)
+	}
+	if create.Flag("--repository") != azuredevopstest.RepositoryID || create.Flag("--project") != "Factory Pilot" || create.Flag("--work-items") != "42" {
+		t.Fatalf("create = %+v, want the frozen repository GUID and PBI 42", create.Flags)
+	}
+}
+
+// TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository
+// verifies that a registered name that now resolves to another GUID than
+// the Run's frozen repository creates nothing.
+func TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).on("repos show", `{"id":"`+azuredevopstest.WebRepositoryID+`","name":"service","project":{"id":"`+azuredevopstest.ProjectID+`","name":"Factory Pilot"}}`)
+	request := codehost.PullRequestRequest{Title: "Add export", Body: "body", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true, WorkItem: &sourceItem}
+
+	if _, err := extensionClient(az).CreatePullRequest(context.Background(), repository, request); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("CreatePullRequest() error = %v, want a refused repository", err)
+	}
+	for _, call := range az.extensionCalls {
+		if call.Route() == "repos pr create" {
+			t.Fatal("CreatePullRequest() created a pull request in another repository")
+		}
+	}
+}
+
+// TestEnsurePullRequestWorkItemRecoversAMissingAssociation verifies that a
+// pull request without its source PBI gains it through az repos pr
+// work-item add, and that the association is read back.
+func TestEnsurePullRequestWorkItemRecoversAMissingAssociation(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).
+		on("repos pr show", extensionPullRequest).
+		on("repos pr work-item list", `[{"id":7}]`, `[{"id":7},{"id":42}]`).
+		on("repos pr work-item add", `[{"id":7},{"id":42}]`)
+
+	if err := extensionClient(az).EnsurePullRequestWorkItem(context.Background(), repository, 17, sourceItem); err != nil {
+		t.Fatalf("EnsurePullRequestWorkItem() error = %v", err)
+	}
+	routes := make([]string, 0)
+	for _, call := range az.extensionCalls {
+		routes = append(routes, call.Route())
+	}
+	if strings.Join(routes, ",") != "repos pr show,repos pr work-item list,repos pr work-item add,repos pr work-item list" {
+		t.Fatalf("routes = %v, want check, list, add, and verify", routes)
+	}
+	if add := az.extensionCalls[2]; add.Flag("--id") != "17" || add.Flag("--work-items") != "42" {
+		t.Fatalf("add = %+v, want PBI 42 on pull request 17", add.Flags)
+	}
+}
+
+// TestEnsurePullRequestWorkItemKeepsAnExistingAssociation verifies that a
+// linked pull request is verified without another write.
+func TestEnsurePullRequestWorkItemKeepsAnExistingAssociation(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).
+		on("repos pr show", extensionPullRequest).
+		on("repos pr work-item list", `[{"id":42}]`)
+
+	if err := extensionClient(az).EnsurePullRequestWorkItem(context.Background(), repository, 17, sourceItem); err != nil {
+		t.Fatalf("EnsurePullRequestWorkItem() error = %v", err)
+	}
+	if len(az.extensionCalls) != 2 {
+		t.Fatalf("calls = %v, want only the check and the list", az.extensionCalls)
+	}
+}
+
+// TestEnsurePullRequestWorkItemRefusesAWrongRepositoryOrAnUnverifiedLink
+// verifies that a pull request of another repository is never linked, and
+// that an add the association list does not confirm fails.
+func TestEnsurePullRequestWorkItemRefusesAWrongRepositoryOrAnUnverifiedLink(t *testing.T) {
+	t.Parallel()
+
+	foreign := newFakeAz(t).on("repos pr show", strings.Replace(extensionPullRequest, serviceRepository, webRepository, 1))
+	if err := extensionClient(foreign).EnsurePullRequestWorkItem(context.Background(), repository, 17, sourceItem); err == nil {
+		t.Fatal("EnsurePullRequestWorkItem() error = nil, want a refused foreign pull request")
+	}
+	if len(foreign.extensionCalls) != 1 {
+		t.Fatalf("calls = %v, want only the repository check", foreign.extensionCalls)
+	}
+
+	frozenElsewhere := codehost.WorkItemLink{ID: 42, RepositoryID: azuredevopstest.WebRepositoryID}
+	az := newFakeAz(t).on("repos pr show", extensionPullRequest)
+	if err := extensionClient(az).EnsurePullRequestWorkItem(context.Background(), repository, 17, frozenElsewhere); err == nil {
+		t.Fatal("EnsurePullRequestWorkItem() error = nil, want a refused frozen repository")
+	}
+
+	unverified := newFakeAz(t).
+		on("repos pr show", extensionPullRequest).
+		on("repos pr work-item list", `[]`).
+		on("repos pr work-item add", `[]`)
+	if err := extensionClient(unverified).EnsurePullRequestWorkItem(context.Background(), repository, 17, sourceItem); err == nil || !strings.Contains(err.Error(), "42") {
+		t.Fatalf("EnsurePullRequestWorkItem() error = %v, want an unverified association naming PBI 42", err)
+	}
+}
+
 // wantInvoke fails the test unless call is the az devops invoke of area,
 // resource, and method at API version 7.1 with exactly the route parameters.
 func wantInvoke(t *testing.T, call azuredevopstest.ExtensionCall, route string, parameters map[string]string) {
