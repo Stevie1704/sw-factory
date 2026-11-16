@@ -529,10 +529,11 @@ An approved ideation plan publishes to Azure Boards work items (ADR 0025).
 `investigation`) to the work-item types of the project's process. List the
 backlog levels from the top level down. Each level has a `type`, the plan
 `kinds` it receives, an optional `required` flag, and optional `fields`
-values by reference name. Without `planning`, the Agile mapping applies:
-`parent` is an Epic, the Feature level is optional, and `task` and
-`investigation` are User Stories. A Scrum project configures its backlog item
-type:
+values by reference name. On the `az rest` route, without `planning`, the
+Agile mapping applies: `parent` is an Epic, the Feature level is optional, and
+`task` and `investigation` are User Stories. The `devops_extension` route has
+no default and requires `planning` (see above). A Scrum project configures
+its backlog item type:
 
 ```yaml
     azure_devops:
@@ -567,14 +568,17 @@ type:
   `System.State` is a not-started (Proposed) state. `System.Title`,
   `System.Description`, and `System.Tags` are rendered by the factory and
   cannot be configured.
-- **Tags and authorization.** Each item gets exactly one tag,
+- **Tags and authorization.** Each item gets exactly one correlation tag,
   `factory-plan:<session>/<plan revision>/<node>`, which correlates it for
-  retries. It is not a run-state tag. Publication never adds `agent-ready`;
+  retries. It is not a run-state tag. On the `devops_extension` route each
+  executable item also gets exactly one `factory-repo:<repository GUID>`
+  assignment tag (ADR 0030 decision 10). Publication never adds `agent-ready`;
   execution still needs an authorized user to add it. Publication needs View
   and Edit work items and Create tag definition.
 - **Evidence.** `docs/acceptance/azure-devops-plan-publication.md` describes
-  the scripted coverage and the disposable-project procedure; live evidence
-  has not been recorded yet.
+  the scripted coverage and the disposable-project procedure of the `az rest`
+  route, and `docs/acceptance/azure-devops-extension-route.md` those of the
+  `devops_extension` route; live evidence has not been recorded for either.
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 

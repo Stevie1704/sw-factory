@@ -58,9 +58,11 @@ ADR 0030 inventory; they are not verified in a live run.
 
 The integrated journeys drive the real Azure DevOps client on the
 `devops_extension` route over `azuredevopstest.Boards`, a stateful scripted
-`az` that refuses `az rest`, any call without explicit `--organization`,
-`--detect false`, and JSON output, and any argument Azure CLI would read from
-a file. The fake keeps a tag history with authors, replaces the complete
+`az` that fails the test for any extension call without explicit
+`--organization`, `--detect false`, and JSON output, and for any argument
+Azure CLI would read from a file. The fake also answers `az rest` for the
+`az_rest` route, so the journey asserts that it recorded no `az rest` call.
+The fake keeps a tag history with authors, replaces the complete
 `System.Tags` value on each update, stores Markdown comments, and keeps pull
 requests per repository GUID with their linked work items, so the tests read
 the repository and the link from the fake's state, not from the request.
@@ -77,7 +79,7 @@ the repository and the link from the fake's state, not from the request.
 | Review feedback and readiness | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories` (the real client reads the maintainer's change request and readies the pull request; another installation cannot change it), `internal/azuredevops:TestExtensionReviewsAndCommentsReadThreadsThroughInvoke`, `internal/azuredevops:TestExtensionCreateUpdateAndReadinessUseDedicatedCommands`, `internal/azuredevops:TestExtensionCommitStatusesUseTheGitStatusesInvokeRoute`. The coordinator's review and readiness passes are route-neutral and covered by the existing review tests in `make check`. | pass, partial (see below) |
 | Two installations, one project, Epic with PBIs for both repositories; each claims only its own | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/azuredevops:TestExtensionQueueListsOnlyWorkItemsAssignedToTheRegisteredRepository` | pass |
 | Missing, ambiguous, malformed, unknown, and mismatched tags refused on polling and direct claim | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/factory:TestClaimRefusesAnInvalidRepositoryAssignmentBeforeAnyEffect`, `internal/azuredevops:TestClaimRepositoryAssignmentRefusesEveryInvalidAssignment`, `internal/azuredevops:TestValidateRepositoryAssignmentRefusesEveryInvalidAssignment` | pass |
-| Correlation and assignment tags kept through retry and lifecycle updates | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/azuredevops:TestExtensionReplaceIssueLabelsKeepsAssignmentAndCorrelationTags`, `internal/azuredevops:TestExtensionPublishRefusesAnExistingItemWithAnotherTarget` | pass |
+| Correlation and assignment tags kept through retry and lifecycle updates | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/azuredevops:TestExtensionPublishReconcilesLostResponsesWithoutDuplicates`, `internal/azuredevops:TestExtensionReplaceIssueLabelsKeepsAssignmentAndCorrelationTags`, `internal/azuredevops:TestExtensionPublishRefusesAnExistingItemWithAnotherTarget` | pass |
 | No redirection after claim | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories` (a retag after the claim leaves the Run and its pull request in the frozen repository), `internal/azuredevops:TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository`, `internal/store:TestFrozenTrackerRepositoryCannotBeRedirected` | pass |
 | Login failure, command routing, no `az rest` | `internal/azuredevops:TestExtensionRunnerTurnsAMissingOrExpiredLoginIntoARepairInstruction`, `internal/azuredevops:TestExtensionRunnerRedactsSecretsFromCLIErrors`, `internal/azuredevops:TestExtensionRouteNeverFallsBackToAzRest`, `internal/azuredevops:TestExtensionRunnerIsNonInteractiveAndReturnsJSON` | pass |
 | Read-only startup diagnosis | `internal/azuredevops:TestExtensionStartupChecksPassReadOnlyChecksAndReportTheRestUnavailable`, `internal/azuredevops:TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly`, `internal/azuredevops:TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems`, `internal/azuredevops:TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards` | pass |
@@ -89,7 +91,10 @@ the store before it creates the draft pull request, as
 `internal/factory:TestCreateDraftPullRequestLinksTheSourceWorkItemOfAFrozenRepository`
 does. It does not drive the implementation turn, the Gate, or a coordinator
 review pass on this route; review feedback and readiness run through the real
-client on the pull request that the journey created.
+client on the pull request that the journey created. The journey's commit
+statuses go to a recording fake, not to the real client;
+`internal/azuredevops:TestExtensionCommitStatusesUseTheGitStatusesInvokeRoute`
+covers the client's status route.
 
 ## Regression
 
@@ -182,14 +187,18 @@ evidence.
 4. **Two installations.** Write one host configuration for each repository
    with its own `operational_data_path` and `route: devops_extension`. The
    `service` configuration has the Epic/PBI `planning` mapping and
-   `plan_repositories: [web]`. Run `factory doctor --json --config <path>`
+   `plan_repositories: [web]`. Run `factory doctor --config <path> --json`
    for each. Expected: login, repository, and Boards query pass; identity
    and permissions show as skipped; no work item, tag, or pull request
    changes.
 5. **Plan.** In the `service` installation, run an ideation session to a
-   plan with one parent and two tasks. Set `target_repository: web` on one
-   task in the draft plan JSON (Known limits, item 3). Preview. Expected: the
-   review page shows each PBI's target name and GUID. Approve.
+   plan with one parent and two tasks. Keep each task short: Azure Repos
+   accepts at most 4,000 characters in a pull-request description. Set
+   `target_repository: web` on one task: send an `edit_draft` command to the
+   session command API (`POST /api/commands` of `factory ui`, with the
+   command token of the page) whose draft nodes carry it (Known limits,
+   item 3). Preview. Expected: the review page shows each PBI's target name
+   and GUID. Approve.
 6. **Publication.** Expected: one Epic and two PBIs; each PBI shows the Epic
    as Parent and the Epic shows both children; no Feature. Each PBI has its
    `factory-plan` tag and the `factory-repo` tag of its repository; the Epic
@@ -201,11 +210,16 @@ evidence.
 8. **Assignment refusals.** Create PBIs with no, two, a malformed
    (`factory-repo:service`), an unknown, and the other repository's
    `factory-repo` tag, and add `agent-ready` as an authorized user. Run
-   `factory issue <ID>` in the `service` installation for each. Expected:
-   each is refused with the tag to set, and no Run starts.
+   `factory issue --config <service config> <ID>` for each. Expected: each
+   is refused with the tag to set, and no Run starts. Add `agent-ready` to a
+   correctly assigned PBI as a user who is not in `authorized_users`.
+   Expected: no installation claims it.
 9. **Execution.** Add `agent-ready` to both published PBIs as an authorized
-   user. Start both installations. Expected: each claims only its own PBI;
-   each PBI keeps both metadata tags beside the state tag.
+   user. Start both installations (`factory start --config <path>`).
+   Expected: each claims only its own PBI; each PBI keeps both metadata tags
+   beside the state tag; the status comment on each PBI exists once and is
+   edited in place, not posted again.
+   Post a `/factory` command on a PBI and check that the Run reads it.
 10. **No redirection.** Change the `factory-repo` tag of the claimed
     `service` PBI to the `web` GUID. Expected: the Run continues in
     `service`; the `web` installation does not claim it.
@@ -215,8 +229,12 @@ evidence.
     `az repos pr work-item list --id <PR> --organization https://dev.azure.com/<org> --output json`
     for each.
 12. **Review and readiness.** Vote "waiting for author" with one comment on
-    one pull request. Expected: implementation resumes from the finding and
-    the pull request returns to draft; after the repair it becomes ready.
+    one pull request. Expected: the vote is read as a change request with
+    the comment as its finding, implementation resumes, and the pull request
+    returns to draft; after the repair it becomes ready and shows its commit
+    statuses. A clarification question on the pull request is expected to
+    fail closed (Known limits, item 1); record it, do not count it as a
+    pass.
 13. **Expiry.** Run `az devops logout --organization <URL>` and
     `factory doctor --json`. Expected: the login check fails with
     `run az devops login --organization <URL>`, and nothing else changes.
