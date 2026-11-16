@@ -1,10 +1,10 @@
 # Factory acceptance report
 
-- Release: development (development), revision cca8dcfa015904aa61982a8bc67263f22f4be4ab, modified false
+- Release: development (development), revision 7e5cca4e42163fcdea93a1fb43cfd3db3bf180ee, modified false
 - Platform: darwin/arm64
 - Host harness: not observed
 - Worker digest: not observed
-- Generated: 2026-11-16T15:49:31Z
+- Generated: 2026-11-16T15:55:52Z
 - Recorded duration: 0s
 
 A deterministic pass uses fake adapters. It is not evidence that an agent can use the release; only a live pass is.

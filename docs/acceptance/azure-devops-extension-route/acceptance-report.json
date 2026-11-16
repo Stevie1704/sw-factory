@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "manifest_schema_version": 1,
-  "generated_at": "2026-11-16T15:49:31.966105Z",
+  "generated_at": "2026-11-16T15:55:52.111394Z",
   "release": {
     "schema_version": 1,
     "version": "development",
     "build": "development",
-    "revision": "cca8dcfa015904aa61982a8bc67263f22f4be4ab",
+    "revision": "7e5cca4e42163fcdea93a1fb43cfd3db3bf180ee",
     "modified": false,
     "worker_base_image": "",
     "platform": "darwin/arm64"
