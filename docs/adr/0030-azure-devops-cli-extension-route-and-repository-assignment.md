@@ -121,6 +121,27 @@ its PAT option, and ADR 0025 decisions 4 and 6.
     classification and `az login` stay as they are. On the extension route,
     `LoginRequiredError` is a permission failure that proves no write, and a
     timeout stays ambiguous; #305 maps the remaining extension texts.
+12. **The extension route has no signed-in identity, so a status comment is
+    found by its marker alone.** No verified command or invoke resource
+    returns the caller (inventory: identity). `AuthenticatedLogin` therefore
+    fails with `ErrExtensionOperationUnavailable` on this route, and the
+    doctor reports the identity and permission checks as skipped, never as
+    passed. `FindStatusComment` accepts exactly one live comment that holds
+    the run's marker, returns a zero comment for none, and refuses more than
+    one, so a copied marker never redirects the status comment and never
+    causes a duplicate. This deliberately weakens the author check of ADR
+    0019 on this route only: another editor can block a run by copying its
+    marker, but cannot take over its status comment, because only the author
+    can edit a comment.
+13. **The claim revalidates the assignment and freezes it.** The tracker
+    port `tracker.RepositoryAssignmentValidator` runs right before a claim,
+    on the direct and the polling path, before a worktree, a run record, or
+    a tracker write exists. `ClaimIssue` stores the returned identity in
+    `store.Run.TrackerRepository` from the first save. The poll lists only
+    work items whose single assignment tag names the registered repository,
+    so an unassigned or foreign PBI never blocks the queue; a direct claim of
+    one returns the `AssignmentError` repair. `Issue` does not validate the
+    assignment, so a tag edit after the claim cannot stop an active run.
 
 ## Operation inventory
 
@@ -151,21 +172,21 @@ host.
 
 | Current operation (`az rest` path) | Extension route | Status |
 | --- | --- | --- |
-| Identity: GET `_apis/connectionData` | `invoke --area Location --resource ConnectionData` | **Unresolved.** `Location` is not a ResourceAreas name in the recording, so invoke refuses it. No dedicated command returns the signed-in identity. |
+| Identity: GET `_apis/connectionData` | none | **Not available (#304).** `Location` is not a ResourceAreas name in the recording, so invoke refuses it; `IMS` and `Identity` are ResourceAreas names, but the recording holds no location of theirs for a self resource. Every command that accepts `me` (`identities.py`) resolves it internally and prints no identity. The doctor reports `azure_devops.identity.not_available` as skipped, and `AuthenticatedLogin` fails with `ErrExtensionOperationUnavailable`. Status comments are recovered by marker alone (decision 12). |
 | Repository identity: GET `git/repositories/{repo}` | `az repos show --project --repository` | Verified command; implemented as `ResolveRepository`. |
-| Permission checks: GET `_apis/permissions/{ns}/{bit}` | `invoke --area Security --resource Permissions` | **Unresolved.** `Security` is not a ResourceAreas name, so invoke refuses it. Candidate: `az devops security permission show --namespace-id --subject --token` (verified command), whose `--subject` is a user email or group descriptor (blocked by the identity row) and which reports that subject's ACL, not an evaluation for the caller. |
+| Permission checks: GET `_apis/permissions/{ns}/{bit}` | none | **Not available (#304).** `Security` is not a ResourceAreas name, so invoke refuses it. `az devops security permission show --namespace-id --subject --token` (verified command) needs a subject that the identity row cannot supply; `security_permission.py` passes a subject without `@` or `.` unchanged, so `me` does not resolve. The doctor reports `azure_devops.permissions.not_available` as skipped and names the permissions to verify by hand. |
 | Root area ID: GET `wit/classificationnodes/Areas` | `invoke --area wit --resource classificationNodes` route `structureGroup=areas` | Resolves to `{project}/_apis/wit/classificationNodes/{structureGroup}/{*path}`. |
 | Project tags: GET `wit/tags` | `invoke --area wit --resource tags` | Resolves to `{project}/_apis/wit/tags/{tagIdOrName}`. |
-| Work item read: GET `wit/workitems/{id}` | `az boards work-item show --id --expand` | Verified command; organization-scoped (no `--project`). Invoke `wit/workItems` resolves to the create route `${type}`, so it cannot read by ID. |
-| Batch read: GET `wit/workitems?ids=` | `invoke --area wit --resource workItemsBatch` POST | Resolves to `{project}/_apis/wit/workItemsBatch` (single location). Request shape from the REST reference "Work Items - Get Work Items Batch"; not run. |
-| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
-| Type states: GET `wit/workitemtypes/{type}/states` | `invoke --area wit --resource workItemTypeStates` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/states`. |
-| Update history: GET `wit/workItems/{id}/updates` | `invoke --area wit --resource updates` | Resolves to `{project}/_apis/wit/workItems/{id}/updates/{updateNumber}`. |
-| Tag replace: PATCH `wit/workitems/{id}` `/fields/System.Tags` | `az boards work-item update --id --fields System.Tags=...` | Verified command; organization-scoped. The value replaces every tag (decision 10). |
+| Work item read: GET `wit/workitems/{id}` | `invoke --area wit --resource workItemsBatch` POST with `ids=[id]` | Implemented (#304) through the batch row. `az boards work-item show --id --expand` is a verified command, but it deserializes into the extension's 5.0 `WorkItem` model, which has no `multilineFieldsFormat`, so a Markdown description would be read as HTML. The batch route is project-scoped, and the adapter also checks `System.TeamProject`. |
+| Batch read: GET `wit/workitems?ids=` | `invoke --area wit --resource workItemsBatch` POST | Resolves to `{project}/_apis/wit/workItemsBatch` (single location). Implemented (#304) with body `{"ids":[...],"errorPolicy":"omit"}`, 200 IDs a batch, from the REST reference "Work Items - Get Work Items Batch"; not run. Whether its raw JSON carries `multilineFieldsFormat` is not verified live. |
+| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Implemented for intake (#304). `query_work_items` sends no project with the WIQL, so `@project` has no context: the WIQL names `[System.TeamProject]` explicitly. The command returns at most 1000 items and prints nothing for an empty result. Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
+| Type states: GET `wit/workitemtypes/{type}/states` | `invoke --area wit --resource workItemTypeStates` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/states`. Implemented (#304). |
+| Update history: GET `wit/workItems/{id}/updates` | `invoke --area wit --resource updates` | Resolves to `{project}/_apis/wit/workItems/{id}/updates/{updateNumber}`. Implemented (#304) with `$top`/`$skip` paging. |
+| Tag replace: PATCH `wit/workitems/{id}` `/fields/System.Tags` | `az boards work-item update --id --fields System.Tags=...` | Verified command; organization-scoped. Implemented (#304): the adapter first reads the item through the project-scoped batch row, refuses another project, and keeps every `factory-repo:` and `factory-plan:` tag of the current value (decision 10). |
 | Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. **Unresolved:** the command sends only `/fields/...` operations (`work_item.py`), so it cannot set `/multilineFieldsFormat/System.Description=Markdown`; the Markdown description of ADR 0025 decision 5 needs a decision in #305. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
 | Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. |
 | Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. |
-| Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location). The response gains `continuation_token` from the `X-MS-ContinuationToken` header. **Unresolved:** the code uses `7.1-preview.4`, which invoke cannot parse; whether the service accepts `7.1-preview` without a resource version is not verified. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
+| Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location). Implemented (#304). The response gains `continuation_token` from the `X-MS-ContinuationToken` header, which the list follows. `7.1-preview` is a documented version form (REST API versioning: `{major}.{minor}[-{stage}[.{resource-version}]]`), and the SDK's `_negotiate_request_version` sends it unchanged. **Unresolved:** which resource version the service selects without one is not verified; every create and edit therefore refuses a result whose `format` is not `markdown`. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
 | Process types: GET `wit/workitemtypes` | `invoke --area wit --resource workItemTypes` | Resolves to `{project}/_apis/wit/workItemTypes/{type}`. |
 | Field definitions: GET `wit/fields` | `invoke --area wit --resource fields` | Resolves to `{project}/_apis/wit/fields/{fieldNameOrRefName}`. |
 | Type fields: GET `wit/workitemtypes/{type}/fields?$expand=allowedValues` | `invoke --area wit --resource workItemTypesField` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/fields/{field}`. |
@@ -204,6 +225,12 @@ host.
   `az login`, and a plan write reports `unsupported_capability`, which
   proves no write. The az rest route, GitHub, and local Markdown behave as
   before.
+- #304 ports Boards intake: work item reads, the queue, state metadata,
+  update history, comments, and tag updates (`boards_extension.go`), and
+  read-only startup checks that run only `az repos show` and `az boards
+  query` (`extension_doctor.go`). The checks tell a missing or expired login,
+  a missing extension (`ExtensionMissingError`), a timeout, and an
+  unreachable service apart.
 - `store.PlanNode` and `publication.planGraph` carry no target yet; #305
   adds the plan node field, its validation, and the adapter rendering.
 - **Residual authentication risk.** The extension tries an `az login` token
@@ -213,9 +240,11 @@ host.
   operator who must use only the PAT runs Factory as a user without an
   `az login` session. Factory adds no environment isolation it cannot
   verify.
-- The unresolved inventory rows (identity, permission evaluation, Markdown
-  descriptions, the comment API version) need a decision or live evidence
-  in #304 and #305 before those features ship on this route.
+- Identity and permission evaluation are not available on this route
+  (decision 12). Markdown descriptions on create need a decision in #305.
+  The comment API version `7.1-preview` and the `multilineFieldsFormat` of
+  the batch read need live evidence; a comment that the service does not
+  store as Markdown fails instead of passing.
 - Git push and fetch keep their own credential helper or SSH agent;
   `az devops login` does not configure Git.
 

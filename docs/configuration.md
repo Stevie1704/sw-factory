@@ -408,9 +408,23 @@ An existing registration without `route` keeps the `az rest` route.
   repeat `repository`, and only this route accepts it.
 - **Worker boundary.** Workers refuse every `AZURE_DEVOPS_EXT_*` and `*_PAT`
   environment variable.
-- **Status.** The route, its command seam, the assignment tag, and the
-  frozen repository identity exist. Boards intake, plan publication, and pull
-  requests on this route arrive with #304 to #306; until then each such
+- **Startup checks.** `factory doctor` runs only `az repos show` and
+  `az boards query` on this route and never writes. It reports a missing or
+  expired login (`run az devops login`), a missing extension
+  (`run az extension add --name azure-devops`), a timeout, and an
+  unreachable service as different failures. The identity and permission
+  checks show as skipped: no verified command on this route reads the
+  signed-in identity or evaluates its permissions. Check by hand that the
+  PAT's identity has Contribute, Create branch, and Contribute to pull
+  requests on the repository, View and Edit work items in the project, and
+  Create tag definition.
+- **Status comments.** Without a signed-in identity, the factory finds a
+  run's status comment by its marker alone. When more than one comment
+  holds the marker, the run stops with an error; delete the copies the
+  factory did not write.
+- **Status.** The route, its command seam, the assignment tag, the frozen
+  repository identity, and Boards intake (#304) exist. Plan publication and
+  pull requests on this route arrive with #305 and #306; until then each such
   operation fails with an error and never falls back to `az rest`. ADR 0030
   lists the command for each operation and the operations that are still
   unresolved.
