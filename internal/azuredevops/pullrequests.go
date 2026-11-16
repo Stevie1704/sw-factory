@@ -141,6 +141,9 @@ func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Rep
 	if err := validateBranches(headBranch, baseBranch); err != nil {
 		return nil, err
 	}
+	if c.extensionRoute() {
+		return c.extensionPullRequestIDs(ctx, repository, headBranch, baseBranch)
+	}
 	query := url.Values{
 		"searchCriteria.sourceRefName": {branchRef(headBranch)},
 		"searchCriteria.targetRefName": {branchRef(baseBranch)},
@@ -166,6 +169,13 @@ func (c *Client) exactPullRequestIDs(ctx context.Context, repository tracker.Rep
 // description to 400 characters, so a body that regeneration preserves must
 // come from this read.
 func (c *Client) pullRequestByID(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+	if c.extensionRoute() {
+		response, err := c.extensionPullRequest(ctx, repository, number, "")
+		if err != nil {
+			return codehost.PullRequest{}, err
+		}
+		return response.pullRequest(repository), nil
+	}
 	var response pullRequestResponse
 	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullrequests/%d", number), nil)}, &response); err != nil {
 		return codehost.PullRequest{}, fmt.Errorf("read pull request %d: %w", number, err)
@@ -177,6 +187,9 @@ func (c *Client) pullRequestByID(ctx context.Context, repository tracker.Reposit
 func (c *Client) CreatePullRequest(ctx context.Context, repository tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	if err := validatePullRequestRequest(repository, request); err != nil {
 		return codehost.PullRequest{}, err
+	}
+	if c.extensionRoute() {
+		return c.extensionCreatePullRequest(ctx, repository, request)
 	}
 	payload := map[string]any{
 		"sourceRefName": branchRef(request.HeadBranch),
@@ -197,6 +210,13 @@ func (c *Client) UpdatePullRequest(ctx context.Context, repository tracker.Repos
 	if err := validatePullRequestRequest(repository, request); err != nil {
 		return codehost.PullRequest{}, err
 	}
+	if c.extensionRoute() {
+		text, err := pullRequestTextArgs(request)
+		if err != nil {
+			return codehost.PullRequest{}, err
+		}
+		return c.extensionUpdatePullRequest(ctx, repository, number, text, fmt.Sprintf("update pull request %d", number))
+	}
 	payload := map[string]any{"title": request.Title, "description": request.Body}
 	return c.sendPullRequest(ctx, repository, "PATCH", fmt.Sprintf("/pullrequests/%d", number), payload, fmt.Sprintf("update pull request %d", number))
 }
@@ -205,6 +225,9 @@ func (c *Client) UpdatePullRequest(ctx context.Context, repository tracker.Repos
 func (c *Client) SetPullRequestDraft(ctx context.Context, repository tracker.Repository, number int, draft bool) (codehost.PullRequest, error) {
 	if err := validatePullRequestTarget(repository, number); err != nil {
 		return codehost.PullRequest{}, err
+	}
+	if c.extensionRoute() {
+		return c.extensionUpdatePullRequest(ctx, repository, number, []string{"--draft", strconv.FormatBool(draft)}, fmt.Sprintf("set pull request %d draft=%t", number, draft))
 	}
 	return c.sendPullRequest(ctx, repository, "PATCH", fmt.Sprintf("/pullrequests/%d", number), map[string]any{"isDraft": draft}, fmt.Sprintf("set pull request %d draft=%t", number, draft))
 }
@@ -287,7 +310,13 @@ func (c *Client) CreateCommitStatus(ctx context.Context, repository tracker.Repo
 	if status.TargetURL != "" {
 		payload["targetUrl"] = status.TargetURL
 	}
-	if err := c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, "/commits/"+status.SHA+"/statuses", nil), Body: payload}, nil); err != nil {
+	var err error
+	if c.extensionRoute() {
+		err = c.gitInvoke(ctx, repository, "POST", "statuses", map[string]string{"commitId": status.SHA}, nil, payload, nil)
+	} else {
+		err = c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, "/commits/"+status.SHA+"/statuses", nil), Body: payload}, nil)
+	}
+	if err != nil {
 		return fmt.Errorf("publish commit status for %s: %w", status.SHA, err)
 	}
 	return nil
@@ -320,7 +349,13 @@ func (c *Client) ListCommitStatuses(ctx context.Context, repository tracker.Repo
 			} `json:"value"`
 		}
 		query := url.Values{"latestOnly": {"false"}, "top": {strconv.Itoa(statusPageSize)}, "skip": {strconv.Itoa(skip)}}
-		if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/commits/"+sha+"/statuses", query)}, &response); err != nil {
+		var err error
+		if c.extensionRoute() {
+			err = c.gitInvoke(ctx, repository, "GET", "statuses", map[string]string{"commitId": sha}, map[string]string{"latestOnly": "false", "top": strconv.Itoa(statusPageSize), "skip": strconv.Itoa(skip)}, nil, &response)
+		} else {
+			err = c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, "/commits/"+sha+"/statuses", query)}, &response)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("list commit statuses for %s: %w", sha, err)
 		}
 		for _, value := range response.Value {
@@ -410,7 +445,13 @@ func (c *Client) threads(ctx context.Context, repository tracker.Repository, num
 	var response struct {
 		Value []threadResponse `json:"value"`
 	}
-	if err := c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil)}, &response); err != nil {
+	var err error
+	if c.extensionRoute() {
+		err = c.gitInvoke(ctx, repository, "GET", "pullRequestThreads", map[string]string{"pullRequestId": strconv.Itoa(number)}, nil, nil, &response)
+	} else {
+		err = c.call(ctx, request{Method: "GET", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil)}, &response)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("list threads of pull request %d: %w", number, err)
 	}
 	return response.Value, nil
@@ -472,6 +513,9 @@ func (c *Client) PullRequestReviews(ctx context.Context, repository tracker.Repo
 // reviewerLogins maps the normalized identity id of every reviewer of a pull
 // request to its login. A vote adds the voter as a reviewer.
 func (c *Client) reviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
+	if c.extensionRoute() {
+		return c.extensionReviewerLogins(ctx, repository, number)
+	}
 	var response struct {
 		Value []struct {
 			ID         string `json:"id"`
@@ -581,7 +625,13 @@ func (c *Client) CreatePullRequestComment(ctx context.Context, repository tracke
 		"status":   "closed",
 	}
 	var response threadResponse
-	if err := c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil), Body: payload}, &response); err != nil {
+	var err error
+	if c.extensionRoute() {
+		err = c.gitInvoke(ctx, repository, "POST", "pullRequestThreads", map[string]string{"pullRequestId": strconv.Itoa(number)}, nil, payload, &response)
+	} else {
+		err = c.call(ctx, request{Method: "POST", URL: repositoryURL(repository, fmt.Sprintf("/pullRequests/%d/threads", number), nil), Body: payload}, &response)
+	}
+	if err != nil {
 		return tracker.Comment{}, fmt.Errorf("create comment on pull request %d: %w", number, err)
 	}
 	if len(response.Comments) == 0 {
@@ -605,7 +655,14 @@ func (c *Client) EditPullRequestComment(ctx context.Context, repository tracker.
 		return fmt.Errorf("%q is not a comment identity of pull request %d", commentID, number)
 	}
 	path := fmt.Sprintf("/pullRequests/%d/threads/%d/comments/%d", number, thread, id)
-	if err := c.call(ctx, request{Method: "PATCH", URL: repositoryURL(repository, path, nil), Body: map[string]string{"content": body}}, nil); err != nil {
+	var err error
+	if c.extensionRoute() {
+		route := map[string]string{"pullRequestId": strconv.Itoa(number), "threadId": strconv.Itoa(thread), "commentId": strconv.Itoa(id)}
+		err = c.gitInvoke(ctx, repository, "PATCH", "pullRequestThreadComments", route, nil, map[string]string{"content": body}, nil)
+	} else {
+		err = c.call(ctx, request{Method: "PATCH", URL: repositoryURL(repository, path, nil), Body: map[string]string{"content": body}}, nil)
+	}
+	if err != nil {
 		return fmt.Errorf("edit comment %d of thread %d on pull request %d: %w", id, thread, number, err)
 	}
 	return nil

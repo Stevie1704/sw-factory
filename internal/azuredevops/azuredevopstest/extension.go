@@ -74,14 +74,26 @@ func ParseExtensionCall(args []string) (ExtensionCall, error) {
 	}
 	call := ExtensionCall{Flags: map[string][]string{}}
 	flag := ""
+	bound := false
 	for _, arg := range args {
+		if err := refuseFileReference(arg); err != nil {
+			return ExtensionCall{}, err
+		}
 		switch {
 		case strings.HasPrefix(arg, "--"):
-			flag = arg
+			name, value, inline := strings.Cut(arg, "=")
+			flag = name
 			if _, seen := call.Flags[flag]; seen {
 				return ExtensionCall{}, fmt.Errorf("fake az: flag %s repeats", flag)
 			}
 			call.Flags[flag] = []string{}
+			if inline {
+				// --flag=value binds exactly one value, as argparse does.
+				call.Flags[flag] = []string{value}
+			}
+			bound = inline
+		case bound:
+			return ExtensionCall{}, fmt.Errorf("fake az: value %q follows a --flag=value argument", arg)
 		case flag == "":
 			call.Command = append(call.Command, arg)
 		default:
@@ -102,6 +114,20 @@ func ParseExtensionCall(args []string) (ExtensionCall, error) {
 		call.Body = string(body)
 	}
 	return call, nil
+}
+
+// refuseFileReference refuses an argument that Azure CLI would replace by a
+// file's content: one whose value, after the first '=' when there is one,
+// starts with '@' (azure-cli core _expand_file_prefixed_files).
+func refuseFileReference(arg string) error {
+	value := arg
+	if _, after, ok := strings.Cut(arg, "="); ok {
+		value = after
+	}
+	if strings.HasPrefix(value, "@") {
+		return fmt.Errorf("fake az: argument %q would be read as a file by Azure CLI", arg)
+	}
+	return nil
 }
 
 // firstToken returns the first argument, or a placeholder for an empty
