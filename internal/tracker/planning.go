@@ -59,6 +59,18 @@ type BoundedPlanLookup interface {
 	PlanLookupBound() string
 }
 
+// PlanItemVerifier is an optional PlanPublisher capability. An adapter that
+// writes metadata beyond the correlation, for example a repository
+// assignment (ADR 0030), implements it, so that publication and
+// reconciliation adopt an item found by correlation only when that
+// metadata matches the approved item. A mismatch is never adopted and
+// never rewritten.
+type PlanItemVerifier interface {
+	// VerifyPlanItem returns an error that names the difference when the
+	// existing item ref does not match the approved item.
+	VerifyPlanItem(ctx context.Context, repository Repository, item RenderedPlanItem, ref PlanItemRef) error
+}
+
 // PlanGraph is the provider-neutral input of PreflightPlan: one approved or
 // reviewable plan revision. It carries plan content and traceability
 // identities only, never conversation turns.

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
 )
 
@@ -73,6 +74,9 @@ func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (stor
 		adopted := false
 		for _, candidate := range candidates {
 			if candidate.ExternalID == request.ExternalID {
+				if err := p.verifyApprovedItem(ctx, history, operation.NodeID, candidate); err != nil {
+					return store.PublicationOperation{}, fmt.Errorf("%w: tracker item %q does not match the approved item: %v", ErrReconciliationRefused, request.ExternalID, err)
+				}
 				operation.State, operation.ExternalID, operation.URL = store.PublicationOperationSucceeded, candidate.ExternalID, candidate.URL
 				operation.Detail = "the operator adopted tracker item " + candidate.ExternalID
 				adopted = true
@@ -88,6 +92,28 @@ func (p *Publisher) Reconcile(ctx context.Context, request Reconciliation) (stor
 		return operation, p.recordCancelledReconciliation(ctx, history, request.ReceiptID, operation)
 	}
 	return p.Store.RecordPublicationOperation(ctx, operation)
+}
+
+// verifyApprovedItem checks the candidate against the approved item of node
+// when the tracker can verify more than the correlation.
+func (p *Publisher) verifyApprovedItem(ctx context.Context, history store.IdeationHistory, node string, candidate tracker.PlanItemRef) error {
+	if _, ok := p.Tracker.(tracker.PlanItemVerifier); !ok {
+		return nil
+	}
+	approval, ok := currentApproval(history)
+	if !ok {
+		return fmt.Errorf("the session has no current approval")
+	}
+	approved, err := decodeApproval(approval)
+	if err != nil {
+		return err
+	}
+	for _, item := range approved.Items {
+		if item.NodeID == node {
+			return p.verifyPlanItem(ctx, item, candidate)
+		}
+	}
+	return fmt.Errorf("the approval has no item for node %s", node)
 }
 
 // recordCancelledReconciliation records the reconciled operation and an

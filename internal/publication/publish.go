@@ -358,6 +358,11 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 	}
 	switch {
 	case len(candidates) == 1:
+		if err := e.publisher.verifyPlanItem(ctx, e.items[operation.NodeID], candidates[0]); err != nil {
+			detail := fmt.Sprintf("tracker item %s carries correlation %s but does not match the approved item: %v; correct the item in the tracker, then retry",
+				candidates[0].ExternalID, operation.Correlation, err)
+			return e.halt(ctx, index, store.PublicationOperationAmbiguous, detail)
+		}
 		return "", e.succeed(ctx, index, candidates[0], "found by correlation lookup")
 	case len(candidates) > 1:
 		detail := fmt.Sprintf("%d tracker items carry correlation %s (%s); adopt one through reconciliation",
@@ -380,6 +385,17 @@ func (e *execution) createItem(ctx context.Context, index int) (string, error) {
 	default:
 		return e.halt(ctx, index, store.PublicationOperationAmbiguous, fmt.Sprintf("create outcome is unknown: %v; retry reconciles before it creates again%s", err, e.lookupBound()))
 	}
+}
+
+// verifyPlanItem checks an item found by correlation against the approved
+// item when the tracker can verify more than the correlation, and accepts
+// it otherwise.
+func (p *Publisher) verifyPlanItem(ctx context.Context, item tracker.RenderedPlanItem, ref tracker.PlanItemRef) error {
+	verifier, ok := p.Tracker.(tracker.PlanItemVerifier)
+	if !ok {
+		return nil
+	}
+	return verifier.VerifyPlanItem(ctx, p.Repository, item, ref)
 }
 
 // lookupBound returns the note that names the items a bounded correlation

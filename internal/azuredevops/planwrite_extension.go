@@ -54,6 +54,40 @@ func assignmentTags(labels []string) []string {
 	return found
 }
 
+var _ tracker.PlanItemVerifier = (*Client)(nil)
+
+// VerifyPlanItem accepts an existing work item found by correlation only
+// when it is in the registered project, has the approved type, and carries
+// exactly the approved repository assignment: the target's one
+// factory-repo tag, or none for an item without a target (ADR 0030
+// decision 10). It never changes the item. The az rest route has no
+// assignment and accepts the item as before.
+func (c *Client) VerifyPlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem, ref tracker.PlanItemRef) error {
+	if !c.extensionRoute() {
+		return nil
+	}
+	id, err := workItemID(ref)
+	if err != nil {
+		return err
+	}
+	current, err := c.extensionWorkItem(ctx, repository, id)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(current.Fields.Type, item.Type) {
+		return fmt.Errorf("work item %d is a %s, not the approved %s", id, current.Fields.Type, item.Type)
+	}
+	found := assignmentTags(splitTags(current.Fields.Tags))
+	want := []string{}
+	if item.TargetRepository != nil {
+		want = append(want, RepositoryAssignmentTag(item.TargetRepository.ID))
+	}
+	if !slices.EqualFunc(found, want, strings.EqualFold) {
+		return fmt.Errorf("work item %d has the repository assignment %q, but the approved item has %q; Factory neither adopts nor retargets it", id, found, want)
+	}
+	return nil
+}
+
 // extensionCreatePlanItem creates the rendered item with az boards
 // work-item create in the registered project: its type, title, description,
 // correlation and assignment tags, and configured fields, nothing else.
