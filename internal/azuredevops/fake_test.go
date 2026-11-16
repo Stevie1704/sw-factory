@@ -30,11 +30,15 @@ func (c azCall) route() string {
 }
 
 // fakeAz is a scripted az CLI. It answers az rest calls from a route table
-// keyed by "METHOD /path" and records every call for assertions.
+// keyed by "METHOD /path", and extension-route commands (ADR 0030) keyed by
+// azuredevopstest.ExtensionCall.Route, and records every call for
+// assertions.
 type fakeAz struct {
 	t      *testing.T
 	routes map[string][]string
 	calls  []azCall
+	// extensionCalls records the extension-route commands in order.
+	extensionCalls []azuredevopstest.ExtensionCall
 }
 
 // newFakeAz returns a fake az CLI with an empty route table.
@@ -50,20 +54,35 @@ func (f *fakeAz) on(route string, responses ...string) *fakeAz {
 	return f
 }
 
-// Run parses one az rest command line and returns the scripted response.
+// Run parses one az command line and returns the scripted response.
 func (f *fakeAz) Run(_ context.Context, args []string) ([]byte, error) {
+	if azuredevopstest.IsExtensionCall(args) {
+		call, err := azuredevopstest.ParseExtensionCall(args)
+		if err != nil {
+			f.t.Error(err)
+			return nil, err
+		}
+		f.extensionCalls = append(f.extensionCalls, call)
+		return f.respond(call.Route())
+	}
 	call, err := parseAzCall(f.t, args)
 	if err != nil {
 		return nil, err
 	}
 	f.calls = append(f.calls, call)
-	responses := f.routes[call.route()]
+	return f.respond(call.route())
+}
+
+// respond returns the next scripted response of route. A response that
+// begins with "error:" becomes an error.
+func (f *fakeAz) respond(route string) ([]byte, error) {
+	responses := f.routes[route]
 	if len(responses) == 0 {
-		return nil, errors.New("fake az: no route for " + call.route())
+		return nil, errors.New("fake az: no route for " + route)
 	}
 	response := responses[0]
 	if len(responses) > 1 {
-		f.routes[call.route()] = responses[1:]
+		f.routes[route] = responses[1:]
 	}
 	if strings.HasPrefix(response, "error:") {
 		return nil, errors.New(strings.TrimPrefix(response, "error:"))

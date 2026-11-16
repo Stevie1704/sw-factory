@@ -140,6 +140,8 @@ type Boards struct {
 	faults map[string]fault
 	held   map[string]bool
 	calls  []Call
+	// extensionCalls records the extension-route commands (ADR 0030).
+	extensionCalls []ExtensionCall
 }
 
 // NewBoards returns an empty project with the given process and
@@ -226,10 +228,20 @@ func (b *Boards) Calls() []Call {
 	return slices.Clone(b.calls)
 }
 
-// Run answers one az rest invocation.
+// ExtensionCalls returns every recorded extension-route command in order.
+func (b *Boards) ExtensionCalls() []ExtensionCall {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.extensionCalls)
+}
+
+// Run answers one az rest invocation or one extension-route command.
 func (b *Boards) Run(ctx context.Context, args []string) ([]byte, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if IsExtensionCall(args) {
+		return b.runExtension(args)
+	}
 	call, err := ParseCall(args)
 	if err != nil {
 		b.t.Errorf("scripted az: %v", err)
