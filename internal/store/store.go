@@ -19,7 +19,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 51
+const CurrentSchemaVersion = 52
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -573,6 +573,30 @@ type ProtectedTestPath struct {
 	SHA256 string `json:"sha256"`
 }
 
+// TrackerRepository is the stable identity of the Azure Repos repository
+// that a run was assigned to by its factory-repo tag, frozen at claim.
+type TrackerRepository struct {
+	// Organization is the Azure DevOps organization name.
+	Organization string `json:"organization"`
+	// ProjectID and Project identify the project of the repository.
+	ProjectID string `json:"project_id"`
+	Project   string `json:"project"`
+	// RepositoryID is the repository GUID the assignment tag names, and
+	// Repository is its name at claim time.
+	RepositoryID string `json:"repository_id"`
+	Repository   string `json:"repository"`
+}
+
+// validate requires every identity field as a single line.
+func (r TrackerRepository) validate() error {
+	for _, value := range []string{r.Organization, r.ProjectID, r.Project, r.RepositoryID, r.Repository} {
+		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\x00\r\n") {
+			return errors.New("run tracker repository must name organization, project, and repository identities as single lines")
+		}
+	}
+	return nil
+}
+
 // Run is the persisted operational identity and current state of one run.
 type Run struct {
 	ID             string
@@ -702,8 +726,13 @@ type Run struct {
 	// ClarificationCommentID identifies the question comment already published
 	// for the current pending clarification set.
 	ClarificationCommentID string
-	CreatedAt              time.Time
-	UpdatedAt              time.Time
+	// TrackerRepository is the repository identity validated at claim for an
+	// Azure DevOps extension-route run (ADR 0030). Once set, the store
+	// refuses any change, so a tag edit cannot redirect active work. Nil
+	// for every other run.
+	TrackerRepository *TrackerRepository
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // Invocation is the persisted recoverable identity of one harness session.
@@ -1026,6 +1055,7 @@ const runColumns = `id, repository_path, issue_number, stage, status, branch, wo
 	harness_override, check_repair_attempts, check_repair_budget,
 	check_repair_pending_attempt,
 	specification_packet, pending_questions, clarification_comment_id,
+	tracker_repository,
 	terminal_at, created_at, updated_at`
 
 // scanRun decodes one operational run row in runColumns order and its
@@ -1039,7 +1069,7 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 	var testRevisionHistoryJSON, testObjectionJSON, testRevisionBaseChangedPathsJSON string
 	var testExemptionJSON, protectedTestPathsJSON string
 	var activeInvocationIDsJSON string
-	var pendingQuestionsJSON, clarificationCommentID, terminalAt, createdAt, updatedAt string
+	var pendingQuestionsJSON, clarificationCommentID, trackerRepositoryJSON, terminalAt, createdAt, updatedAt string
 	var err error
 	if err := row.Scan(
 		&run.ID,
@@ -1095,6 +1125,7 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 		&run.SpecificationPacket,
 		&pendingQuestionsJSON,
 		&clarificationCommentID,
+		&trackerRepositoryJSON,
 		&terminalAt,
 		&createdAt,
 		&updatedAt,
@@ -1189,6 +1220,12 @@ func scanRun(row interface{ Scan(...any) error }) (*Run, error) {
 		}
 	}
 	run.ClarificationCommentID = clarificationCommentID
+	if trackerRepositoryJSON != "" {
+		run.TrackerRepository = &TrackerRepository{}
+		if err := json.Unmarshal([]byte(trackerRepositoryJSON), run.TrackerRepository); err != nil {
+			return nil, fmt.Errorf("decode tracker repository: %w", err)
+		}
+	}
 	if terminalAt != "" {
 		run.TerminalAt, err = time.Parse(time.RFC3339Nano, terminalAt)
 		if err != nil {
@@ -1469,6 +1506,11 @@ func normalizeRun(run Run) (Run, error) {
 	}
 	if strings.ContainsAny(run.ClarificationCommentID, "\x00\r\n") {
 		return Run{}, errors.New("run clarification comment id contains a control character")
+	}
+	if run.TrackerRepository != nil {
+		if err := run.TrackerRepository.validate(); err != nil {
+			return Run{}, err
+		}
 	}
 	if err := validatePendingQuestions(run.PendingQuestions); err != nil {
 		return Run{}, err
@@ -2017,6 +2059,10 @@ func runValues(run Run) ([]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode pending questions: %w", err)
 	}
+	trackerRepository, err := nullableJSON(run.TrackerRepository)
+	if err != nil {
+		return nil, fmt.Errorf("encode tracker repository: %w", err)
+	}
 	return []any{
 		run.ID,
 		run.RepositoryPath,
@@ -2071,6 +2117,7 @@ func runValues(run Run) ([]any, error) {
 		run.SpecificationPacket,
 		pendingQuestions,
 		run.ClarificationCommentID,
+		trackerRepository,
 		terminalAtValue(run.TerminalAt),
 		run.CreatedAt.UTC().Format(runTimestampLayout),
 		run.UpdatedAt.UTC().Format(runTimestampLayout),
@@ -2105,7 +2152,7 @@ const saveRunStatement = `
 			last_command_name, last_command_outcome,
 			last_command_message, harness_override, check_repair_attempts,
 			check_repair_budget, check_repair_pending_attempt, specification_packet,
-			pending_questions, clarification_comment_id,
+			pending_questions, clarification_comment_id, tracker_repository,
 			terminal_at, created_at, updated_at
 		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -2113,7 +2160,7 @@ const saveRunStatement = `
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			repository_path = excluded.repository_path,
@@ -2168,6 +2215,7 @@ const saveRunStatement = `
 			specification_packet = excluded.specification_packet,
 			pending_questions = excluded.pending_questions,
 			clarification_comment_id = excluded.clarification_comment_id,
+			tracker_repository = excluded.tracker_repository,
 			terminal_at = excluded.terminal_at,
 			updated_at = excluded.updated_at`
 
@@ -2190,7 +2238,7 @@ const saveRunIfRevisionStatement = `
 			last_command_name = ?, last_command_outcome = ?,
 			last_command_message = ?, harness_override = ?, check_repair_attempts = ?,
 			check_repair_budget = ?, check_repair_pending_attempt = ?, specification_packet = ?,
-			pending_questions = ?, clarification_comment_id = ?,
+			pending_questions = ?, clarification_comment_id = ?, tracker_repository = ?,
 			terminal_at = ?, created_at = ?, updated_at = ?
 		WHERE id = ? AND revision = ?`
 
@@ -2990,6 +3038,15 @@ func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int,
 	return version, nil
 }
 
+// trackerRepositoryTrigger refuses to change or clear the frozen repository
+// identity of a run once set (ADR 0030).
+const trackerRepositoryTrigger = `CREATE TRIGGER IF NOT EXISTS operational_runs_tracker_repository_frozen
+		BEFORE UPDATE OF tracker_repository ON operational_runs
+		WHEN OLD.tracker_repository <> '' AND NEW.tracker_repository <> OLD.tracker_repository
+		BEGIN
+			SELECT RAISE(ABORT, 'the frozen tracker repository of a run cannot change');
+		END`
+
 // migrate applies supported schema migrations from the specified version through the current schema version in a single transaction. It records each completed migration and leaves the database unchanged if a migration fails.
 func migrate(ctx context.Context, database *sql.DB, from int) error {
 	tx, err := database.BeginTx(ctx, nil)
@@ -3572,6 +3629,13 @@ func migrate(ctx context.Context, database *sql.DB, from int) error {
 			if err := migrateLocalClaims(ctx, tx); err != nil {
 				return fmt.Errorf("apply store migration 51: %w", err)
 			}
+		case 52:
+			if err := addOperationalRunColumnIfMissing(ctx, tx, "tracker_repository"); err != nil {
+				return fmt.Errorf("apply store migration 52: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, trackerRepositoryTrigger); err != nil {
+				return fmt.Errorf("apply store migration 52: %w", err)
+			}
 		default:
 			return fmt.Errorf("no migration registered for schema version %d", version+1)
 		}
@@ -3613,6 +3677,9 @@ func addOperationalRunColumnIfMissing(ctx context.Context, tx *sql.Tx, column st
 	switch column {
 	case "pull_request_summary":
 		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN pull_request_summary TEXT NOT NULL DEFAULT ''")
+		return err
+	case "tracker_repository":
+		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN tracker_repository TEXT NOT NULL DEFAULT ''")
 		return err
 	default:
 		return fmt.Errorf("refuse unknown operational run column %q", column)
