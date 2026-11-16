@@ -86,6 +86,18 @@ func TestExtensionPreflightRendersAnEpicWithDirectPBIsAndTheirTargets(t *testing
 	}
 }
 
+// TestExtensionPreflightRefusesDeniedPermissions proves that approval cannot
+// be obtained when the caller cannot edit work items or create metadata tags.
+func TestExtensionPreflightRefusesDeniedPermissions(t *testing.T) {
+	t.Parallel()
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.ScrumProcess())
+	boards.FailOnce("factory-devops permission", "TF401027: permission denied", false)
+	_, err := extensionPlanClient(boards, epicPBIMapping()).PreflightPlan(t.Context(), repository, targetedGraph())
+	if err == nil || len(boards.ExtensionWrites()) != 0 {
+		t.Fatalf("PreflightPlan() = %v, %d writes; want permission refusal without writes", err, len(boards.ExtensionWrites()))
+	}
+}
+
 // TestExtensionPreflightRefusesWithoutWrites verifies that every
 // incompatible configuration or plan fails before approval with a typed
 // error that proves no write, and never substitutes a mapping.

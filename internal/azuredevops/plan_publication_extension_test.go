@@ -175,6 +175,31 @@ func TestExtensionPublishStopsOnDuplicateCorrelationMatches(t *testing.T) {
 	}
 }
 
+// TestExtensionRetryRefusesAReassignedSuccessfulItem exercises a restart
+// after successful creates but a failed link: stored IDs still require
+// assignment validation before any further publication writes.
+func TestExtensionRetryRefusesAReassignedSuccessfulItem(t *testing.T) {
+	t.Parallel()
+
+	boards := azuredevopstest.NewBoards(t, azuredevopstest.ScrumProcess())
+	s := approvedExtensionSession(t, boards)
+	boards.FailOnce("link:102", "connection reset", false)
+	if first := s.publish("attempt-1"); first.Receipt.Outcome != store.PublicationOutcomeIncomplete {
+		t.Fatalf("first attempt = %#v, want incomplete", first.Receipt)
+	}
+	item := s.itemsByTitle()["Cache images/Product Backlog Item"]
+	boards.SetTags(item.ID, "operator@contoso.com", "factory-plan:session-1/1/n-2", webTag)
+	writes := len(boards.ExtensionWrites())
+	s.reopen()
+	retried, err := s.publisher().Publish(t.Context(), publication.Request{SessionID: "session-1", AttemptID: "attempt-2"})
+	if err == nil || !strings.Contains(err.Error(), "assignment") || retried.Session.State != store.IdeationStatePublicationIncomplete {
+		t.Fatalf("retry = %#v, %v; want assignment refusal with the incomplete session unchanged", retried, err)
+	}
+	if got := len(boards.ExtensionWrites()); got != writes {
+		t.Fatalf("retry made %d writes after a reassignment", got-writes)
+	}
+}
+
 // TestExtensionPublishRefusesAnExistingItemWithAnotherTarget verifies that an
 // item that carries the correlation tag but assigns another repository is
 // neither adopted nor retargeted: publication stops without a write to it,

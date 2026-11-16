@@ -78,6 +78,16 @@ func (f *fakeAz) Run(_ context.Context, args []string) ([]byte, error) {
 func (f *fakeAz) respond(route string) ([]byte, error) {
 	responses := f.routes[route]
 	if len(responses) == 0 {
+		// New read-only capabilities default to a permitted signed-in caller.
+		// Tests of identity/permission failures supply explicit route responses.
+		switch route {
+		case "factory-devops identity":
+			return []byte(`{"login":"factory@contoso.com"}`), nil
+		case "factory-devops permission":
+			return []byte(`{"granted":true}`), nil
+		case "devops invoke GET wit/classificationNodes":
+			return []byte(`{"identifier":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}`), nil
+		}
 		return nil, errors.New("fake az: no route for " + route)
 	}
 	response := responses[0]

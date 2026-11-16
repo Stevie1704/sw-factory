@@ -339,6 +339,7 @@ func (s *Service) regenerateDraftPullRequest(ctx context.Context, registration c
 	updateRequest := codehost.PullRequestRequest{
 		Title: localPullRequestTitle(packet), Body: body,
 		HeadBranch: run.Branch, BaseBranch: packet.RepositoryConfig.TargetBranch, Draft: true,
+		WorkItem: sourceWorkItem(run),
 	}
 	updated := existing
 	if _, journaled := runStore.(PendingEffectStore); journaled {

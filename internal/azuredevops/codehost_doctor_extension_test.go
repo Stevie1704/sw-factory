@@ -27,8 +27,7 @@ func readyCodeHost(t *testing.T) *fakeAz {
 // TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards verifies that
 // the code-host diagnosis on the extension route proves the az devops login
 // and the PR, ref, and status reads with Azure Repos commands only, never
-// touches Boards or az rest, and reports the unverifiable write permissions
-// as a non-blocking warning instead of a pass.
+// touches Boards or az rest, and validates effective write permissions.
 func TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards(t *testing.T) {
 	t.Parallel()
 
@@ -41,11 +40,8 @@ func TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards(t *testing.T) {
 	for _, result := range report.Results {
 		statuses = append(statuses, result.Status)
 	}
-	if len(statuses) != 3 || statuses[0] != doctor.StatusPassed || statuses[1] != doctor.StatusPassed || statuses[2] != doctor.StatusWarning {
-		t.Fatalf("statuses = %v, want authentication and access passed and permissions warned", statuses)
-	}
-	if warning := report.Results[2]; !strings.Contains(warning.Problem, "not verified") || strings.Contains(warning.Action, "az login ") {
-		t.Fatalf("permission result = %#v, want an unverified-permission warning without az login", warning)
+	if len(statuses) != 3 || statuses[0] != doctor.StatusPassed || statuses[1] != doctor.StatusPassed || statuses[2] != doctor.StatusPassed {
+		t.Fatalf("statuses = %v, want all read-only checks passed", statuses)
 	}
 	if len(az.calls) != 0 {
 		t.Fatalf("az rest calls = %d, want none", len(az.calls))
@@ -55,11 +51,11 @@ func TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards(t *testing.T) {
 			t.Fatalf("call %s needs Boards access", call.Route())
 		}
 	}
-	ref := az.extensionCalls[2]
+	ref := az.extensionCalled("repos ref list")[0]
 	if ref.Route() != "repos ref list" || ref.Flag("--filter") != "heads/main" || ref.Flag("--repository") != "service" {
 		t.Fatalf("ref call = %+v, want the default branch of the registered repository", ref.Flags)
 	}
-	status := az.extensionCalls[3]
+	status := az.extensionCalled("devops invoke GET git/statuses")[0]
 	if status.Parameters("--route-parameters")["commitId"] != strings.Repeat("d", 40) {
 		t.Fatalf("status call = %+v, want the default branch commit", status.Flags)
 	}

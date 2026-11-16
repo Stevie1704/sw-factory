@@ -14,19 +14,19 @@
       "scenario": "azure-extension-publish-and-execute",
       "evidence": "live",
       "outcome": "not-run",
-      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only"
     },
     {
       "scenario": "azure-extension-repository-assignment",
       "evidence": "deterministic",
       "outcome": "pass",
-      "reason": "scripted az only; two installations share one scripted project"
+      "reason": "scripted az only; two installations share one scripted project and each creates a PR in its frozen repository with its own native PBI association"
     },
     {
       "scenario": "azure-extension-repository-assignment",
       "evidence": "live",
       "outcome": "not-run",
-      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+      "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only"
     }
   ]
 }

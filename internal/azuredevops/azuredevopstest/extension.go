@@ -65,7 +65,7 @@ func (c ExtensionCall) Parameters(name string) map[string]string {
 }
 
 // extensionGroups are the command groups the extension route may run.
-var extensionGroups = map[string]bool{"boards": true, "repos": true, "devops": true}
+var extensionGroups = map[string]bool{"boards": true, "repos": true, "devops": true, "factory-devops": true}
 
 // ParseExtensionCall parses one extension-route command line and reads the
 // --in-file body. It refuses az rest, an unknown command group, and any
@@ -208,6 +208,10 @@ func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, 
 		return response, err
 	}
 	switch call.Route() {
+	case "factory-devops identity":
+		return map[string]string{"login": FactoryIdentity}, nil
+	case "factory-devops permission":
+		return map[string]bool{"granted": true}, nil
 	case "repos show":
 		return RepositoryResponse(call)
 	case "repos list":
@@ -218,6 +222,8 @@ func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, 
 			types = append(types, map[string]any{"name": value.Name, "isDisabled": value.Disabled})
 		}
 		return map[string]any{"count": len(types), "value": types}, nil
+	case "devops invoke GET wit/classificationNodes":
+		return map[string]string{"identifier": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}, nil
 	case "devops invoke GET work/backlogconfiguration":
 		return b.backlogConfiguration(), nil
 	case "devops invoke GET wit/fields":
@@ -312,6 +318,9 @@ func (b *Boards) extensionCreate(ctx context.Context, call ExtensionCall) (any, 
 // wiqlProject matches the explicit project condition of an extension WIQL.
 var wiqlProject = regexp.MustCompile(`\[System\.TeamProject\] = '([^']*)'`)
 
+// wiqlCursor is the exclusive lower ID bound used to page capped CLI queries.
+var wiqlCursor = regexp.MustCompile(`\[System\.Id\] > (\d+)`)
+
 // extensionQuery answers az boards query: every item whose tags contain the
 // text of every CONTAINS condition, as Azure DevOps matches substrings.
 func (b *Boards) extensionQuery(call ExtensionCall) (any, error) {
@@ -324,19 +333,24 @@ func (b *Boards) extensionQuery(call ExtensionCall) (any, error) {
 		b.t.Errorf("wiql %q does not name the scripted project explicitly", wiql)
 	}
 	conditions := wiqlTag.FindAllStringSubmatch(wiql, -1)
+	cursor := 0
+	if match := wiqlCursor.FindStringSubmatch(wiql); match != nil {
+		cursor, _ = strconv.Atoi(match[1])
+	}
 	found := []map[string]any{}
 	for _, item := range b.items {
-		matches := len(conditions) > 0
+		matches := len(conditions) > 0 && item.ID > cursor
 		for _, condition := range conditions {
 			matches = matches && slices.ContainsFunc(item.Tags(), func(tag string) bool {
 				return strings.Contains(strings.ToLower(tag), strings.ToLower(condition[1]))
 			})
 		}
 		if matches {
-			found = append(found, map[string]any{"id": item.ID, "fields": map[string]any{"System.Id": item.ID}})
+			found = append(found, map[string]any{"id": item.ID, "fields": map[string]any{"System.Id": item.ID, "System.Tags": strings.Join(item.Tags(), "; ")}})
 		}
 	}
-	return found, nil
+	slices.SortFunc(found, func(a, b map[string]any) int { return a["id"].(int) - b["id"].(int) })
+	return found[:min(1000, len(found))], nil
 }
 
 // extensionBatch answers the workItemsBatch read of the scripted project.

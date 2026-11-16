@@ -294,6 +294,15 @@ func (c extensionBackend) readPullRequest(ctx context.Context, repository tracke
 // updatePullRequest replaces the title and description with az repos pr
 // update.
 func (c extensionBackend) updatePullRequest(ctx context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	_, frozen, _, err := c.pullRequestTarget(ctx, repository, request.WorkItem)
+	if err != nil {
+		return codehost.PullRequest{}, fmt.Errorf("update pull request %d: %w", number, err)
+	}
+	if frozen != "" {
+		if _, err := c.extensionPullRequest(ctx, repository, number, frozen); err != nil {
+			return codehost.PullRequest{}, err
+		}
+	}
 	text, err := pullRequestTextArgs(request)
 	if err != nil {
 		return codehost.PullRequest{}, err

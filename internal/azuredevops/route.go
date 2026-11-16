@@ -71,8 +71,8 @@ type planBackend interface {
 	// checkPlanSupport refuses, before any call, a graph that the route
 	// cannot publish.
 	checkPlanSupport(graph tracker.PlanGraph) error
-	// preparePlan runs the route's preflight step: a permission check, or
-	// the assignment of repository targets to preview.
+	// preparePlan checks permissions and, on the extension route, assigns
+	// repository targets to preview.
 	preparePlan(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, graph tracker.PlanGraph, preview *tracker.PlanPreview) error
 	// planRead decodes one project resource for preflight: the az rest
 	// path, or the az devops invoke pair read, into destination.

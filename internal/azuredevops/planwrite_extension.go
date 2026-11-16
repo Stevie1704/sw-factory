@@ -121,17 +121,14 @@ func (c extensionBackend) createPlanItem(ctx context.Context, repository tracker
 }
 
 // findPlanItems returns every work item of the registered project, in any
-// state, whose tags hold the correlation tag exactly. az boards query sends
-// no project context, so the WIQL names the project; it returns at most
-// 1000 items, which a unique correlation tag does not reach.
+// state, whose tags hold the correlation tag exactly. The query names the
+// project explicitly and follows every capped CLI page before exact matching.
 func (c extensionBackend) findPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
 	tag := correlationTag(correlation)
 	wiql := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
-		" AND [System.Tags] CONTAINS " + wiqlString(tag) + " ORDER BY [System.Id]"
-	var found []struct {
-		ID int `json:"id"`
-	}
-	if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, &found); err != nil {
+		" AND [System.Tags] CONTAINS " + wiqlString(tag)
+	found, err := c.queryExtensionItems(ctx, repository, wiql)
+	if err != nil {
 		return nil, fmt.Errorf("query work items by correlation tag %s: %w", tag, err)
 	}
 	ids := make([]int, 0, len(found))

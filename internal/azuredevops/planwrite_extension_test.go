@@ -15,7 +15,7 @@ import (
 
 // markdownBody is a description with Markdown and HTML-significant text,
 // indentation, and blank lines.
-const markdownBody = "Cache the <base> image & reuse it.\n\n## Acceptance criteria\n\n- [ ] Cached \"twice\"\n  - nested 'item'\n\n```\nx := a < b\n```\n"
+const markdownBody = "Cache the &lt;base&gt; image & reuse it.\n\n## Acceptance criteria\n\n- [ ] Cached \"twice\"\n  - nested 'item'\n\n```\nx := a < b\n```\n\n[setup](https://example.com/setup)\n\n<strong>Required</strong>\n"
 
 // renderedPBI returns one rendered PBI that targets the web repository.
 func renderedPBI() tracker.RenderedPlanItem {
@@ -31,8 +31,8 @@ func renderedPBI() tracker.RenderedPlanItem {
 // TestExtensionCreatePlanItemUsesTheDedicatedCommand verifies that the
 // extension route creates the item with az boards work-item create, with
 // its exact title, its correlation and assignment tags, and its fields; that
-// the description, which the command can only store as HTML, reads back as
-// the approved Markdown text; and that no az rest call is made.
+// the description preserves headings, links, task lists, code, and inline
+// HTML as rendered content; and that no az rest call is made.
 func TestExtensionCreatePlanItemUsesTheDedicatedCommand(t *testing.T) {
 	t.Parallel()
 
@@ -54,15 +54,19 @@ func TestExtensionCreatePlanItemUsesTheDedicatedCommand(t *testing.T) {
 		strings.Join(created.Tags(), ",") != "factory-plan:s/1/n-2,factory-repo:"+azuredevopstest.WebRepositoryID || len(created.Formats) != 0 {
 		t.Fatalf("created = %#v, want the exact title, tags, and field in HTML format", created)
 	}
-	if strings.Contains(created.Description(), "<base>") || !strings.Contains(created.Description(), "&lt;base&gt;") {
-		t.Fatalf("description = %q, want every Markdown character escaped", created.Description())
+	for _, rendered := range []string{`<h2>Acceptance criteria</h2>`, `<a href="https://example.com/setup">setup</a>`, `<pre><code>x := a &lt; b`, `<input`, `<strong>Required</strong>`, `&lt;base&gt;`} {
+		if !strings.Contains(created.Description(), rendered) {
+			t.Fatalf("description = %q, missing rendered %q", created.Description(), rendered)
+		}
 	}
 	issue, err := client.Issue(t.Context(), repository, 101)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if issue.Body != strings.TrimSpace(markdownBody) {
-		t.Fatalf("read back body = %q\nwant %q", issue.Body, strings.TrimSpace(markdownBody))
+	for _, content := range []string{"Cache the <base> image & reuse it.", "Acceptance criteria", "x := a < b", "https://example.com/setup", "Required"} {
+		if !strings.Contains(issue.Body, content) {
+			t.Fatalf("read back body = %q, missing content %q", issue.Body, content)
+		}
 	}
 	if len(boards.Calls()) != 0 {
 		t.Fatalf("az rest calls = %d, want none", len(boards.Calls()))

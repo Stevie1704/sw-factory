@@ -678,16 +678,18 @@ scenarios:
       - "internal/azuredevops:TestExtensionRunnerTurnsAMissingOrExpiredLoginIntoARepairInstruction"
       - "internal/azuredevops:TestExtensionRunnerRedactsSecretsFromCLIErrors"
       - "internal/azuredevops:TestExtensionRouteNeverFallsBackToAzRest"
-      - "internal/azuredevops:TestExtensionStartupChecksPassReadOnlyChecksAndReportTheRestUnavailable"
+      - "internal/azuredevops:TestExtensionStartupChecksValidateIdentityAndPermissionsReadOnly"
       - "internal/azuredevops:TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly"
       - "internal/worker:TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment"
       - "internal/config:TestAnOmittedAzureRouteKeepsTheAzRestRoute"
       - "internal/config:TestValidateHostRejectsAnInvalidAzureRouteSelection"
-    gaps:
-      - issue: 302
-        summary: The extension route cannot read the signed-in identity, so doctor reports identity and permissions as skipped, status comments match by marker only, and pull-request clarification comments fail closed.
-      - issue: 302
-        summary: Work-item descriptions are created as escaped HTML that shows the approved Markdown text; az boards work-item create cannot set the Markdown format.
+      - "internal/azuredevops:TestCLIHelperSDKContract"
+      - "internal/azuredevops:TestExtensionRunnerLoadsAndRemovesTheEmbeddedHelper"
+      - "internal/azuredevops:TestExtensionPreflightRefusesDeniedPermissions"
+      - "internal/azuredevops:TestExtensionPlanPermissionsRefusesAChildAreaDenial"
+      - "internal/azuredevops:TestExtensionClarificationLookupRecoversOnlyTheAuthenticatedAuthorsComment"
+      - "internal/azuredevops:TestExtensionCreatePlanItemUsesTheDedicatedCommand"
+    gaps: []
 
   - id: azure-extension-repository-assignment
     title: Run PBIs of one Azure project in two repositories with separate installations
@@ -724,6 +726,9 @@ scenarios:
       - "internal/azuredevops:TestExtensionReplaceIssueLabelsKeepsAssignmentAndCorrelationTags"
       - "internal/azuredevops:TestExtensionPublishRefusesAnExistingItemWithAnotherTarget"
       - "internal/azuredevops:TestExtensionPublishRevalidatesTargetsBeforeWrites"
+      - "internal/azuredevops:TestExtensionRetryRefusesAReassignedSuccessfulItem"
+      - "internal/azuredevops:TestExtensionAdoptionRefusesAReplacementBeforeUpdating"
+      - "internal/azuredevops:TestExtensionQueueContinuesPastIneligibleItems"
       - "internal/azuredevops:TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository"
       - "internal/azuredevops:TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository"
       - "internal/azuredevops:TestEnsurePullRequestWorkItemRecoversAMissingAssociation"

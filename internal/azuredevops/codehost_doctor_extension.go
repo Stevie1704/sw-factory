@@ -12,9 +12,8 @@ import (
 
 // codeHostStartupChecks diagnoses Azure Repos on the extension
 // route with read-only az repos and az devops invoke probes. It needs
-// neither Boards nor az login. The extension route has no verified
-// permission evaluation (ADR 0030), so the write permissions are reported
-// as unverified, never as passed.
+// neither Boards nor az login. The CLI helper reads the current identity
+// and evaluates effective repository permissions without any mutation.
 func (c extensionBackend) codeHostStartupChecks(repository tracker.Repository) []doctor.Check {
 	defaultBranch := ""
 	return []doctor.Check{
@@ -24,6 +23,9 @@ func (c extensionBackend) codeHostStartupChecks(repository tracker.Repository) [
 				return extensionCodeHostSignInFailure(repository, err)
 			}
 			defaultBranch = branch
+			if _, err := c.AuthenticatedLogin(ctx); err != nil {
+				return extensionCodeHostSignInFailure(repository, err)
+			}
 			return doctor.Success("azure_devops.code_host.authentication.ready", "Azure Repos authentication")
 		},
 		func(ctx context.Context) doctor.Result {
@@ -32,11 +34,11 @@ func (c extensionBackend) codeHostStartupChecks(repository tracker.Repository) [
 			}
 			return doctor.Success("azure_devops.code_host.access.ready", "Azure Repos PR and status access")
 		},
-		func(context.Context) doctor.Result {
-			return doctor.Warning(doctor.Condition{Code: "azure_devops.code_host.permissions.unverified", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "setup", Unobserved: true},
-				"Azure Repos write permissions",
-				"repository Contribute, Create branch, and Contribute to pull requests permissions are not verified on the devops_extension route, because it has no verified permission evaluation",
-				"confirm that the az devops login identity holds these permissions on "+repository.String()+"; Git push needs its own credential helper or SSH agent")
+		func(ctx context.Context) doctor.Result {
+			if err := c.extensionGitPermissions(ctx, repository); err != nil {
+				return doctor.Failure(permissionsInsufficient, "Azure Repos write permissions", err.Error(), "grant the az devops login identity Contribute, Create branch, and Contribute to pull requests on "+repository.String())
+			}
+			return doctor.Success("azure_devops.code_host.permissions.ready", "Azure Repos write permissions")
 		},
 	}
 }

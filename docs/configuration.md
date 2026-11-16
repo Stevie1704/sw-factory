@@ -420,18 +420,19 @@ An existing registration without `route` keeps the `az rest` route.
   repeat `repository`, and only this route accepts it.
 - **Worker boundary.** Workers refuse every `AZURE_DEVOPS_EXT_*` and `*_PAT`
   environment variable.
-- **Startup checks.** `factory doctor` runs only `az repos show` and
-  `az boards query` on this route and never writes. It reports a missing or
+- **Startup checks.** `factory doctor` runs read-only repository, paged Boards,
+  authenticated identity, and effective-permission probes and never writes.
+  It reports a missing or
   expired login (`run az devops login`), a missing extension
   (`run az extension add --name azure-devops`), a timeout, and an
   unreachable service as different failures. It warns about agent-ready
   work items that carry no usable `factory-repo` tag, because no
-  installation claims them. The identity and permission
-  checks show as skipped: no verified command on this route reads the
-  signed-in identity or evaluates its permissions. Check by hand that the
-  PAT's identity has Contribute, Create branch, and Contribute to pull
-  requests on the repository, View and Edit work items in the project, and
-  Create tag definition. `factory doctor --json` is the read-only diagnosis:
+  installation claims them. The bundled read-only CLI helper uses the installed
+  `azure-devops` extension's authenticated SDK connection to read the caller
+  and evaluate permissions. It is loaded from temporary private source for
+  each helper invocation and removed afterward; no additional extension
+  installation or Python setup is needed. Failed or denied checks block
+  startup. `factory doctor --json` is the read-only diagnosis:
   it prints each check with its condition code and repair, and it changes
   no work item, pull request, or tag.
 - **PAT scopes.** Create the PAT for the organization only, with the
@@ -441,17 +442,18 @@ An existing registration without `route` keeps the `az rest` route.
   publication; **Code (Read & write)** (`vso.code_write`) for the repository
   identity, pull requests, threads, reviewers, refs, and commit statuses.
   **Code (Status)** (`vso.code_status`) is an alternative scope for commit
-  statuses only. These scopes come from the documentation and are not
+  statuses only. The PAT must also allow the connection-data and current-user
+  security evaluation SDK reads; `factory doctor` fails if organization policy
+  or token scope blocks either probe. These scopes come from documentation and are not
   verified in a live run. The scopes do not replace permissions: the
   account also needs at least Basic access, the repository permissions
   Contribute, Create branch, and Contribute to pull requests on each
   registered repository, View work items and Edit work items in this node
   on the project's area, and Create tag definition in the project until
   every factory tag exists.
-- **Status comments.** Without a signed-in identity, the factory finds a
-  run's status comment by its marker alone. When more than one comment
-  holds the marker, the run stops with an error; delete the copies the
-  factory did not write.
+- **Status comments.** Recovery matches both the authenticated author and the
+  run marker. Copies by other users are ignored. Multiple matching comments
+  by the authenticated author are refused as ambiguous.
 - **Pull requests.** `az repos pr create`, `list`, `show`, and `update`
   create, find, regenerate, and ready the draft pull request; threads,
   comments, and commit statuses use the `git` area of `az devops invoke`.
@@ -467,19 +469,18 @@ An existing registration without `route` keeps the `az rest` route.
   `az repos pr work-item add`. A local Markdown Run never sends its issue
   number as a work-item ID. The code-host startup check proves the login
   with `az repos show` and reads pull requests, the default branch, and its
-  statuses without Boards access. It cannot evaluate the Contribute, Create
-  branch, and Contribute to pull requests permissions on this route, so it
-  reports them as an unverified warning; confirm them for the
-  `az devops login` identity. Finding the factory's own pull-request
-  comment by its marker needs the signed-in identity, which this route
-  cannot read yet (ADR 0030, identity row); until it can, that lookup fails
-  instead of matching another author's comment.
+  statuses without Boards access. Its helper checks Contribute, Create branch,
+  and Contribute to pull requests on the resolved repository. An adopted PR
+  carrying a source PBI is checked against the frozen GUID before its body is
+  changed. Clarification publication and replay recover the authenticated
+  author's marked PR comment before creating another one.
 - **Plan publication.** This route requires an explicit
   `azure_devops.planning` mapping (below); without one, the preview fails
   and no default is substituted. The preview reads the process with
   `az devops invoke` and `az boards work-item relation list-type` and
-  writes nothing. It cannot evaluate permissions on this route, so it does
-  not report them as passed. Each item of the lowest level is executable
+  writes nothing. Before approval and again before publication, effective
+  permission checks cover each configured destination Area Path and creation
+  of new correlation and assignment tags. Each item of the lowest level is executable
   and gets its node's target repository, or the registered repository when
   the node names none; the preview shows the resolved name and GUID and
   adds its `factory-repo` tag beside the `factory-plan` tag. A target on an
@@ -488,10 +489,14 @@ An existing registration without `route` keeps the `az rest` route.
   each link with `az boards work-item relation add` on the child or the
   dependent item (Parent to the Epic, Predecessor to the item that must be
   done first). The create command cannot set the Markdown format, so the
-  description is stored as HTML that shows the approved Markdown text
-  without rendering it (ADR 0030 decision 15). An existing work item that
+  description is rendered to HTML with GFM headings, lists, checkboxes, tables,
+  code, links, and approved inline HTML (ADR 0030 decision 15). An existing work item that
   carries the correlation tag but another assignment or type is not adopted
-  or changed: publication stops and names the difference. Publication adds
+  or changed: publication stops and names the difference. A retry revalidates
+  even items whose earlier creates succeeded, before any further writes.
+  Intake, diagnosis, and correlation queries page past the CLI's 1000-item
+  result cap using work-item IDs, so older ineligible items do not hide newer
+  authorized work. Publication adds
   no `agent-ready` tag. A plan node selects another repository only through
   `target_repository` in the stored or draft plan JSON; the plan editor has
   no control for it, and the planning role gets no guidance to set it.

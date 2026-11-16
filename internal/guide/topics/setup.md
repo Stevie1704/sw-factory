@@ -186,7 +186,7 @@ Diagnose without writes: `factory doctor --json`. Typical repairs:
 | --- | --- |
 | `run az devops login --organization <URL>` | The PAT is missing, expired, or revoked. The operator makes a new PAT and signs in again. |
 | `run az extension add --name azure-devops` | Install the extension; Factory never installs it. |
-| identity or permission check `skipped` | Expected on this route. The operator confirms the permissions by hand. |
+| identity or permission check failed | Verify the installed `azure-devops` extension and CLI login; grant the reported permission. Factory's bundled read-only CLI helper evaluates the calling identity. |
 | warning about agent-ready items without a usable assignment | Add exactly one `factory-repo` tag that names the right repository. |
 | a claim refused with a `factory-repo` tag in the message | The tag is missing, repeated, malformed, or names another repository. |
 

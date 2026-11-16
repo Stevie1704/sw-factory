@@ -52,6 +52,35 @@ const pbiStates = `{"count":5,"value":[{"name":"New","category":"Proposed"},{"na
 // assignedTag is the assignment tag of the registered repository.
 var assignedTag = "factory-repo:" + azuredevopstest.RepositoryID
 
+// TestExtensionQueueContinuesPastIneligibleItems proves that closed items
+// filling the CLI's first page cannot hide a newer authorized PBI.
+func TestExtensionQueueContinuesPastIneligibleItems(t *testing.T) {
+	t.Parallel()
+	first := []string{}
+	az := newFakeAz(t).
+		on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
+		on(routeTypeStates, pbiStates).
+		on(routeUpdates, `{"count":1,"value":[{"revisedBy":{"uniqueName":"alice@contoso.com"},"fields":{"System.Tags":{"newValue":"agent-ready"}}}]}`)
+	for start := 1; start <= 1000; start += 200 {
+		items := []string{}
+		for id := start; id < start+200; id++ {
+			first = append(first, `{"id":`+strconv.Itoa(id)+`}`)
+			items = append(items, boardsItem(strconv.Itoa(id), "Done", "agent-ready; "+assignedTag))
+		}
+		az.on(routeWorkItemsBatch, batchOf(items...))
+	}
+	az.on(routeQuery, `[`+strings.Join(first, ",")+`]`, `[{"id":1001}]`)
+	az.on(routeWorkItemsBatch, batchOf(boardsItem("1001", "New", "agent-ready; "+assignedTag)))
+	issues, err := extensionClient(az).ListEligibleIssues(t.Context(), repository)
+	if err != nil || len(issues) != 1 || issues[0].Number != 1001 {
+		t.Fatalf("ListEligibleIssues() = %#v, %v; want PBI 1001", issues, err)
+	}
+	queries := az.extensionCalled(routeQuery)
+	if len(queries) != 2 || !strings.Contains(queries[1].Flag("--wiql"), "[System.Id] > 1000") {
+		t.Fatalf("queries = %+v, want continuation after ID 1000", queries)
+	}
+}
+
 // TestExtensionIssueReadsTheWorkItemInsideTheRegisteredProject verifies that
 // the extension route reads a work item through the project-scoped batch
 // resource, keeps a Markdown description, and maps the state category.
@@ -373,9 +402,8 @@ func TestExtensionCommentWriteRefusesAnHTMLResult(t *testing.T) {
 }
 
 // TestExtensionFindStatusCommentMatchesTheOneMarkedComment verifies the
-// extension-route recovery of the status comment without a signed-in
-// identity: exactly one live comment with the marker is recovered, none is a
-// zero comment, and more than one is an error, never a duplicate create.
+// extension-route recovery of the coordinator's status comment, ignoring
+// copied markers from other authors and refusing duplicate owned comments.
 func TestExtensionFindStatusCommentMatchesTheOneMarkedComment(t *testing.T) {
 	t.Parallel()
 
@@ -392,6 +420,8 @@ func TestExtensionFindStatusCommentMatchesTheOneMarkedComment(t *testing.T) {
 		{name: "none", response: `{"comments":[` + comment("3", "hello") + `]}`},
 		{name: "deleted copy", response: `{"comments":[{"id":8,"text":"` + marker + `","isDeleted":true},` + comment("15", marker) + `]}`, wantID: "20261009T100000.000000000Z.w42.c15"},
 		{name: "two", response: `{"comments":[` + comment("8", "copied "+marker) + `,` + comment("15", marker) + `]}`, wantErr: true},
+		{name: "foreign copy", response: `{"comments":[` + strings.ReplaceAll(comment("8", marker), "factory@contoso.com", "other@contoso.com") + `,` + comment("15", marker) + `]}`, wantID: "20261009T100000.000000000Z.w42.c15"},
+		{name: "foreign only", response: `{"comments":[` + strings.ReplaceAll(comment("8", marker), "factory@contoso.com", "other@contoso.com") + `]}`},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -2,7 +2,6 @@ package azuredevops_test
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -91,14 +90,14 @@ func TestResolveRepositoryReportsAMissingRepository(t *testing.T) {
 func TestExtensionRouteNeverFallsBackToAzRest(t *testing.T) {
 	t.Parallel()
 
-	az := newFakeAz(t)
+	az := newFakeAz(t).on("factory-devops identity", "error:helper unavailable")
 	client := extensionClient(az)
 	_, err := client.AuthenticatedLogin(context.Background())
-	if !errors.Is(err, azuredevops.ErrExtensionOperationUnavailable) {
-		t.Fatalf("AuthenticatedLogin() error = %v, want ErrExtensionOperationUnavailable", err)
+	if err == nil || !strings.Contains(err.Error(), "helper unavailable") {
+		t.Fatalf("AuthenticatedLogin() error = %v, want helper failure", err)
 	}
-	if len(az.calls) != 0 || len(az.extensionCalls) != 0 {
-		t.Fatalf("calls = %d az rest, %d extension; want none", len(az.calls), len(az.extensionCalls))
+	if len(az.calls) != 0 || len(az.extensionCalls) != 1 {
+		t.Fatalf("calls = %d az rest, %d extension; want only the failed helper", len(az.calls), len(az.extensionCalls))
 	}
 }
 

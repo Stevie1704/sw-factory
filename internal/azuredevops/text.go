@@ -14,6 +14,9 @@ import (
 // commands as text, so htmlText defines one conversion (ADR 0019).
 var (
 	htmlComment    = regexp.MustCompile(`(?s)<!--.*?-->`)
+	htmlLink       = regexp.MustCompile(`(?is)<a\b[^>]*\bhref\s*=\s*"([^"]*)"[^>]*>(.*?)</a\s*>`)
+	htmlCheckbox   = regexp.MustCompile(`(?is)<input\b[^>]*\btype\s*=\s*"checkbox"[^>]*>`)
+	htmlChecked    = regexp.MustCompile(`(?i)\schecked(?:\s|=|/?>)`)
 	htmlLineBreak  = regexp.MustCompile(`(?i)<br\s*/?>`)
 	htmlBlockEnd   = regexp.MustCompile(`(?i)</(div|p|li|h[1-6]|tr|pre|blockquote)\s*>`)
 	htmlListItem   = regexp.MustCompile(`(?i)<li(\s[^>]*)?>`)
@@ -31,6 +34,15 @@ func htmlText(value string) string {
 	text := htmlComment.ReplaceAllStringFunc(value, func(comment string) string {
 		comments = append(comments, comment)
 		return fmt.Sprintf("\x00%d\x00", len(comments)-1)
+	})
+	// Keep destinations in the worker's text snapshot when a description
+	// stores links as HTML instead of Markdown.
+	text = htmlLink.ReplaceAllString(text, "[$2]($1)")
+	text = htmlCheckbox.ReplaceAllStringFunc(text, func(input string) string {
+		if htmlChecked.MatchString(input) {
+			return "[x] "
+		}
+		return "[ ] "
 	})
 	text = htmlLineBreak.ReplaceAllString(text, "\n")
 	text = htmlBlockEnd.ReplaceAllString(text, "\n")

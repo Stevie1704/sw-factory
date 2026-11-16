@@ -5,13 +5,17 @@ package azuredevops
 // targets, and the argument rules of az boards work-item create.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"html"
 	"maps"
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	goldmarkhtml "github.com/yuin/goldmark/renderer/html"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
@@ -40,12 +44,13 @@ func (restBackend) checkPlanSupport(graph tracker.PlanGraph) error {
 	return nil
 }
 
-// preparePlan assigns the plan targets. Permission evaluation is not
-// available on the extension route (ADR 0030 decision 12): preflight
-// proves read access only, and a refused create or link still proves no
-// write.
+// preparePlan assigns the plan targets and checks effective write permissions
+// through the authenticated CLI helper before approval or publication.
 func (c extensionBackend) preparePlan(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, graph tracker.PlanGraph, preview *tracker.PlanPreview) error {
-	return c.assignPlanTargets(ctx, repository, mapping, graph, preview)
+	if err := c.assignPlanTargets(ctx, repository, mapping, graph, preview); err != nil {
+		return err
+	}
+	return c.extensionPlanPermissions(ctx, repository, preview.Items)
 }
 
 // preparePlan checks the plan permissions of the az login identity.
@@ -131,8 +136,12 @@ func validateExtensionPlanItem(item tracker.RenderedPlanItem) error {
 // as an option. The tags and configured fields follow --fields as
 // name=value pairs in a fixed order.
 func extensionCreateArgs(repository tracker.Repository, item tracker.RenderedPlanItem) ([]string, error) {
+	description, err := extensionDescription(item.Body)
+	if err != nil {
+		return nil, err
+	}
 	args := []string{"boards", "work-item", "create"}
-	for _, flag := range [][2]string{{"--type", item.Type}, {"--title", item.Title}, {"--description", extensionDescription(item.Body)}} {
+	for _, flag := range [][2]string{{"--type", item.Type}, {"--title", item.Title}, {"--description", description}} {
 		arg, err := cliText(flag[0], flag[1])
 		if err != nil {
 			return nil, err
@@ -156,25 +165,17 @@ func extensionCreateArgs(repository tracker.Repository, item tracker.RenderedPla
 	return args, nil
 }
 
-// extensionDescription renders the approved Markdown description as HTML
-// that shows the Markdown text unchanged. az boards work-item create writes
-// only /fields operations (azure-devops extension work_item.py), so it
-// cannot set the Markdown format, and Azure DevOps stores a description
-// created that way as HTML (ADR 0030 decision 14). Every character is
-// escaped, so no Markdown text becomes markup; each line is one block and a
-// blank line keeps its height; leading spaces become non-breaking spaces so
-// indentation stays visible. htmlText reads it back as the Markdown text.
-func extensionDescription(markdown string) string {
-	var builder strings.Builder
-	for _, line := range strings.Split(strings.TrimRight(markdown, "\n"), "\n") {
-		if line == "" {
-			builder.WriteString("<div><br></div>")
-			continue
-		}
-		indent := len(line) - len(strings.TrimLeft(line, " "))
-		builder.WriteString("<div>" + strings.Repeat("&nbsp;", indent) + html.EscapeString(line[indent:]) + "</div>")
+// extensionDescription renders approved Markdown into the HTML description
+// format used by the dedicated create command. GFM preserves headings,
+// tables, code, links, and task lists; approved inline HTML is retained for
+// Azure Boards to process under the same policy as other HTML descriptions.
+func extensionDescription(markdown string) (string, error) {
+	var buffer bytes.Buffer
+	renderer := goldmark.New(goldmark.WithExtensions(extension.GFM), goldmark.WithRendererOptions(goldmarkhtml.WithUnsafe()))
+	if err := renderer.Convert([]byte(markdown), &buffer); err != nil {
+		return "", fmt.Errorf("render Azure Boards description: %w", err)
 	}
-	return builder.String()
+	return buffer.String(), nil
 }
 
 // planRead reads the project resource at path through az rest.

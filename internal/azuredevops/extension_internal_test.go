@@ -46,6 +46,29 @@ printf '{"argv":"%s"}' "$*"
 	}
 }
 
+// TestExtensionRunnerLoadsAndRemovesTheEmbeddedHelper verifies that the
+// production runner exposes the extension only during the CLI invocation.
+func TestExtensionRunnerLoadsAndRemovesTheEmbeddedHelper(t *testing.T) {
+	installFakeAz(t, `source="$AZURE_EXTENSION_DEV_SOURCES/factory-devops/azext_factory_devops/custom.py"
+[ -f "$source" ] || exit 3
+[ "$PYTHONDONTWRITEBYTECODE" = 1 ] || exit 4
+printf '{"source":"%s"}' "$source"
+`)
+	output, err := (extensionRunner{timeout: time.Second}).Run(t.Context(), []string{"factory-devops", "identity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Source string `json:"source"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil || response.Source == "" {
+		t.Fatalf("helper output = %s, %v", output, err)
+	}
+	if _, err := os.Stat(response.Source); !os.IsNotExist(err) {
+		t.Fatalf("helper source remains after the command: %v", err)
+	}
+}
+
 // TestExtensionRunnerTurnsAMissingOrExpiredLoginIntoARepairInstruction
 // verifies that the extension's missing-credential and HTTP 401 texts become
 // a LoginRequiredError that names az devops login for the targeted

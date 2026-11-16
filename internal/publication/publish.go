@@ -71,6 +71,10 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	if err != nil {
 		return Result{}, err
 	}
+	ledger := approvalOperations(history.Operations, approval.ID)
+	if err := p.verifyRestoredItems(ctx, approved, ledger); err != nil {
+		return Result{Session: session, Operations: ledger}, err
+	}
 	planned, err := orderOperations(approved)
 	if err != nil {
 		return Result{}, err
@@ -83,7 +87,7 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 			return Result{}, err
 		}
 	}
-	ledger, err := p.Store.StartPublicationLedger(ctx, session.ID, approval.ID, planned, p.now())
+	ledger, err = p.Store.StartPublicationLedger(ctx, session.ID, approval.ID, planned, p.now())
 	if err != nil {
 		return Result{}, err
 	}
@@ -94,6 +98,26 @@ func (p *Publisher) Publish(ctx context.Context, request Request) (Result, error
 	}
 	result, err := p.finish(ctx, session.ID, request.AttemptID, approval.ID, run.ledger, halt)
 	return result, errors.Join(runErr, err)
+}
+
+// verifyRestoredItems checks the current assignment of every item whose
+// create already succeeded. A ledger entry proves the earlier write, not
+// that the item still matches approval. Refusal happens before changing
+// session state or resuming any remote mutation and preserves ledger truth.
+func (p *Publisher) verifyRestoredItems(ctx context.Context, approved tracker.PlanPreview, ledger []store.PublicationOperation) error {
+	items := make(map[string]tracker.RenderedPlanItem, len(approved.Items))
+	for _, item := range approved.Items {
+		items[item.NodeID] = item
+	}
+	for _, operation := range ledger {
+		if operation.State == store.PublicationOperationSucceeded && operation.Kind == store.PublicationOperationCreateItem {
+			ref := tracker.PlanItemRef{ExternalID: operation.ExternalID, URL: operation.URL}
+			if err := p.verifyPlanItem(ctx, items[operation.NodeID], ref); err != nil {
+				return fmt.Errorf("%s: stored tracker item %s no longer matches the approved item: %w; correct the item in the tracker, then retry", operation.ID, ref.ExternalID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // staleApprovalAction names what the user can do about provider drift after

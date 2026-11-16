@@ -379,6 +379,16 @@ func TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories(t *testing.T) {
 		!slices.Equal(pullRequests[0].WorkItems, []int{export.ID}) {
 		t.Fatalf("pull requests = %+v, want one draft in the service repository linked to PBI %d", pullRequests, export.ID)
 	}
+	web.advanceToImplementation()
+	webDraft, err := web.service.CreateDraftPullRequest(t.Context(), factory.DraftPullRequestRequest{RunID: webRun.ID})
+	if err != nil || webDraft.Repair != nil {
+		t.Fatalf("web CreateDraftPullRequest() = %#v, %v", webDraft, err)
+	}
+	pullRequests = boards.PullRequests()
+	if len(pullRequests) != 2 || pullRequests[1].RepositoryID != azuredevopstest.WebRepositoryID || !pullRequests[1].Draft ||
+		!slices.Equal(pullRequests[1].WorkItems, []int{docs.ID}) || pullRequests[0].ID == pullRequests[1].ID {
+		t.Fatalf("pull requests = %+v, want separate service/web drafts linked to their source PBIs", pullRequests)
+	}
 
 	// Review feedback and readiness on that pull request, in its repository.
 	number := pullRequests[0].ID

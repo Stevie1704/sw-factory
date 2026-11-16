@@ -77,11 +77,20 @@ type extensionRunner struct {
 // login becomes a LoginRequiredError; any other failure returns at most one
 // bounded, single-line, secret-redacted line of standard error.
 func (r extensionRunner) Run(ctx context.Context, args []string) ([]byte, error) {
+	environment := append([]string(nil), extensionEnvironment...)
+	if len(args) > 0 && args[0] == "factory-devops" {
+		helper, cleanup, err := helperEnvironment()
+		if err != nil {
+			return nil, err
+		}
+		defer cleanup()
+		environment = append(environment, helper...)
+	}
 	output, err := hostcmd.Run(ctx, hostcmd.Command{
 		Operation: extensionOperation(args),
 		Name:      "az",
 		Args:      args,
-		Env:       extensionEnvironment,
+		Env:       environment,
 		Timeout:   r.timeout,
 	})
 	if err == nil {
@@ -399,10 +408,20 @@ func (extensionBackend) defaultRunner() CommandRunner {
 	return extensionRunner{timeout: CommandTimeout}
 }
 
-// readLogin fails closed: no verified extension command returns the
-// signed-in identity (ADR 0030).
-func (extensionBackend) readLogin(context.Context) (string, error) {
-	return "", fmt.Errorf("read the authenticated Azure DevOps identity: %w", ErrExtensionOperationUnavailable)
+// readLogin reads the account through the embedded read-only CLI helper,
+// which uses the installed DevOps extension's connection data SDK.
+func (c extensionBackend) readLogin(ctx context.Context) (string, error) {
+	var response struct {
+		Login string `json:"login"`
+	}
+	if err := c.extension(ctx, c.Organization, []string{"factory-devops", "identity"}, &response); err != nil {
+		return "", fmt.Errorf("read the authenticated Azure DevOps identity: %w", err)
+	}
+	login := strings.TrimSpace(response.Login)
+	if login == "" || strings.ContainsAny(login, "\x00\r\n/") {
+		return "", errors.New("the Azure CLI helper returned no valid authenticated account name")
+	}
+	return login, nil
 }
 
 // showRepository is ResolveRepository that also returns the full reference

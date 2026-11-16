@@ -32,7 +32,8 @@ its PAT option, and ADR 0025 decisions 4, 5, and 6.
    `AZURE_DEVOPS_EXT_*` name, because the extension reads its PAT and other
    credentials from such variables.
 3. **The extension route never runs `az rest` or requests an Entra token.**
-   Every extension call goes through one runner on the existing
+   Dedicated commands, invoke calls, and the read-only helper in decision
+   12 go through one runner on the existing
    `CommandRunner`/`hostcmd` seam: argv only, an empty standard input, the
    two-minute `CommandTimeout`, the 32 MiB output bound, and
    `AZURE_CORE_ONLY_SHOW_ERRORS=1`, `AZURE_CORE_NO_COLOR=1`,
@@ -132,18 +133,24 @@ its PAT option, and ADR 0025 decisions 4, 5, and 6.
     classification and `az login` stay as they are. On the extension route,
     `LoginRequiredError` is a permission failure that proves no write, and a
     timeout stays ambiguous; decision 14 maps the remaining extension texts.
-12. **The extension route has no signed-in identity, so a status comment is
-    found by its marker alone.** No verified command or invoke resource
-    returns the caller (inventory: identity). `AuthenticatedLogin` therefore
-    fails with `ErrExtensionOperationUnavailable` on this route, and the
-    doctor reports the identity and permission checks as skipped, never as
-    passed. `FindStatusComment` accepts exactly one live comment that holds
-    the run's marker, returns a zero comment for none, and refuses more than
-    one, so a copied marker never redirects the status comment and never
-    causes a duplicate. This deliberately weakens the author check of ADR
-    0019 on this route only: another editor can stop a run by copying its
-    marker into a second comment, and the run then fails with an error that
-    names the repair.
+12. **A read-only CLI helper supplies caller identity and effective permissions.**
+    Amended during PR #308 review on 16 November 2026 with explicit operator
+    authorization to extend the command boundary. Generic invoke cannot
+    select the `Location` and `Security` resource areas in the recorded
+    discovery response. Factory embeds a small Azure CLI extension exposing
+    `az factory-devops identity` and `permission`. For each helper invocation
+    the runner materializes its source in an owner-only temporary directory,
+    sets `AZURE_EXTENSION_DEV_SOURCES`, and removes the directory afterward.
+    This installs nothing and leaves normal extension and credential
+    directories in place. The helper imports the installed `azure-devops`
+    extension and uses its `get_connection_data` and
+    `get_security_client().has_permissions` SDK calls. Authentication stays
+    entirely inside Azure CLI; Factory receives only the authenticated account
+    name or one boolean. Permission checks evaluate the calling user with
+    `always_allow_administrators=False`; they never edit an ACL. Doctor fails
+    when these probes fail or permissions are denied. Both work-item and PR
+    comment recovery match the authenticated author and the marker, preserving
+    ADR 0019 ownership and clarification replay.
 13. **The claim revalidates the assignment and freezes it.** The tracker
     port `tracker.RepositoryAssignmentValidator` runs right before a claim,
     on the direct and the polling path, before a worktree, a run record, or
@@ -165,8 +172,10 @@ its PAT option, and ADR 0025 decisions 4, 5, and 6.
     names none; it never takes the Epic's target, and a target on any other
     level is refused. Preflight resolves each target with `az repos show`,
     renders one `factory-repo:` tag beside the correlation tag, and reads
-    the process through the invoke rows below. Permission evaluation is not
-    available (decision 12), so preflight does not report it as passed. A
+    the process through the invoke rows below. Before approval and again
+    before publication, the helper verifies View/Edit work items on every
+    configured destination Area Path and Create tag definition for the
+    project's new correlation and assignment metadata. A
     create, the correlation lookup, and each link use `az boards work-item
     create`, `az boards query` plus the batch read, and `az boards work-item
     relation add` and `show`. The relation commands select a link type by
@@ -180,34 +189,25 @@ its PAT option, and ADR 0025 decisions 4, 5, and 6.
     item that should complete before the current item").
     `tracker.PlanItemVerifier` lets publication and reconciliation adopt a
     work item found by correlation only when its type and assignment tags
-    match the approved item. Only the extension texts that `work_item.py`
+    match the approved item. Retries also verify every item restored from a
+    successful ledger entry before any further remote write. Only the
+    extension texts that `work_item.py`
     raises for a refused field rule and that `relations.py` raises before
     its update prove no write; every other failure stays ambiguous.
-15. **The description is created as HTML that shows the Markdown text.**
-    `az boards work-item create` sends only `/fields/...` operations
-    (`work_item.py` `_create_work_item_field_patch_operation`), and so does
-    `az boards work-item update`. A follow-up format change through invoke
-    is not reachable either: the recording lists two `wit/workItems`
-    locations with max version 7.2, and `invoke.py` keeps the first one,
-    the create route `{project}/_apis/wit/workItems/${type}`, so no PATCH by
-    ID exists. The recording lists no `wit` location with a `$batch` route
-    either; a batch update route in another organization is an unverified
-    candidate, not used. The default format of a large text field is HTML (Microsoft
-    DevOps blog "Markdown support arrives for work items", July 2025).
-    Factory therefore sends the approved Markdown as escaped HTML, one
-    `<div>` per line, `<div><br></div>` for a blank line, and `&nbsp;` for
-    leading spaces. No Markdown character becomes markup, the work item
-    shows the approved text, and `htmlText` reads it back as that text up to
-    its normalization: trailing spaces and surrounding blank lines are
-    dropped, and three or more line breaks become two. The
-    approval still binds the Markdown; the HTML is a fixed function of it.
-    The description goes as one `--description=<value>` argument, refused
-    before approval when it exceeds one Linux argument (131,071 bytes). A
-    title, type, or field value that starts with `@` is refused, because
-    Azure CLI would read a file. **Unresolved:** Markdown rendering
-    (headings, lists, code blocks) on create; the work item shows the
-    Markdown source. Whether the service keeps every escaped character and
-    block exactly is not verified live.
+15. **The description is created as rendered HTML.**
+    The dedicated `az boards work-item create` command sends only field
+    operations, so it cannot set `multilineFieldsFormat`; Azure Boards defaults
+    descriptions to HTML. Factory renders approved Markdown with Goldmark's
+    GFM extensions before passing it to that command. Headings, lists, task
+    lists, code, links, tables, and approved raw HTML retain their rendering
+    semantics under Azure Boards' HTML policy. Approval binds the source
+    Markdown; the rendered HTML is a deterministic function of it. Intake
+    reads HTML through the existing text conversion, retaining link
+    destinations, checkbox states, and Factory markers; it does not reconstruct
+    Markdown source formatting. The description is one `--description=<value>`
+    argument and preflight refuses rendered output over 131,071 bytes. Free
+    text beginning with `@` is refused wherever Azure CLI would read a file.
+    Service-side HTML normalization remains unverified live.
 
 ## Operation inventory
 
@@ -238,19 +238,19 @@ host.
 
 | Current operation (`az rest` path) | Extension route | Status |
 | --- | --- | --- |
-| Identity: GET `_apis/connectionData` | none | **Not available (#304).** `Location` is not a ResourceAreas name in the recording, so invoke refuses it; `IMS` and `Identity` are ResourceAreas names, but the recording holds no location of theirs for a self resource. Every command that accepts `me` (`identities.py`) resolves it internally and prints no identity. The doctor reports `azure_devops.identity.not_available` as skipped, and `AuthenticatedLogin` fails with `ErrExtensionOperationUnavailable`. Status comments are recovered by marker alone (decision 12). |
+| Identity: GET `_apis/connectionData` | embedded `az factory-devops identity` | Decision 12: the official extension's authenticated location SDK returns only `properties.Account.$value`. Generic invoke cannot select `Location`. Scripted SDK and real CLI dispatch evidence; not run live. |
 | Repository identity: GET `git/repositories/{repo}` | `az repos show --project --repository` | Verified command; implemented as `ResolveRepository`. |
 | Project repositories: GET `git/repositories` | `az repos list --project` | Verified command (`repository.py` `list_repos` returns `get_repositories(project)`, printed as a JSON array of repositories); not run. Read-only; lists only the repositories that the identity can read. Tells an unknown assignment GUID from another repository of the project. |
-| Permission checks: GET `_apis/permissions/{ns}/{bit}` | none | **Not available (#304).** `Security` is not a ResourceAreas name, so invoke refuses it. `az devops security permission show --namespace-id --subject --token` (verified command) needs a subject that the identity row cannot supply; `security_permission.py` passes a subject without `@` or `.` unchanged, so `me` does not resolve. The doctor reports `azure_devops.permissions.not_available` as skipped and names the permissions to verify by hand. |
+| Permission checks: GET `_apis/permissions/{ns}/{bit}` | embedded `az factory-devops permission --namespace-id --permissions --token` | Decision 12: official security SDK `has_permissions`, calling-user evaluation, administrator bypass disabled. Read-only; malformed/missing results fail closed. Generic invoke cannot select `Security`. Scripted SDK and real CLI dispatch evidence; not run live. |
 | Root area ID: GET `wit/classificationnodes/Areas` | `invoke --area wit --resource classificationNodes` route `structureGroup=areas` | Resolves to `{project}/_apis/wit/classificationNodes/{structureGroup}/{*path}`. |
 | Project tags: GET `wit/tags` | `invoke --area wit --resource tags` | Resolves to `{project}/_apis/wit/tags/{tagIdOrName}`. |
 | Work item read: GET `wit/workitems/{id}` | `invoke --area wit --resource workItemsBatch` POST with `ids=[id]` | Implemented (#304) through the batch row. `az boards work-item show --id --expand` is a verified command, but it deserializes into the extension's 5.0 `WorkItem` model, which has no `multilineFieldsFormat`, so a Markdown description would be read as HTML. The batch route is project-scoped, and the adapter also checks `System.TeamProject`. |
 | Batch read: GET `wit/workitems?ids=` | `invoke --area wit --resource workItemsBatch` POST | Resolves to `{project}/_apis/wit/workItemsBatch` (single location). Implemented (#304) with body `{"ids":[...],"errorPolicy":"omit"}`, 200 IDs a batch, from the REST reference "Work Items - Get Work Items Batch"; not run. Whether its raw JSON carries `multilineFieldsFormat` is not verified live. |
-| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Implemented for intake (#304) and for the plan correlation lookup (#305). `query_work_items` sends no project with the WIQL, so `@project` has no context: the WIQL names `[System.TeamProject]` explicitly. The command returns at most 1000 items and prints nothing for an empty result. Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
+| WIQL intake and correlation: POST `wit/wiql` | `az boards query --wiql --project` | Verified command (flat queries only). Implemented for intake (#304), diagnosis, and plan correlation lookup (#305), following the 1000-item cap with an ascending `[System.Id] > <cursor>` query until exhausted. `query_work_items` sends no project with the WIQL, so `@project` has no context: the WIQL names `[System.TeamProject]` explicitly. The command returns at most 1000 items and prints nothing for an empty result. Alternative: `invoke wit/wiql`, which resolves to `{project}/{team}/_apis/wit/wiql`. |
 | Type states: GET `wit/workitemtypes/{type}/states` | `invoke --area wit --resource workItemTypeStates` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/states`. Implemented (#304). |
 | Update history: GET `wit/workItems/{id}/updates` | `invoke --area wit --resource updates` | Resolves to `{project}/_apis/wit/workItems/{id}/updates/{updateNumber}`. Implemented (#304) with `$top`/`$skip` paging. |
 | Tag replace: PATCH `wit/workitems/{id}` `/fields/System.Tags` | `az boards work-item update --id --fields System.Tags=...` | Verified command; organization-scoped. Implemented (#304): the adapter first reads the item through the project-scoped batch row, refuses another project, and keeps every `factory-repo:` and `factory-plan:` tag of the current value (decision 10). |
-| Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. Implemented (#305) with `--type=`, `--title=`, `--description=` as one argument each, `--project`, and `--fields System.Tags=<correlation; assignment> <configured fields>`. The command sends only `/fields/...` operations (`work_item.py`), so the description is created as HTML that shows the Markdown text (decision 15). **Unresolved:** Markdown format on create. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
+| Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. Implemented (#305) with `--type=`, `--title=`, `--description=` as one argument each, `--project`, and `--fields System.Tags=<correlation; assignment> <configured fields>`. The command sends only field operations, so Factory renders approved Markdown to HTML with GFM semantics (decision 15). |
 | Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. Implemented (#305): `--id <child> --relation-type Parent --target-id <epic>` and `--id <dependent> --relation-type Predecessor --target-id <prerequisite>`, with the name read by reference name from `list-type`. The command validates the target IDs by WIQL before its update and reads the item back after it; a response without the link is ambiguous. |
 | Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. Implemented (#305) as the relation lookup. |
 | Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location; the recorded location has `resourceVersion` 4 and `releasedVersion` 0.0, so it exists only as a preview). Implemented (#304). The response gains `continuation_token` from the `X-MS-ContinuationToken` header, which the list follows. `7.1-preview` is a documented version form (REST API versioning: `{major}.{minor}[-{stage}[.{resource-version}]]`), and the SDK's `_negotiate_request_version` sends it unchanged. **Unresolved:** which resource version the service selects without one is not verified; every create and edit therefore refuses a result whose `format` is not `markdown`. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
@@ -262,7 +262,7 @@ host.
 | PR search by branch pair: GET `git/repositories/{repo}/pullrequests?searchCriteria...` | `az repos pr list --project --repository --source-branch --target-branch --status all --top` | Verified command. Invoke `git/pullRequests` resolves to the project-level `{project}/_apis/git/pullRequests/{pullRequestId}` and cannot list one repository. |
 | PR read: GET `git/repositories/{repo}/pullrequests/{n}` | `az repos pr show --id` | Verified command; organization-scoped, so the adapter must check the repository in the response. |
 | PR create: POST `git/repositories/{repo}/pullrequests` | `az repos pr create --project --repository --source-branch --target-branch --title --description --draft true --work-items <PBI>` | Verified command. `--description` takes one value per line and joins the values with `\n` (`pull_request.py`). Implemented (#306): the title and the whole description each go as one `--flag=value` argument, which argparse binds as exactly one value, so a Markdown line such as `---` is never parsed as an option. Azure CLI replaces a value that starts with `@` (alone or after the first `=`) by a file's content (azure-cli core `_expand_file_prefixed_files`), so such a title, description, or branch is refused before the call. `--repository` takes a name or ID; with a source PBI the adapter passes the frozen GUID after `az repos show` confirms that the registered name still resolves to it. Source-verified, not run live. |
-| PR update and readiness: PATCH `pullrequests/{n}` | `az repos pr update --id --title --description` and `--draft false` | Verified command; organization-scoped. Implemented (#306) after a `pr show` repository check. |
+| PR update and readiness: PATCH `pullrequests/{n}` | `az repos pr update --id --title --description` and `--draft false` | Verified command; organization-scoped. Implemented (#306) after a `pr show` repository check; updates carrying a source PBI validate the frozen GUID before any mutation. |
 | PR work-item link | `az repos pr work-item add --id --work-items` and `az repos pr work-item list --id` | Verified commands; organization-scoped (new for #306). Both return work items with `id` (`pull_request.py`). Implemented: after a `pr show` check against the frozen GUID, list, add when missing, and list again; an unconfirmed add fails. |
 | PR threads (reviews and comments): GET/POST `pullRequests/{n}/threads` | `invoke --area git --resource pullRequestThreads` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/pullRequests/{pullRequestId}/threads/{threadId}`. |
 | PR thread comment edit: PATCH `threads/{t}/comments/{c}` | `invoke --area git --resource pullRequestThreadComments` | Resolves to `.../threads/{threadId}/comments/{commentId}`. |
@@ -277,7 +277,9 @@ host.
   `NewClientForRoute`, `Client.Route`, the production `extensionRunner`,
   `Client.extension` and `Client.invoke`, `LoginRequiredError`,
   `ErrExtensionOperationUnavailable`, `RepositoryIdentity`, and
-  `Client.ResolveRepository`. `assignment.go` holds
+  `Client.ResolveRepository`. `cli_helper.go` embeds the read-only helper,
+  and `extension_permissions.go` checks destination areas and repository
+  permissions. `assignment.go` holds
   `RepositoryAssignmentTag`, `IsRepositoryAssignmentTag`, and
   `ValidateRepositoryAssignment`. The composition root passes the selected
   route to the tracker and the independent code host. `route.go` holds the
@@ -295,8 +297,8 @@ host.
   node with a target instead of dropping it.
 - #304 ports Boards intake: work item reads, the queue, state metadata,
   update history, comments, and tag updates (`boards_extension.go`), and
-  read-only startup checks that run only `az repos show`, `az boards
-  query`, and, for a tag that names another GUID, `az repos list`
+  read-only startup checks that run `az repos show`, paged `az boards query`,
+  the identity/permission helper, and, for a foreign assignment, `az repos list`
   (`extension_doctor.go`). The boards check warns about agent-ready PBIs
   with a missing, malformed, multiple, or unknown assignment, never about
   one assigned to another repository of the project. The checks tell a missing or expired login,
@@ -304,8 +306,8 @@ host.
   unreachable service apart.
 - #306 ports the Repos operations: pull requests, threads, comments,
   reviewer reads, commit statuses, the native PBI link, and the code-host
-  startup check, whose write permissions stay an unverified warning. Finding
-  a coordinator pull-request comment by marker still needs the identity row.
+  startup check with effective repository permissions. Coordinator PR
+  comments use the authenticated author plus marker for recovery.
 - #305 ports plan publication (decisions 14 and 15): `plan_extension.go`
   holds preflight, target resolution, and the create arguments;
   `planwrite_extension.go` holds the create, the correlation lookup, the
@@ -323,9 +325,8 @@ host.
   operator who must use only the PAT runs Factory as a user without an
   `az login` session. Factory adds no environment isolation it cannot
   verify.
-- Identity and permission evaluation are not available on this route
-  (decision 12). Markdown rendering of a created description stays
-  unresolved (decision 15).
+- Identity and permission evaluation use the authorized embedded CLI helper
+  (decision 12). Description rendering uses GFM HTML (decision 15).
   The comment API version `7.1-preview` and the `multilineFieldsFormat` of
   the batch read need live evidence; a comment that the service does not
   store as Markdown fails instead of passing.
@@ -349,3 +350,13 @@ host.
 - **Environment isolation to force PAT-only authentication** (for example a
   separate `AZURE_CONFIG_DIR`). Rejected: it would also hide the stored PAT,
   and its behavior is not verified.
+
+## Review-fix evidence
+
+The read-only helper is exercised by `TestCLIHelperSDKContract`,
+`TestCLIHelperSourcesArePrivateAndRemoved`, and offline command dispatch
+through Azure CLI with the installed official extension and mocked SDK
+responses. No authenticated Azure DevOps service was used. Primary source:
+[Azure CLI extension discovery](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli-core/azure/cli/core/extension/__init__.py),
+[connection data](https://github.com/Azure/azure-devops-cli-extension/blob/master/azure-devops/azext_devops/dev/common/services.py),
+and [effective permissions SDK](https://github.com/Azure/azure-devops-cli-extension/blob/master/azure-devops/azext_devops/devops_sdk/v5_0/security/security_client.py).

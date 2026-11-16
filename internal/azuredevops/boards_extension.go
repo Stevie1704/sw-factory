@@ -78,20 +78,20 @@ func (c extensionBackend) readComments(ctx context.Context, repository tracker.R
 	return c.invoke(ctx, repository.Owner, extensionCommentRequest(repository, number, "GET", query, nil), destination)
 }
 
-// findStatusComment recovers the status comment by its marker
-// alone. The extension route cannot read the signed-in identity (ADR 0030),
-// so it cannot apply the author check of ADR 0019; it accepts exactly one
-// live comment with the marker and refuses more than one instead of
-// guessing, so a copied marker never redirects the status comment and never
-// causes a duplicate.
+// findStatusComment recovers only a coordinator-authored marked comment.
+// Copies by other editors cannot redirect or block idempotent recovery.
 func (c extensionBackend) findStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
+	coordinator, err := c.AuthenticatedLogin(ctx)
+	if err != nil {
+		return tracker.Comment{}, err
+	}
 	responses, err := c.workItemComments(ctx, repository, number)
 	if err != nil {
 		return tracker.Comment{}, err
 	}
 	matches := []workItemCommentResponse{}
 	for _, response := range responses {
-		if strings.Contains(response.Text, marker) {
+		if strings.Contains(response.Text, marker) && strings.EqualFold(strings.TrimSpace(response.CreatedBy.UniqueName), coordinator) {
 			matches = append(matches, response)
 		}
 	}
@@ -193,6 +193,47 @@ func wiqlString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
+// extensionQueryItem is the projection shared by intake, diagnosis, and
+// correlation queries. System.Tags is returned when selected by the query.
+type extensionQueryItem struct {
+	ID     int `json:"id"`
+	Fields struct {
+		Tags string `json:"System.Tags"`
+	} `json:"fields"`
+}
+
+// queryExtensionItems follows the CLI's 1000-item cap with an ascending ID
+// cursor. Filtering and authorization happen after all pages are retrieved,
+// so old ineligible items cannot permanently hide newer work.
+func (c *Client) queryExtensionItems(ctx context.Context, repository tracker.Repository, query string) ([]extensionQueryItem, error) {
+	const pageSize = 1000
+	items := []extensionQueryItem{}
+	cursor := 0
+	for {
+		wiql := query
+		if cursor > 0 {
+			wiql += " AND [System.Id] > " + strconv.Itoa(cursor)
+		}
+		wiql += " ORDER BY [System.Id]"
+		var page []extensionQueryItem
+		if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, &page); err != nil {
+			return nil, err
+		}
+		next := cursor
+		for _, item := range page {
+			if item.ID <= cursor {
+				return nil, fmt.Errorf("Azure Boards query did not advance past work item %d", cursor)
+			}
+			next = max(next, item.ID)
+		}
+		items = append(items, page...)
+		if len(page) < pageSize {
+			return items, nil
+		}
+		cursor = next
+	}
+}
+
 // eligibleIssues is ListEligibleIssues on the extension route. The
 // WIQL names the project explicitly, because az boards query sends no
 // project context for @project, and filters by the assignment tag only as
@@ -205,12 +246,9 @@ func (c extensionBackend) eligibleIssues(ctx context.Context, repository tracker
 	}
 	wiql := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
 		" AND [System.Tags] CONTAINS " + wiqlString(tracker.LabelAgentReady) +
-		" AND [System.Tags] CONTAINS " + wiqlString(RepositoryAssignmentTag(identity.ID)) +
-		" ORDER BY [System.Id]"
-	var found []struct {
-		ID int `json:"id"`
-	}
-	if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, &found); err != nil {
+		" AND [System.Tags] CONTAINS " + wiqlString(RepositoryAssignmentTag(identity.ID))
+	found, err := c.queryExtensionItems(ctx, repository, wiql)
+	if err != nil {
 		return nil, fmt.Errorf("query eligible work items: %w", err)
 	}
 	ids := make([]int, 0, len(found))

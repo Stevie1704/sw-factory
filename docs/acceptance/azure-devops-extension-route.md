@@ -20,8 +20,8 @@ evidence stay apart, and a scenario that did not run is `not-run`, never
   [Azure DevOps plan publication](azure-devops-plan-publication.md).
 
 **Live evidence: not run.** No command of this route has run against Azure
-DevOps. The Azure CLI is not installed on the development host, and no
-disposable project was authorized. Scripted adapters are not live-provider
+DevOps. An isolated Azure CLI installation was used only for offline helper
+dispatch with mocked SDK responses; no disposable project was authorized. Scripted adapters are not live-provider
 proof.
 
 ## Identities
@@ -29,8 +29,8 @@ proof.
 | Item | Value |
 | --- | --- |
 | Platform | darwin/arm64, Go 1.27.4 (go.mod toolchain) |
-| Release | Development build of branch `feat/307-devops-acceptance-docs`; the report names the exact revision |
-| Azure CLI and azure-devops extension | Not installed; no version observed |
+| Release | Development build of branch `feat/302-azure-devops-pat`; the report names the exact revision |
+| Azure CLI and azure-devops extension | Azure CLI 2.93.0 and azure-devops 1.0.11, isolated temporary installation for offline helper dispatch only |
 | Pinned worker image | Not rebuilt for #307. No worker or report contract changed; no live invocation ran. |
 | Host harness | Not observed: no live scenario ran. The implementing agent was Claude Code (Claude Opus 5.5); it is not product evidence. |
 
@@ -75,16 +75,18 @@ the repository and the link from the fake's state, not from the request.
 | Retry and restart reconciliation without duplicates | `internal/factory:TestIdeationJourneyRecoversRemoteSuccessAfterACoordinatorStop`, `internal/factory:TestIdeationJourneySurvivesRestartsAndDuplicateSubmissions` (subtests `azure-devops-extension`), `internal/azuredevops:TestExtensionPublishReconcilesLostResponsesWithoutDuplicates`, `internal/azuredevops:TestExtensionRelationWithALostResponseIsVerifiedNotRepeated`, `internal/azuredevops:TestExtensionPublishStopsOnDuplicateCorrelationMatches` | pass |
 | Publication grants no execution authorization | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories` (both installations poll no work and a direct claim is refused until `agent-ready`), every ideation journey's inert check | pass |
 | Claim, frozen repository, and state tags | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/factory:TestClaimFreezesTheValidatedRepositoryAssignmentWithTheRun`, `internal/store:TestFrozenTrackerRepositoryCannotBeRedirected` | pass |
-| Draft pull request in the correct repository with a native PBI link | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/factory:TestCreateDraftPullRequestLinksTheSourceWorkItemOfAFrozenRepository`, `internal/azuredevops:TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository`, `internal/azuredevops:TestExtensionLostCreateResponseRecoversThePullRequestAndItsLink`, `internal/azuredevops:TestEnsurePullRequestWorkItemRecoversAMissingAssociation` | pass |
+| Both registrations create a draft PR in their repository with a native PBI link | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/factory:TestCreateDraftPullRequestLinksTheSourceWorkItemOfAFrozenRepository`, `internal/azuredevops:TestExtensionCreateLinksTheSourceWorkItemInTheFrozenRepository`, `internal/azuredevops:TestExtensionLostCreateResponseRecoversThePullRequestAndItsLink`, `internal/azuredevops:TestEnsurePullRequestWorkItemRecoversAMissingAssociation` | pass |
 | Review feedback and readiness | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories` (the real client reads the maintainer's change request and readies the pull request; another installation cannot change it), `internal/azuredevops:TestExtensionReviewsAndCommentsReadThreadsThroughInvoke`, `internal/azuredevops:TestExtensionCreateUpdateAndReadinessUseDedicatedCommands`, `internal/azuredevops:TestExtensionCommitStatusesUseTheGitStatusesInvokeRoute`. The coordinator's review and readiness passes are route-neutral and covered by the existing review tests in `make check`. | pass, partial (see below) |
 | Two installations, one project, Epic with PBIs for both repositories; each claims only its own | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/azuredevops:TestExtensionQueueListsOnlyWorkItemsAssignedToTheRegisteredRepository` | pass |
 | Missing, ambiguous, malformed, unknown, and mismatched tags refused on polling and direct claim | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/factory:TestClaimRefusesAnInvalidRepositoryAssignmentBeforeAnyEffect`, `internal/azuredevops:TestClaimRepositoryAssignmentRefusesEveryInvalidAssignment`, `internal/azuredevops:TestValidateRepositoryAssignmentRefusesEveryInvalidAssignment`, `internal/azuredevops:TestValidateRepositoryAssignmentFailsClosedWithoutAUsableRepositoryList`, `internal/azuredevops:TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems` | pass |
 | Correlation and assignment tags kept through retry and lifecycle updates | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories`, `internal/azuredevops:TestExtensionPublishReconcilesLostResponsesWithoutDuplicates`, `internal/azuredevops:TestExtensionReplaceIssueLabelsKeepsAssignmentAndCorrelationTags`, `internal/azuredevops:TestExtensionPublishRefusesAnExistingItemWithAnotherTarget` | pass |
 | No redirection after claim | `internal/factory:TestAzureExtensionJourneyRunsAnEpicAcrossTwoRepositories` (a retag after the claim leaves the Run and its pull request in the frozen repository), `internal/azuredevops:TestExtensionCreateRefusesARegistrationThatNoLongerNamesTheFrozenRepository`, `internal/store:TestFrozenTrackerRepositoryCannotBeRedirected` | pass |
 | Login failure, command routing, no `az rest` | `internal/azuredevops:TestExtensionRunnerTurnsAMissingOrExpiredLoginIntoARepairInstruction`, `internal/azuredevops:TestExtensionRunnerRedactsSecretsFromCLIErrors`, `internal/azuredevops:TestExtensionRouteNeverFallsBackToAzRest`, `internal/azuredevops:TestExtensionRunnerIsNonInteractiveAndReturnsJSON` | pass |
-| Read-only startup diagnosis | `internal/azuredevops:TestExtensionStartupChecksPassReadOnlyChecksAndReportTheRestUnavailable`, `internal/azuredevops:TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly`, `internal/azuredevops:TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems`, `internal/azuredevops:TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards` | pass |
+| Read-only startup diagnosis | `internal/azuredevops:TestExtensionStartupChecksValidateIdentityAndPermissionsReadOnly`, `internal/azuredevops:TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly`, `internal/azuredevops:TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems`, `internal/azuredevops:TestExtensionCodeHostChecksPassReadOnlyProbesWithoutBoards` | pass |
 | No PAT in workers | `internal/worker:TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment` | pass |
 | Route selection and compatibility | `internal/config:TestAnOmittedAzureRouteKeepsTheAzRestRoute`, `internal/config:TestValidateHostRejectsAnInvalidAzureRouteSelection`, `internal/cli:TestAdaptersCarryTheSelectedAzureRoute` | pass |
+| Review regressions: early frozen-GUID check, retry assignment checks, queue continuation, rendered descriptions, and clarification recovery | `internal/azuredevops:TestExtensionAdoptionRefusesAReplacementBeforeUpdating`, `internal/azuredevops:TestExtensionRetryRefusesAReassignedSuccessfulItem`, `internal/azuredevops:TestExtensionQueueContinuesPastIneligibleItems`, `internal/azuredevops:TestExtensionCreatePlanItemUsesTheDedicatedCommand`, `internal/azuredevops:TestExtensionClarificationLookupRecoversOnlyTheAuthenticatedAuthorsComment` | pass |
+| Read-only helper and permission denial | `internal/azuredevops:TestCLIHelperSDKContract`, `internal/azuredevops:TestCLIHelperSourcesArePrivateAndRemoved`, `internal/azuredevops:TestExtensionRunnerLoadsAndRemovesTheEmbeddedHelper`, `internal/azuredevops:TestExtensionPreflightRefusesDeniedPermissions`, `internal/azuredevops:TestExtensionPlanPermissionsRefusesAChildAreaDenial` | pass |
 
 **Partial.** The journey records the end of the implementation turn through
 the store before it creates the draft pull request, as
@@ -119,19 +121,16 @@ regression guards:
 These limits hold for this release. A live run must not report them as
 passed.
 
-1. **No signed-in identity.** No verified command or invoke resource of the
-   extension returns the caller. `AuthenticatedLogin` fails with
-   `ErrExtensionOperationUnavailable`. The doctor reports
-   `azure_devops.identity.not_available` and
-   `azure_devops.permissions.not_available` as skipped and never as passed,
-   and the code-host check reports permissions as an unverified warning.
-   Status comments are found by the run marker alone (ADR 0030 decision 12).
-   Pull-request clarification comments (`FindPullRequestComment`) fail closed
-   on this route.
-2. **Description format.** `az boards work-item create` sends only field
-   operations, so the description is created as escaped HTML that shows the
-   approved Markdown text; headings, lists, and code blocks are not rendered
-   (ADR 0030 decision 15).
+1. **Helper evidence is scripted.** The bundled read-only CLI helper uses
+   the installed official extension's connection-data and security SDKs.
+   Offline command dispatch, SDK contracts, author-aware comment recovery,
+   and denied-permission behavior pass; none has authenticated against a live
+   Azure DevOps project. Organization policy and PAT scopes remain live checks.
+2. **Description format.** The dedicated create command stores rendered GFM
+   HTML. Source Markdown is approval-bound; intake converts HTML to text with
+   link destinations, checkbox states, and Factory markers. It does not promise
+   reconstruction of Markdown source syntax. Service-side HTML normalization
+   needs live evidence (ADR 0030 decision 15).
 3. **Plan target control.** A plan node selects another repository only
    through `target_repository` in the stored or draft plan JSON. The plan
    editor has no control for it, and the planning role gets no guidance to
@@ -188,9 +187,9 @@ evidence.
    with its own `operational_data_path` and `route: devops_extension`. The
    `service` configuration has the Epic/PBI `planning` mapping and
    `plan_repositories: [web]`. Run `factory doctor --config <path> --json`
-   for each. Expected: login, repository, and Boards query pass; identity
-   and permissions show as skipped; no work item, tag, or pull request
-   changes.
+   for each. Expected: login, repository, Boards query, identity, and effective
+   permissions pass; no work item, tag, or pull request changes. A denied or
+   unobservable permission fails the check.
 5. **Plan.** In the `service` installation, run an ideation session to a
    plan with one parent and two tasks. Keep each task short: Azure Repos
    accepts at most 4,000 characters in a pull-request description. Set
@@ -236,9 +235,9 @@ evidence.
     one pull request. Expected: the vote is read as a change request with
     the comment as its finding, implementation resumes, and the pull request
     returns to draft; after the repair it becomes ready and shows its commit
-    statuses. A clarification question on the pull request is expected to
-    fail closed (Known limits, item 1); record it, do not count it as a
-    pass.
+    statuses. Request clarification on the pull request; verify the questions
+    are published and a restarted coordinator recovers the same marked
+    comment rather than creating a duplicate.
 13. **Expiry.** Run `az devops logout --organization <URL>` and
     `factory doctor --json`. Expected: the login check fails with
     `run az devops login --organization <URL>`, and nothing else changes.
@@ -272,3 +271,14 @@ and the factory tags of the disposable project. Run
 | Human interventions | None in the scripted journeys. |
 | Elapsed time | The extension subtests of the ideation journeys and the two-repository journey take less than 2 s together. |
 | Usage | No paid model call ran: the journeys use report fixtures. |
+
+## Review-fix scripted rerun
+
+The two-installation journey now creates both the service and web PRs and
+checks their separate repository GUIDs and native source-PBI links. Regression
+checks also cover a replacement repository before PR mutation, reassigned
+items restored from the publication ledger, the queue beyond 1000 older
+ineligible items, denied child-area permissions, rendered Markdown/HTML, and
+coordinator-owned clarification recovery. The CLI helper is embedded in the
+Factory binary and needs no separate installation. Offline dispatch uses
+mocked service responses and is not live Azure DevOps evidence.

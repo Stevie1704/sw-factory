@@ -26,6 +26,26 @@ const extensionPullRequest = `{"pullRequestId":17,"status":"active","isDraft":tr
 	"sourceRefName":"refs/heads/factory/run-1","targetRefName":"refs/heads/main",
 	"lastMergeSourceCommit":{"commitId":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},` + serviceRepository + `}`
 
+// TestExtensionAdoptionRefusesAReplacementBeforeUpdating proves that a
+// repository name reused after claim cannot receive a PR body mutation.
+func TestExtensionAdoptionRefusesAReplacementBeforeUpdating(t *testing.T) {
+	t.Parallel()
+
+	replacement := strings.ReplaceAll(extensionPullRequest, azuredevopstest.RepositoryID, azuredevopstest.WebRepositoryID)
+	az := newFakeAz(t).
+		on("repos show", repositoryShow("service", azuredevopstest.WebRepositoryID)).
+		on("repos pr list", `[`+replacement+`]`).
+		on("repos pr show", replacement).
+		on("repos pr update", replacement)
+	request := codehost.PullRequestRequest{Title: "Changed", Body: "new body", HeadBranch: "factory/run-1", BaseBranch: "main", Draft: true, WorkItem: &sourceItem}
+	if _, err := effect.UpsertPullRequest(t.Context(), extensionClient(az), repository, 0, request); err == nil {
+		t.Fatal("UpsertPullRequest accepted a replacement repository")
+	}
+	if calls := az.extensionCalled("repos pr update"); len(calls) != 0 {
+		t.Fatalf("updated the replacement PR before refusing it: %+v", calls)
+	}
+}
+
 // TestExtensionFindPullRequestListsTheBranchPairAndReadsTheFullBody verifies
 // that the extension route searches one repository with az repos pr list,
 // explicitly targeted, and reads the match with az repos pr show because
@@ -506,5 +526,35 @@ func TestExtensionCommentIsCreatedInAClosedThreadAndEdited(t *testing.T) {
 	wantInvoke(t, edit, "devops invoke PATCH git/pullRequestThreadComments", map[string]string{"project": "Factory Pilot", "repositoryId": "service", "pullRequestId": "17", "threadId": "9", "commentId": "1"})
 	if edit.Body != `{"content":"new"}` {
 		t.Fatalf("edit body = %q", edit.Body)
+	}
+}
+
+// TestExtensionClarificationLookupRecoversOnlyTheAuthenticatedAuthorsComment
+// exercises the find-before-create boundary used by clarification publication
+// and replay, including an otherwise identical marker copied by another user.
+func TestExtensionClarificationLookupRecoversOnlyTheAuthenticatedAuthorsComment(t *testing.T) {
+	t.Parallel()
+	marker := "<!-- factory-clarification: run-1 v1 -->"
+	thread := `{"id":9,"status":"closed","comments":[{"id":1,"author":{"uniqueName":"factory@contoso.com"},"content":"` + marker + `","commentType":"text","publishedDate":"2026-10-09T12:00:00Z"}]}`
+	foreign := strings.ReplaceAll(strings.ReplaceAll(thread, `"id":9`, `"id":8`), "factory@contoso.com", "human@contoso.com")
+	az := newFakeAz(t).
+		on("factory-devops identity", `{"login":"factory@contoso.com"}`).
+		on("devops invoke GET git/pullRequestThreads", `{"value":[]}`, `{"value":[`+foreign+`,`+thread+`]}`).
+		on("devops invoke POST git/pullRequestThreads", thread)
+	client := extensionClient(az)
+	found, err := client.FindPullRequestComment(t.Context(), repository, 17, marker)
+	if err != nil || found.ID != "" {
+		t.Fatalf("first lookup = %#v, %v; want an absent comment without identity error", found, err)
+	}
+	created, err := client.CreatePullRequestComment(t.Context(), repository, 17, marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := client.FindPullRequestComment(t.Context(), repository, 17, marker)
+	if err != nil || replayed.ID != created.ID || replayed.Author != "factory@contoso.com" {
+		t.Fatalf("replay = %#v, %v; want the existing coordinator comment %#v", replayed, err, created)
+	}
+	if len(az.extensionCalled("devops invoke POST git/pullRequestThreads")) != 1 {
+		t.Fatal("recovery created a duplicate clarification comment")
 	}
 }

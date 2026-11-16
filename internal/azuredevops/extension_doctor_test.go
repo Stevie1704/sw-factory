@@ -22,39 +22,37 @@ func extensionChecks(runner azuredevops.CommandRunner) doctor.Report {
 	return doctor.Run(context.Background(), extensionClient(runner).StartupChecks(repository)...)
 }
 
-// TestExtensionStartupChecksPassReadOnlyChecksAndReportTheRestUnavailable
+// TestExtensionStartupChecksValidateIdentityAndPermissionsReadOnly
 // verifies that a working az devops login passes the read-only checks with
 // az repos show and az boards query only, and that the identity and
 // permission checks are reported as not available on this route instead of
 // passing.
-func TestExtensionStartupChecksPassReadOnlyChecksAndReportTheRestUnavailable(t *testing.T) {
+func TestExtensionStartupChecksValidateIdentityAndPermissionsReadOnly(t *testing.T) {
 	t.Parallel()
 
 	az := newFakeAz(t).
 		on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
-		on(routeQuery, "")
+		on(routeQuery, "").
+		on("factory-devops identity", `{"login":"factory@contoso.com"}`).
+		on("factory-devops permission", `{"granted":true}`).
+		on("devops invoke GET wit/classificationNodes", `{"identifier":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}`)
 	report := extensionChecks(az)
 	names := []string{}
 	for _, result := range report.Results {
 		names = append(names, result.Name+"="+string(result.Status))
 	}
-	want := "azure devops authentication=passed,azure devops repository=passed,azure devops boards=passed,azure devops identity=skipped,azure devops permissions=skipped"
+	want := "azure devops authentication=passed,azure devops repository=passed,azure devops boards=passed,azure devops identity=passed,azure devops permissions=passed"
 	if strings.Join(names, ",") != want {
 		t.Fatalf("results = %v, want %s", names, want)
 	}
-	if !report.Ready() || report.Complete() {
-		t.Fatalf("report ready=%t complete=%t, want ready and incomplete", report.Ready(), report.Complete())
-	}
-	for _, result := range report.Results[3:] {
-		if !strings.Contains(result.Problem, "devops_extension") {
-			t.Fatalf("%s problem = %q, want the route named", result.Name, result.Problem)
-		}
+	if !report.Ready() || !report.Complete() {
+		t.Fatalf("report ready=%t complete=%t, want ready and complete", report.Ready(), report.Complete())
 	}
 	if len(az.calls) != 0 {
 		t.Fatalf("az rest calls = %d, want none", len(az.calls))
 	}
 	for _, call := range az.extensionCalls {
-		if route := call.Route(); route != "repos show" && route != routeQuery {
+		if route := call.Route(); route != "repos show" && route != routeQuery && route != "factory-devops identity" && route != "factory-devops permission" && route != "devops invoke GET wit/classificationNodes" {
 			t.Fatalf("doctor ran %s, want only read-only commands", route)
 		}
 	}

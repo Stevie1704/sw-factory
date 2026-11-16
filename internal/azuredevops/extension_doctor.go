@@ -21,23 +21,13 @@ var (
 	boardsUnassigned          = doctor.Condition{Code: "azure_devops.boards.unassigned", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "setup"}
 )
 
-// Reasons for the checks that the extension route cannot perform. They are
-// reported as skipped, never as passed.
-const (
-	identityNotAvailable = "not available on the devops_extension route: no verified az devops command or invoke resource returns the signed-in identity (connection data belongs to the Location area, which az devops invoke refuses); status comments are recovered by their marker alone"
-
-	permissionsNotAvailable = "not available on the devops_extension route: permission evaluation belongs to the Security area, which az devops invoke refuses, and az devops security permission show needs the signed-in identity; verify by hand that the az devops login identity has Contribute, Create branch, and Contribute to pull requests on the repository, View and Edit work items in the project, and Create tag definition"
-)
-
 // signedInRefusals are Azure DevOps error codes that only an authenticated
 // caller receives: a missing or unreadable project or repository.
 var signedInRefusals = []string{"TF401019", "TF200016"}
 
 // startupChecks returns the read-only startup checks of the
-// extension route. They run only az repos show, az boards query, and, for an
-// assignment tag that names another GUID, az repos list; they never write
-// and never ask for az login. Identity and permission checks have no
-// verified command on this route and report themselves as skipped.
+// extension route. Repository, Boards, identity, and effective-permission
+// probes are read-only and use the CLI-managed az devops login connection.
 func (c extensionBackend) startupChecks(repository tracker.Repository) []doctor.Check {
 	organizationURL := extensionOrganizationURL(repository.Owner)
 	return []doctor.Check{
@@ -59,11 +49,21 @@ func (c extensionBackend) startupChecks(repository tracker.Repository) []doctor.
 		func(ctx context.Context) doctor.Result {
 			return c.extensionBoardsResult(ctx, repository)
 		},
-		func(context.Context) doctor.Result {
-			return doctor.Skipped("azure_devops.identity.not_available", "azure devops identity", identityNotAvailable)
+		func(ctx context.Context) doctor.Result {
+			if _, err := c.AuthenticatedLogin(ctx); err != nil {
+				return doctor.Failure(authenticationFailed, "azure devops identity", err.Error(), "run az devops login --organization "+organizationURL+" and verify the azure-devops extension is installed")
+			}
+			return doctor.Success("azure_devops.identity.ready", "azure devops identity")
 		},
-		func(context.Context) doctor.Result {
-			return doctor.Skipped("azure_devops.permissions.not_available", "azure devops permissions", permissionsNotAvailable)
+		func(ctx context.Context) doctor.Result {
+			err := c.extensionGitPermissions(ctx, repository)
+			if err == nil {
+				err = c.extensionPlanPermissions(ctx, repository, []tracker.RenderedPlanItem{{}})
+			}
+			if err != nil {
+				return doctor.Failure(permissionsInsufficient, "azure devops permissions", err.Error(), "grant the az devops login identity repository Contribute, Create branch, Contribute to pull requests, View and Edit work items in the selected areas, and Create tag definition")
+			}
+			return doctor.Success("azure_devops.permissions.ready", "azure devops permissions")
 		},
 	}
 }
@@ -80,14 +80,9 @@ func (c extensionBackend) startupChecks(repository tracker.Repository) []doctor.
 func (c *Client) extensionBoardsResult(ctx context.Context, repository tracker.Repository) doctor.Result {
 	const name = "azure devops boards"
 	wiql := "SELECT [System.Id], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
-		" AND [System.Tags] CONTAINS " + wiqlString(tracker.LabelAgentReady) + " ORDER BY [System.Id]"
-	var found []struct {
-		ID     int `json:"id"`
-		Fields struct {
-			Tags string `json:"System.Tags"`
-		} `json:"fields"`
-	}
-	if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, &found); err != nil {
+		" AND [System.Tags] CONTAINS " + wiqlString(tracker.LabelAgentReady)
+	found, err := c.queryExtensionItems(ctx, repository, wiql)
+	if err != nil {
 		if result, ok := unresponsive("azure_devops.boards.timeout", name, err); ok {
 			return result
 		}
