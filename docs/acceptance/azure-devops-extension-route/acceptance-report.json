@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
   "manifest_schema_version": 1,
-  "generated_at": "2026-11-16T16:33:49.193664Z",
+  "generated_at": "2026-11-16T17:22:13.331793Z",
   "release": {
     "schema_version": 1,
     "version": "development",
     "build": "development",
-    "revision": "c095739e854dc1628be35943e6f8e044529e3d29",
+    "revision": "02b86c108a3f4f6288a94a419519c742f084f1e4",
     "modified": false,
     "worker_base_image": "",
     "platform": "darwin/arm64"
@@ -304,33 +304,24 @@
       "title": "Publish an Epic with PBIs and run one PBI to a ready pull request with a PAT login",
       "live": {
         "outcome": "not-run",
-        "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+        "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only"
       },
       "deterministic": {
         "outcome": "pass",
         "reason": "scripted az only; the implementation turn and the Gate are not driven on this route: the journey records the implementation stage through the store, and review feedback and readiness run through the real client, not a coordinator pass"
       },
-      "gaps": [
-        {
-          "issue": 302,
-          "summary": "The extension route cannot read the signed-in identity, so doctor reports identity and permissions as skipped, status comments match by marker only, and pull-request clarification comments fail closed."
-        },
-        {
-          "issue": 302,
-          "summary": "Work-item descriptions are created as escaped HTML that shows the approved Markdown text; az boards work-item create cannot set the Markdown format."
-        }
-      ]
+      "gaps": []
     },
     {
       "id": "azure-extension-repository-assignment",
       "title": "Run PBIs of one Azure project in two repositories with separate installations",
       "live": {
         "outcome": "not-run",
-        "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host"
+        "reason": "not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only"
       },
       "deterministic": {
         "outcome": "pass",
-        "reason": "scripted az only; two installations share one scripted project"
+        "reason": "scripted az only; two installations share one scripted project and each creates a PR in its frozen repository with its own native PBI association"
       },
       "gaps": [
         {

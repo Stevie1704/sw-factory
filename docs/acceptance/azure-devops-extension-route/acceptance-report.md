@@ -1,10 +1,10 @@
 # Factory acceptance report
 
-- Release: development (development), revision c095739e854dc1628be35943e6f8e044529e3d29, modified false
+- Release: development (development), revision 02b86c108a3f4f6288a94a419519c742f084f1e4, modified false
 - Platform: darwin/arm64
 - Host harness: not observed
 - Worker digest: not observed
-- Generated: 2026-11-16T16:33:49Z
+- Generated: 2026-11-16T17:22:13Z
 - Recorded duration: 0s
 
 A deterministic pass uses fake adapters. It is not evidence that an agent can use the release; only a live pass is.
@@ -37,8 +37,8 @@ A deterministic pass uses fake adapters. It is not evidence that an agent can us
 | `local-backlog-authorize-committed` | not-run | not-run | none |
 | `local-backlog-recovery` | not-run | not-run | none |
 | `local-backlog-code-host-access` | not-run | not-run | #300, #301 |
-| `azure-extension-publish-and-execute` | not-run: not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host | pass: scripted az only; the implementation turn and the Gate are not driven on this route: the journey records the implementation stage through the store, and review feedback and readiness run through the real client, not a coordinator pass | #302, #302 |
-| `azure-extension-repository-assignment` | not-run: not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host | pass: scripted az only; two installations share one scripted project | #302 |
+| `azure-extension-publish-and-execute` | not-run: not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only | pass: scripted az only; the implementation turn and the Gate are not driven on this route: the journey records the implementation stage through the store, and review feedback and readiness run through the real client, not a coordinator pass | none |
+| `azure-extension-repository-assignment` | not-run: not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only | pass: scripted az only; two installations share one scripted project and each creates a PR in its frozen repository with its own native PBI association | #302 |
 
 ## Interventions by cause
 
@@ -48,7 +48,7 @@ None recorded.
 
 ### `azure-extension-publish-and-execute` (live): not-run
 
-- Reason: not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host
+- Reason: not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only
 
 ### `azure-extension-publish-and-execute` (deterministic): pass
 
@@ -56,8 +56,8 @@ None recorded.
 
 ### `azure-extension-repository-assignment` (live): not-run
 
-- Reason: not run in the #307 acceptance; no authorized disposable Azure DevOps project, and az is not installed on the development host
+- Reason: not run in the #307 acceptance; no authorized disposable Azure DevOps project; the isolated CLI helper check used mocked SDK responses only
 
 ### `azure-extension-repository-assignment` (deterministic): pass
 
-- Reason: scripted az only; two installations share one scripted project
+- Reason: scripted az only; two installations share one scripted project and each creates a PR in its frozen repository with its own native PBI association
