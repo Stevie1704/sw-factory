@@ -64,6 +64,23 @@ func TestExtensionFindPullRequestListsTheBranchPairAndReadsTheFullBody(t *testin
 	}
 }
 
+// TestExtensionFindPullRequestCandidatesReadsEveryExactMatch verifies that
+// the specification publisher sees every exact branch match, each with its
+// full body, so it can refuse duplicates.
+func TestExtensionFindPullRequestCandidatesReadsEveryExactMatch(t *testing.T) {
+	t.Parallel()
+
+	second := strings.Replace(extensionPullRequest, `"pullRequestId":17`, `"pullRequestId":19`, 1)
+	az := newFakeAz(t).
+		on("repos pr list", `[`+extensionPullRequest+`,`+second+`]`).
+		on("repos pr show", extensionPullRequest, second)
+
+	candidates, err := extensionClient(az).FindPullRequestCandidates(context.Background(), repository, "factory/run-1", "main")
+	if err != nil || len(candidates) != 2 || candidates[0].Number != 17 || candidates[1].Number != 19 || candidates[1].Body != "body" {
+		t.Fatalf("FindPullRequestCandidates() = %#v/%v, want pull requests 17 and 19 with full bodies", candidates, err)
+	}
+}
+
 // TestExtensionPullRequestReadsRefuseAnotherRepository verifies that an
 // organization-scoped pull-request read for a pull request of another
 // repository in the same project is refused, not adopted.

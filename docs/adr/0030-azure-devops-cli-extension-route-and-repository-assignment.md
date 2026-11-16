@@ -204,6 +204,10 @@ host.
   `az login`, and a plan write reports `unsupported_capability`, which
   proves no write. The az rest route, GitHub, and local Markdown behave as
   before.
+- #306 ports the Repos operations: pull requests, threads, comments,
+  reviewer reads, commit statuses, the native PBI link, and the code-host
+  startup check, whose write permissions stay an unverified warning. Finding
+  a coordinator pull-request comment by marker still needs the identity row.
 - `store.PlanNode` and `publication.planGraph` carry no target yet; #305
   adds the plan node field, its validation, and the adapter rendering.
 - **Residual authentication risk.** The extension tries an `az login` token
