@@ -54,8 +54,9 @@ its PAT option, and ADR 0025 decisions 4 and 6.
    `run az devops login --organization <the URL Factory passed>`. Other
    failures return the command group (`az repos show`), never argv values,
    and one line of standard error with the `AZURE_DEVOPS_EXT_PAT` value and
-   every 40-character or longer opaque run redacted, bounded to 300
-   characters.
+   every opaque run of 40 or more letters, digits, `+`, `=`, `_`, or `-`
+   redacted, bounded to 300 characters. `/` and `.` end a run, so URLs and
+   paths stay readable.
 5. **`az devops invoke` is used only through verified area/resource pairs.**
    The helper takes an area, resource, method, API version, sorted route and
    query parameters, and an optional JSON body. The extension reads a body
@@ -124,19 +125,27 @@ its PAT option, and ADR 0025 decisions 4 and 6.
 ## Operation inventory
 
 Evidence: the azure-devops extension's command reference on
-learn.microsoft.com (`az devops`, `az boards`, `az boards work-item`,
-`az boards work-item relation`, `az repos`, `az repos pr`, page versions of
-April to October 2026; extension for Azure CLI 2.30.0 or later), the
-extension source on github.com/Azure/azure-devops-cli-extension
-(`dev/team/invoke.py`, `dev/common/services.py`, `devops_sdk/client.py`,
-`dev/boards/work_item.py`, `dev/team/security_permission.py`), and the
+learn.microsoft.com (`az devops`, `az devops security permission`,
+`az boards`, `az boards work-item`, `az boards work-item relation`,
+`az repos`, `az repos ref`, `az repos pr`, `az repos pr reviewer`,
+`az repos pr work-item`, page versions of April to October 2026; extension
+for Azure CLI 2.30.0 or later), the extension source on
+github.com/Azure/azure-devops-cli-extension (`dev/team/invoke.py`,
+`dev/common/services.py`, `devops_sdk/client.py`, `dev/boards/work_item.py`,
+`dev/boards/relations.py`, `dev/team/security_permission.py`), and the
 resource-area and resource-location lists recorded on 10 January 2025 in
 that repository's `test_invoke_command_basic.yaml`. `az devops invoke`
 matches `--area` against the organization's ResourceAreas names and raises
 "--area is not present" otherwise; among locations with the same resource
 name it keeps the first one with the highest `maxVersion`, and route
 parameters play no part in the choice. "Resolves to" names the winning route
-template under that rule. The recording is one organization at one date; no
+template under that rule. When the URL is built (`client.py`
+`_remove_optional_route_parameters`), every whole `{name}` or `{*name}`
+segment without a route parameter is dropped, wherever it stands, so for
+example `.../comments/{commentId}` lists comments when `commentId` is
+omitted, and `{project}/{team}/...` becomes `{project}/...` without `team`;
+a `${type}` segment is kept. "Verified command" means the command and
+flags appear in the command reference; no command has been run. The recording is one organization at one date; no
 route has been run live, and the CLI is not installed on the development
 host.
 
@@ -144,8 +153,8 @@ host.
 | --- | --- | --- |
 | Identity: GET `_apis/connectionData` | `invoke --area Location --resource ConnectionData` | **Unresolved.** `Location` is not a ResourceAreas name in the recording, so invoke refuses it. No dedicated command returns the signed-in identity. |
 | Repository identity: GET `git/repositories/{repo}` | `az repos show --project --repository` | Verified command; implemented as `ResolveRepository`. |
-| Permission checks: GET `_apis/permissions/{ns}/{bit}` | `invoke --area Security --resource Permissions` | **Unresolved.** `Security` is not a ResourceAreas name, so invoke refuses it. Candidate: `az devops security permission show --namespace-id --subject --token`, which needs a subject identity (blocked by the identity row) and reports a subject's ACL, not an evaluation for the caller. |
-| Root area ID: GET `wit/classificationnodes/Areas` | `invoke --area wit --resource classificationNodes` route `structureGroup=areas` | Resolves to `{project}/_apis/wit/classificationNodes/{structureGroup}/{*path}`. Alternative: `az boards area project show`. |
+| Permission checks: GET `_apis/permissions/{ns}/{bit}` | `invoke --area Security --resource Permissions` | **Unresolved.** `Security` is not a ResourceAreas name, so invoke refuses it. Candidate: `az devops security permission show --namespace-id --subject --token` (verified command), whose `--subject` is a user email or group descriptor (blocked by the identity row) and which reports that subject's ACL, not an evaluation for the caller. |
+| Root area ID: GET `wit/classificationnodes/Areas` | `invoke --area wit --resource classificationNodes` route `structureGroup=areas` | Resolves to `{project}/_apis/wit/classificationNodes/{structureGroup}/{*path}`. |
 | Project tags: GET `wit/tags` | `invoke --area wit --resource tags` | Resolves to `{project}/_apis/wit/tags/{tagIdOrName}`. |
 | Work item read: GET `wit/workitems/{id}` | `az boards work-item show --id --expand` | Verified command; organization-scoped (no `--project`). Invoke `wit/workItems` resolves to the create route `${type}`, so it cannot read by ID. |
 | Batch read: GET `wit/workitems?ids=` | `invoke --area wit --resource workItemsBatch` POST | Resolves to `{project}/_apis/wit/workItemsBatch` (single location). Request shape from the REST reference "Work Items - Get Work Items Batch"; not run. |
@@ -154,8 +163,8 @@ host.
 | Update history: GET `wit/workItems/{id}/updates` | `invoke --area wit --resource updates` | Resolves to `{project}/_apis/wit/workItems/{id}/updates/{updateNumber}`. |
 | Tag replace: PATCH `wit/workitems/{id}` `/fields/System.Tags` | `az boards work-item update --id --fields System.Tags=...` | Verified command; organization-scoped. The value replaces every tag (decision 10). |
 | Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. **Unresolved:** the command sends only `/fields/...` operations (`work_item.py`), so it cannot set `/multilineFieldsFormat/System.Description=Markdown`; the Markdown description of ADR 0025 decision 5 needs a decision in #305. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
-| Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type parent\|predecessor --target-id` | Verified command; organization-scoped. Friendly names map to reference names through `relation list-type`. |
-| Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. |
+| Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. |
+| Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. |
 | Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location). The response gains `continuation_token` from the `X-MS-ContinuationToken` header. **Unresolved:** the code uses `7.1-preview.4`, which invoke cannot parse; whether the service accepts `7.1-preview` without a resource version is not verified. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
 | Process types: GET `wit/workitemtypes` | `invoke --area wit --resource workItemTypes` | Resolves to `{project}/_apis/wit/workItemTypes/{type}`. |
 | Field definitions: GET `wit/fields` | `invoke --area wit --resource fields` | Resolves to `{project}/_apis/wit/fields/{fieldNameOrRefName}`. |
@@ -166,10 +175,10 @@ host.
 | PR read: GET `git/repositories/{repo}/pullrequests/{n}` | `az repos pr show --id` | Verified command; organization-scoped, so the adapter must check the repository in the response. |
 | PR create: POST `git/repositories/{repo}/pullrequests` | `az repos pr create --project --repository --source-branch --target-branch --title --description --draft true --work-items <PBI>` | Verified command. `--description` takes one value per line. |
 | PR update and readiness: PATCH `pullrequests/{n}` | `az repos pr update --id --title --description` and `--draft false` | Verified command; organization-scoped. |
-| PR work-item link | `az repos pr work-item add\|list --id --work-items` | Verified commands (new for #306). |
+| PR work-item link | `az repos pr work-item add --id --work-items` and `az repos pr work-item list --id` | Verified commands; organization-scoped (new for #306). |
 | PR threads (reviews and comments): GET/POST `pullRequests/{n}/threads` | `invoke --area git --resource pullRequestThreads` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/pullRequests/{pullRequestId}/threads/{threadId}`. |
 | PR thread comment edit: PATCH `threads/{t}/comments/{c}` | `invoke --area git --resource pullRequestThreadComments` | Resolves to `.../threads/{threadId}/comments/{commentId}`. |
-| PR reviewers: GET `pullRequests/{n}/reviewers` | `az repos pr reviewer list --id` | Verified command. Alternative: `invoke git/pullRequestReviewers`, which resolves to the 7.2 project route. |
+| PR reviewers: GET `pullRequests/{n}/reviewers` | `az repos pr reviewer list --id` | Verified command; organization-scoped. Alternative: `invoke git/pullRequestReviewers`, which resolves to the 7.2 project route. |
 | Commit statuses: POST/GET `commits/{sha}/statuses` | `invoke --area git --resource statuses` | Resolves to `{project}/_apis/git/repositories/{repositoryId}/commits/{commitId}/statuses`. |
 | Default-branch ref: GET `refs?filter=heads/<branch>` | `az repos ref list --project --repository --filter heads/<branch>` | Verified command. |
 | Code-host doctor active PR probe | `az repos pr list --status active --top 1` | Verified command. |
@@ -190,8 +199,13 @@ host.
   repositories with distinct GUIDs in one project; the route-keyed test fake
   routes extension calls by command and invoke area/resource.
 - Until #304 and #306 port them, every Boards and Repos operation on the
-  extension route fails closed. The az rest route, GitHub, and local
-  Markdown behave as before.
+  extension route fails closed. The tracker and code-host startup checks
+  fail with an `az devops login` repair instead of passing or pointing to
+  `az login`, and a plan write reports `unsupported_capability`, which
+  proves no write. The az rest route, GitHub, and local Markdown behave as
+  before.
+- `store.PlanNode` and `publication.planGraph` carry no target yet; #305
+  adds the plan node field, its validation, and the adapter rendering.
 - **Residual authentication risk.** The extension tries an `az login` token
   before a PAT (`services.py` `_get_credentials`), and
   `AZURE_DEVOPS_EXT_PAT` takes precedence over the stored `az devops login`
