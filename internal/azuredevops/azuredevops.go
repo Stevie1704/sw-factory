@@ -89,6 +89,9 @@ type Client struct {
 	// Planning maps neutral plan kinds to the project's work-item types for
 	// plan publication. Nil selects config.AgileAzurePlanMapping.
 	Planning *config.AzurePlanMapping
+	// Route selects az rest (empty or az_rest) or the CLI extension route
+	// (ADR 0030). The extension route never runs az rest.
+	Route config.AzureRoute
 
 	// mu guards the caches below.
 	mu sync.Mutex
@@ -105,8 +108,12 @@ func NewClient(organization string, authorizedUsers []string) *Client {
 
 var _ tracker.AccountReader = (*Client)(nil)
 
-// runner returns the injected command runner or the production CLI runner.
+// runner returns the injected command runner or the production runner of
+// the client's route.
 func (c *Client) runner() CommandRunner {
+	if c.Runner == nil && c.extensionRoute() {
+		return extensionRunner{timeout: CommandTimeout}
+	}
 	if c.Runner == nil {
 		return commandRunner{}
 	}
@@ -152,6 +159,9 @@ func encodeRequestBody(body any) ([]byte, error) {
 // call sends one REST request through az rest and decodes the JSON response
 // into destination when it is not nil.
 func (c *Client) call(ctx context.Context, req request, destination any) error {
+	if c.extensionRoute() {
+		return fmt.Errorf("%s %s: %w", req.Method, redactedPath(req.URL), ErrExtensionOperationUnavailable)
+	}
 	args := []string{"rest", "--method", strings.ToLower(req.Method), "--url", req.URL, "--resource", devOpsResource}
 	if req.Body != nil {
 		encoded, err := encodeRequestBody(req.Body)
@@ -265,6 +275,9 @@ func (c *Client) AuthenticatedLogin(ctx context.Context) (string, error) {
 	}
 	if strings.TrimSpace(c.Organization) == "" {
 		return "", errors.New("Azure DevOps organization is required to read the authenticated identity")
+	}
+	if c.extensionRoute() {
+		return "", fmt.Errorf("read the authenticated Azure DevOps identity: %w", ErrExtensionOperationUnavailable)
 	}
 	var response connectionDataResponse
 	if err := c.call(ctx, request{Method: "GET", URL: organizationURL(c.Organization, "connectionData", nil, connectionDataAPIVersion)}, &response); err != nil {

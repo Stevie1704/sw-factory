@@ -50,13 +50,14 @@ func serviceDependencies(configPath string) factory.Dependencies {
 // codeHostAdapter selects only the independently registered PR/status provider.
 func codeHostAdapter(registration config.RepositoryRegistration) configuredCodeHost {
 	if registration.EffectiveCodeHost() == config.ProviderAzureDevOps {
-		return azuredevops.NewClient(registration.AzureDevOps.Organization, registration.AuthorizedUsers)
+		azure := registration.AzureDevOps
+		return azuredevops.NewClientForRoute(azure.Organization, registration.AuthorizedUsers, azure.EffectiveRoute())
 	}
 	return github.NewCodeHostClient()
 }
 
 // trackerAdapter selects committed Markdown or a legacy combined remote tracker.
-// Azure registrations retain their plan mapping. A host configuration that
+// Azure registrations retain their plan mapping and selected route. A host configuration that
 // does not exist or does not load also
 // selects GitHub: init and register create it, and the command that needs it
 // reports the load error.
@@ -74,7 +75,7 @@ func trackerAdapter(configPath string) tracker.Client {
 		return localpublication.Wrap(client, localpublication.NewPublisher(registration, target, codeHostAdapter(registration)))
 	}
 	if azure := registration.AzureDevOps; !azure.IsZero() {
-		client := azuredevops.NewClient(azure.Organization, registration.AuthorizedUsers)
+		client := azuredevops.NewClientForRoute(azure.Organization, registration.AuthorizedUsers, azure.EffectiveRoute())
 		client.Planning = azure.Planning
 		return client
 	}

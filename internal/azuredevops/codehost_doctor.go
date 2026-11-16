@@ -17,7 +17,9 @@ var _ codehost.ReadinessChecker = (*Client)(nil)
 func (c *Client) CodeHostStartupChecks(repository tracker.Repository) []doctor.Check {
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
-			if _, err := c.AuthenticatedLogin(ctx); err != nil {
+			if _, err := c.AuthenticatedLogin(ctx); err != nil && c.extensionRoute() {
+				return doctor.Failure(doctor.Condition{Code: "azure_devops.code_host.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}, "Azure Repos authentication", extensionDiagnosisProblem, extensionDiagnosisAction(repository.Owner))
+			} else if err != nil {
 				return doctor.Failure(doctor.Condition{Code: "azure_devops.code_host.authentication.failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}, "Azure Repos authentication", "az cannot establish the configured Azure Repos identity", "verify az login and company policy; local Markdown removes Boards access only, and no alternative Azure authentication route is implemented")
 			}
 			return doctor.Success("azure_devops.code_host.authentication.ready", "Azure Repos authentication")

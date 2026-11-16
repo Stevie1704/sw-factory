@@ -1978,7 +1978,10 @@ func forbiddenEnvironmentName(name string) bool {
 	case "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ANTHROPIC_API_KEY", "CODEX_API_KEY":
 		return true
 	default:
-		return strings.HasSuffix(strings.ToUpper(name), "_TOKEN") || strings.HasSuffix(strings.ToUpper(name), "_API_KEY")
+		upper := strings.ToUpper(name)
+		// AZURE_DEVOPS_EXT_* configures the Azure DevOps CLI extension,
+		// including its PAT (ADR 0030).
+		return strings.HasSuffix(upper, "_TOKEN") || strings.HasSuffix(upper, "_API_KEY") || strings.HasSuffix(upper, "_PAT") || strings.HasPrefix(upper, "AZURE_DEVOPS_EXT_")
 	}
 }
 

@@ -96,6 +96,11 @@ type PlanGraphItem struct {
 	// PlanCorrelation. The adapter must render it into the published item so
 	// that FindPlanItems can find the item again.
 	Correlation string
+	// TargetRepository optionally names the registered repository that
+	// executes the node, for an adapter whose items belong to a project
+	// rather than a repository (Azure Boards, ADR 0030). Empty means no
+	// explicit target; a child never inherits its parent's target.
+	TargetRepository string
 }
 
 // PlanCorrelation returns the stable correlation key of one plan node:
@@ -146,6 +151,20 @@ type RenderedPlanItem struct {
 	Labels []string
 	// Correlation is the correlation key rendered into the item.
 	Correlation string
+	// TargetRepository is the resolved repository that executes the item,
+	// bound into the approval with the rest of the content. Nil means the
+	// item has no repository assignment.
+	TargetRepository *PlanTargetRepository
+}
+
+// PlanTargetRepository is the resolved execution target of one rendered
+// plan item (ADR 0030).
+type PlanTargetRepository struct {
+	// Name is the registered repository name the plan selected.
+	Name string
+	// ID is the stable provider repository identity, for example the Azure
+	// Repos GUID that the factory-repo tag names.
+	ID string
 }
 
 // PlanRelationshipKind is the provider-neutral kind of a plan relationship.

@@ -64,6 +64,9 @@ func (c *Client) StartupChecks(repository tracker.Repository) []doctor.Check {
 				if result, ok := unresponsive("azure_devops.authentication.timeout", name, err); ok {
 					return result
 				}
+				if c.extensionRoute() {
+					return doctor.Failure(authenticationFailed, name, extensionDiagnosisProblem, extensionDiagnosisAction(repository.Owner))
+				}
 				return doctor.Failure(authenticationFailed, name, "the Azure CLI has no usable Azure DevOps identity", "run az login (for a service principal, az login --service-principal) for the identity that supervises the repository")
 			}
 			return doctor.Success("azure_devops.authentication.ready", name)

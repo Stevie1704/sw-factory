@@ -8,7 +8,7 @@ ADR 0018 made the work tracker and the code host factory-owned ports. Issue #222
 
 ## Decisions
 
-1. **The Azure CLI owns the credential.** Every call is one `az rest` command with the Azure DevOps resource id. az resolves the credential from `az login`, which can be a user, a service principal, or a managed identity. The adapter never reads, stores, or prints it, as the GitHub adapter does with `gh`. A personal access token is not used, because the pilot rule requires a company-managed identity.
+1. **The Azure CLI owns the credential.** Every call is one `az rest` command with the Azure DevOps resource id. az resolves the credential from `az login`, which can be a user, a service principal, or a managed identity. The adapter never reads, stores, or prints it, as the GitHub adapter does with `gh`. A personal access token is not used, because the pilot rule requires a company-managed identity. ADR 0030 amends this decision: a registration that selects `azure_devops.route: devops_extension` uses the Azure DevOps CLI extension with a CLI-managed `az devops login` PAT instead of `az rest`; a registration without a route keeps this decision.
 2. **Azure DevOps Services only.** The adapter calls `dev.azure.com` with REST API 7.1. Azure DevOps Server is out of scope until a user needs it.
 3. **Tags carry the run state.** Each factory label is a work item tag. The adapter never changes the work item state field, so team board rules and the process template stay untouched. A tag is created on its first use, so `bootstrap-labels` changes nothing; `factory doctor` requires the Create tag definition permission while a factory tag is missing. A work item is open unless its state is in the Completed or Removed category, which works for every process template.
 4. **The adapter checks who added `agent-ready`.** On GitHub, only a user with triage access can add a label. Any editor can add a tag in Azure Boards. A work item is therefore eligible only when the last update that added `agent-ready` came from an authorized user. The queue and every direct issue read apply this check, so a claim cannot admit a work item that an unauthorized user tagged. A claimed work item no longer has the tag, so the history is read only before a claim. The adapter receives the authorized users from the composition root.
@@ -27,6 +27,6 @@ ADR 0018 made the work tracker and the code host factory-owned ports. Issue #222
 
 ## Considered options
 
-- A personal access token in an environment variable. Rejected: it is a personal credential, and the adapter would have to handle the secret.
+- A personal access token in an environment variable. Rejected: it is a personal credential, and the adapter would have to handle the secret. ADR 0030 keeps the rejection of a PAT that Factory handles, and adds a route where the CLI owns the PAT.
 - The work item state field for run states. Rejected: it can conflict with board rules and needs a per-template state map.
 - A coordinator-wide comment identity type with an explicit order field. Rejected for now: text order of a time-prefixed identity keeps the stored watermark a string and changes no GitHub behavior.

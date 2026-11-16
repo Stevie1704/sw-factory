@@ -29,6 +29,15 @@ func classifyPlanError(err error) error {
 	if errors.Is(err, errRequestBodyTooLarge) {
 		return &tracker.PlanError{Kind: tracker.PlanErrorInvalidMapping, Err: err}
 	}
+	// On the extension route (ADR 0030), a missing login and an operation
+	// that is not available yet both stop before any write.
+	var login *LoginRequiredError
+	if errors.As(err, &login) {
+		return &tracker.PlanError{Kind: tracker.PlanErrorPermission, Err: err}
+	}
+	if errors.Is(err, ErrExtensionOperationUnavailable) {
+		return &tracker.PlanError{Kind: tracker.PlanErrorUnsupportedCapability, Err: err}
+	}
 	message := err.Error()
 	switch {
 	case strings.Contains(message, "Unauthorized(") || strings.Contains(message, "Forbidden("):

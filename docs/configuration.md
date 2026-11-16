@@ -310,11 +310,12 @@ repositories:
 `factory register` infers only a GitHub identity. For Azure DevOps, write the
 registration into the host file by hand, then run `factory doctor`.
 
-- **Credential.** The factory calls the Azure DevOps REST API through
-  `az rest`. Install the Azure CLI and sign in with `az login` as the
-  company-managed identity that supervises the repository, for example
+- **Credential.** Without `route`, the factory calls the Azure DevOps REST
+  API through `az rest`. Install the Azure CLI and sign in with `az login` as
+  the company-managed identity that supervises the repository, for example
   `az login --service-principal` or `az login --identity`. The factory never
-  reads or stores the credential.
+  reads or stores the credential. An organization that supports only a PAT
+  selects the CLI extension route instead (see below).
 - **Authorized users.** `authorized_users` holds account names (user principal
   names) such as `alice@contoso.com`, because comment, vote, and work item
   update authors carry that name.
@@ -350,6 +351,88 @@ registration into the host file by hand, then run `factory doctor`.
 | `azure devops authentication` | `az` has no usable identity for the organization |
 | `azure devops repository` | the organization, project, or repository cannot be read |
 | `azure devops permissions` | the identity lacks Contribute, Create branch, or Contribute to pull requests on the repository, or View and Edit work items in the project's root area, or a factory tag does not exist yet and the identity lacks Create tag definition |
+
+#### CLI extension route (PAT login)
+
+`azure_devops.route` selects how the factory reaches Azure DevOps (ADR 0030):
+
+| Value | Commands | Authentication |
+| --- | --- | --- |
+| omitted or `az_rest` | `az rest` (ADR 0019) | `az login` (Entra ID) |
+| `devops_extension` | `az boards`, `az repos`, and `az devops invoke` of the azure-devops extension | `az devops login` with a PAT |
+
+Any other value fails validation with `repositories[0].azure_devops.route`.
+An existing registration without `route` keeps the `az rest` route.
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      route: devops_extension
+      plan_repositories: [web]
+```
+
+- **Sign-in.** Install the Azure CLI and the extension
+  (`az extension add --name azure-devops`), then run
+  `az devops login --organization https://dev.azure.com/contoso` as the
+  account that runs the factory and enter the PAT at the prompt. Do not put
+  the PAT in a command line, a shell history, or a repository file. The
+  factory never reads, collects, or stores the PAT. It runs every command
+  without prompts and without dynamic extension installs. A missing or
+  expired login fails with `run az devops login --organization <URL>`.
+- **No Entra fallback.** The factory never runs `az rest` or requests an
+  Entra ID token on this route. The extension itself prefers an `az login`
+  session when one exists, so run the factory as a user without one when
+  only the PAT may be used.
+- **Explicit targets.** Every command names `--organization`, and
+  `--project` and `--repository` where the command accepts them. CLI
+  defaults from `az devops configure` and Git remotes are not used.
+- **Git is separate.** `az devops login` does not configure Git. Push and
+  fetch still use the Git credential helper or SSH agent of the host.
+- **Repository assignment.** Boards work items belong to the project, not a
+  repository. Each executable PBI carries exactly one tag
+  `factory-repo:<repository GUID>`, where the GUID is the `id` that
+  `az repos show --project "Factory Pilot" --repository service` prints. A
+  registration claims a PBI only when the tag names its own repository; a
+  missing, malformed, repeated, or different tag is refused with the tag to
+  set. Add the tag to existing PBIs by hand before execution. The tag never
+  authorizes a run; `agent-ready` from an authorized user still does. Area
+  Paths stay free for team and board organization.
+- **Two repositories in one project.** Register each repository in its own
+  host configuration with its own `operational_data_path`, and start one
+  factory per configuration (`factory start --config <path>`). Both name the
+  same organization and project with `route: devops_extension`.
+  `plan_repositories` lists the other repositories of the project that a
+  plan published from this installation may assign PBIs to; it must not
+  repeat `repository`, and only this route accepts it.
+- **Worker boundary.** Workers refuse every `AZURE_DEVOPS_EXT_*` and `*_PAT`
+  environment variable.
+- **Status.** The route, its command seam, the assignment tag, and the
+  frozen repository identity exist. Boards intake, plan publication, and pull
+  requests on this route arrive with #304 to #306; until then each such
+  operation fails with an error and never falls back to `az rest`. ADR 0030
+  lists the command for each operation and the operations that are still
+  unresolved.
+
+An Epic/PBI planning mapping for a Scrum project, with no intermediate
+Feature level, groups PBIs for both repositories under one Epic. Each PBI
+names its own target; the Epic never passes its target to a child:
+
+```yaml
+    azure_devops:
+      organization: contoso
+      project: Factory Pilot
+      repository: service
+      route: devops_extension
+      plan_repositories: [web]
+      planning:
+        levels:
+          - type: Epic
+            kinds: [parent]
+          - type: Product Backlog Item
+            kinds: [task, investigation]
+```
 
 #### Plan publication mapping
 
