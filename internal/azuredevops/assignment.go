@@ -125,7 +125,7 @@ func classifyForeignAssignment(id string, refused *AssignmentError, projectRepos
 		err = errors.New("the list does not hold the registered repository")
 	}
 	if err != nil {
-		return fmt.Errorf("the repository assignment tag %s names another repository than %s (%s), and the repositories of project %s could not be listed to say which: %w",
+		return fmt.Errorf("the repository assignment tag %s names another GUID than repository %s (%s), and the repositories of project %s could not be listed to say whether it is another repository or unknown: %w",
 			strings.Join(refused.Found, ", "), refused.Expected.Name, RepositoryAssignmentTag(refused.Expected.ID), refused.Expected.Project, err)
 	}
 	refused.Problem = AssignmentUnknown
