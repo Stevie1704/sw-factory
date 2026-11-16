@@ -42,17 +42,6 @@ func (e *LoginRequiredError) Error() string {
 	return "Azure DevOps CLI sign-in is missing or expired for " + e.OrganizationURL + ": run az devops login --organization " + e.OrganizationURL
 }
 
-// extensionDiagnosisProblem is the startup diagnosis of the extension route
-// until #304 ports identity and permission checks: Factory cannot yet prove
-// the CLI-managed identity, so it fails instead of passing.
-const extensionDiagnosisProblem = "the devops_extension route cannot verify the Azure DevOps identity yet"
-
-// extensionDiagnosisAction tells the operator how to repair the extension
-// route's sign-in; it never points to az login.
-func extensionDiagnosisAction(organization string) string {
-	return "run az devops login --organization " + extensionOrganizationURL(organization) + "; startup checks on this route arrive with #304"
-}
-
 // NewClientForRoute returns a client for one organization on the selected
 // route. The az rest route matches NewClient.
 func NewClientForRoute(organization string, authorizedUsers []string, route config.AzureRoute) *Client {
@@ -219,8 +208,8 @@ func flagValue(args []string, flag string) string {
 	return ""
 }
 
-// organizationURL returns the explicit --organization value of one
-// organization.
+// extensionOrganizationURL returns the explicit --organization value of
+// one organization.
 func extensionOrganizationURL(organization string) string {
 	return serviceURL + organization
 }
@@ -231,9 +220,6 @@ func extensionOrganizationURL(organization string) string {
 // remotes and CLI defaults, and selects JSON output. Callers pass --project
 // and --repository explicitly wherever the command accepts them.
 func (c *Client) extension(ctx context.Context, organization string, args []string, destination any) error {
-	if !c.extensionRoute() {
-		return errors.New("Azure DevOps CLI extension commands require route devops_extension")
-	}
 	if strings.TrimSpace(organization) == "" || !plainSegment(organization) {
 		return errors.New("Azure DevOps organization is required as a plain name")
 	}
@@ -391,8 +377,12 @@ var canonicalGUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 // ResolveRepository resolves the registered repository name to its stable
 // identity with az repos show, targeted at the registered organization and
 // project. It refuses a response for another project or repository, or one
-// without GUIDs. Only the extension route supports it.
+// without GUIDs. Only the extension route supports it; the az rest route
+// refuses it without a call.
 func (c *Client) ResolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
+	if !c.extensionRoute() {
+		return RepositoryIdentity{}, errors.New("resolving an Azure Repos repository identity requires route devops_extension")
+	}
 	identity, _, err := c.showRepository(ctx, repository)
 	return identity, err
 }
