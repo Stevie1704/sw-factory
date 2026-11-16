@@ -39,13 +39,7 @@ func (c *Client) Issue(ctx context.Context, repository tracker.Repository, numbe
 	if err := validateIssueTarget(repository, number); err != nil {
 		return tracker.Issue{}, err
 	}
-	var response workItemResponse
-	var err error
-	if c.extensionRoute() {
-		response, err = c.extensionWorkItem(ctx, repository, number)
-	} else {
-		err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion)}, &response)
-	}
+	response, err := c.backend().workItem(ctx, repository, number)
 	if err != nil {
 		return tracker.Issue{}, fmt.Errorf("read work item %d: %w", number, err)
 	}
@@ -54,6 +48,13 @@ func (c *Client) Issue(ctx context.Context, repository tracker.Repository, numbe
 		return tracker.Issue{}, err
 	}
 	return c.authorizeReadyTag(ctx, repository, issue)
+}
+
+// workItem reads one work item through az rest.
+func (c restBackend) workItem(ctx context.Context, repository tracker.Repository, number int) (workItemResponse, error) {
+	var response workItemResponse
+	err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion)}, &response)
+	return response, err
 }
 
 // authorizeReadyTag removes the agent-ready label from an issue when its last
@@ -123,14 +124,7 @@ func (c *Client) typeStates(ctx context.Context, repository tracker.Repository, 
 			Category string `json:"category"`
 		} `json:"value"`
 	}
-	var err error
-	if c.extensionRoute() {
-		err = c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "workItemTypeStates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "type", workItemType)}, &response)
-	} else {
-		path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
-		err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, &response)
-	}
-	if err != nil {
+	if err := c.backend().readTypeStates(ctx, repository, workItemType, &response); err != nil {
 		return nil, err
 	}
 	states = make(map[string]string, len(response.Value))
@@ -144,6 +138,12 @@ func (c *Client) typeStates(ctx context.Context, repository tracker.Repository, 
 	c.stateCategories[workItemType] = states
 	c.mu.Unlock()
 	return states, nil
+}
+
+// readTypeStates reads the states of one work item type through az rest.
+func (c restBackend) readTypeStates(ctx context.Context, repository tracker.Repository, workItemType string, destination any) error {
+	path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
+	return c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, destination)
 }
 
 // validateIssueTarget rejects an incomplete repository or a non-positive
@@ -173,9 +173,12 @@ func (c *Client) ListEligibleIssues(ctx context.Context, repository tracker.Repo
 	if err := validateRepository(repository); err != nil {
 		return nil, err
 	}
-	if c.extensionRoute() {
-		return c.extensionEligibleIssues(ctx, repository)
-	}
+	return c.backend().eligibleIssues(ctx, repository)
+}
+
+// eligibleIssues is ListEligibleIssues through az rest: a WIQL query for
+// the project's agent-ready work items, then batch reads.
+func (c restBackend) eligibleIssues(ctx context.Context, repository tracker.Repository) ([]tracker.Issue, error) {
 	var query struct {
 		WorkItems []struct {
 			ID int `json:"id"`
@@ -209,11 +212,8 @@ func (c *Client) ListEligibleIssues(ctx context.Context, repository tracker.Repo
 	return issues, nil
 }
 
-// workItems reads one batch of work items.
-func (c *Client) workItems(ctx context.Context, repository tracker.Repository, ids []int) ([]workItemResponse, error) {
-	if c.extensionRoute() {
-		return c.extensionWorkItems(ctx, repository, ids)
-	}
+// workItems reads one batch of work items through az rest.
+func (c restBackend) workItems(ctx context.Context, repository tracker.Repository, ids []int) ([]workItemResponse, error) {
 	values := make([]string, 0, len(ids))
 	for _, id := range ids {
 		values = append(values, strconv.Itoa(id))
@@ -264,15 +264,7 @@ func (c *Client) readyTagger(ctx context.Context, repository tracker.Repository,
 				} `json:"fields"`
 			} `json:"value"`
 		}
-		var err error
-		if c.extensionRoute() {
-			query := map[string]string{"$top": strconv.Itoa(updatePageSize), "$skip": strconv.Itoa(skip)}
-			err = c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "updates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "id", strconv.Itoa(number)), Query: query}, &response)
-		} else {
-			query := url.Values{"$top": {strconv.Itoa(updatePageSize)}, "$skip": {strconv.Itoa(skip)}}
-			err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/updates", number), query, apiVersion)}, &response)
-		}
-		if err != nil {
+		if err := c.backend().readUpdates(ctx, repository, number, skip, &response); err != nil {
 			return "", fmt.Errorf("read update history of work item %d: %w", number, err)
 		}
 		for _, update := range response.Value {
@@ -285,4 +277,11 @@ func (c *Client) readyTagger(ctx context.Context, repository tracker.Repository,
 			return tagger, nil
 		}
 	}
+}
+
+// readUpdates reads one page of the update history of a work item through
+// az rest.
+func (c restBackend) readUpdates(ctx context.Context, repository tracker.Repository, number, skip int, destination any) error {
+	query := url.Values{"$top": {strconv.Itoa(updatePageSize)}, "$skip": {strconv.Itoa(skip)}}
+	return c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/updates", number), query, apiVersion)}, destination)
 }

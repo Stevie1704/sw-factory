@@ -42,25 +42,12 @@ func (e *LoginRequiredError) Error() string {
 	return "Azure DevOps CLI sign-in is missing or expired for " + e.OrganizationURL + ": run az devops login --organization " + e.OrganizationURL
 }
 
-// extensionDiagnosisProblem is the startup diagnosis of the extension route
-// until #304 ports identity and permission checks: Factory cannot yet prove
-// the CLI-managed identity, so it fails instead of passing.
-const extensionDiagnosisProblem = "the devops_extension route cannot verify the Azure DevOps identity yet"
-
-// extensionDiagnosisAction tells the operator how to repair the extension
-// route's sign-in; it never points to az login.
-func extensionDiagnosisAction(organization string) string {
-	return "run az devops login --organization " + extensionOrganizationURL(organization) + "; startup checks on this route arrive with #304"
-}
-
 // NewClientForRoute returns a client for one organization on the selected
 // route. The az rest route matches NewClient.
 func NewClientForRoute(organization string, authorizedUsers []string, route config.AzureRoute) *Client {
 	client := NewClient(organization, authorizedUsers)
 	client.Route = route
-	if route == config.AzureRouteDevOpsExtension {
-		client.Runner = extensionRunner{timeout: CommandTimeout}
-	}
+	client.Runner = client.backend().defaultRunner()
 	return client
 }
 
@@ -219,8 +206,8 @@ func flagValue(args []string, flag string) string {
 	return ""
 }
 
-// organizationURL returns the explicit --organization value of one
-// organization.
+// extensionOrganizationURL returns the explicit --organization value of
+// one organization.
 func extensionOrganizationURL(organization string) string {
 	return serviceURL + organization
 }
@@ -231,9 +218,6 @@ func extensionOrganizationURL(organization string) string {
 // remotes and CLI defaults, and selects JSON output. Callers pass --project
 // and --repository explicitly wherever the command accepts them.
 func (c *Client) extension(ctx context.Context, organization string, args []string, destination any) error {
-	if !c.extensionRoute() {
-		return errors.New("Azure DevOps CLI extension commands require route devops_extension")
-	}
 	if strings.TrimSpace(organization) == "" || !plainSegment(organization) {
 		return errors.New("Azure DevOps organization is required as a plain name")
 	}
@@ -249,6 +233,13 @@ func (c *Client) extension(ctx context.Context, organization string, args []stri
 		return fmt.Errorf("decode the output of %s: %w", extensionOperation(argv), err)
 	}
 	return nil
+}
+
+// repositoryCommand returns the az words of command followed by the
+// explicit --project and --repository of the registered repository, by
+// name.
+func repositoryCommand(repository tracker.Repository, command ...string) []string {
+	return append(command, "--project", repository.Project, "--repository", repository.Name)
 }
 
 // plainSegment reports whether value is safe as one name segment.
@@ -391,10 +382,27 @@ var canonicalGUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-
 // ResolveRepository resolves the registered repository name to its stable
 // identity with az repos show, targeted at the registered organization and
 // project. It refuses a response for another project or repository, or one
-// without GUIDs. Only the extension route supports it.
+// without GUIDs. Only the extension route supports it; the az rest route
+// refuses it without a call.
 func (c *Client) ResolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
+	return c.backend().resolveRepository(ctx, repository)
+}
+
+// resolveRepository resolves the registered repository with az repos show.
+func (c extensionBackend) resolveRepository(ctx context.Context, repository tracker.Repository) (RepositoryIdentity, error) {
 	identity, _, err := c.showRepository(ctx, repository)
 	return identity, err
+}
+
+// defaultRunner is the production extension runner.
+func (extensionBackend) defaultRunner() CommandRunner {
+	return extensionRunner{timeout: CommandTimeout}
+}
+
+// readLogin fails closed: no verified extension command returns the
+// signed-in identity (ADR 0030).
+func (extensionBackend) readLogin(context.Context) (string, error) {
+	return "", fmt.Errorf("read the authenticated Azure DevOps identity: %w", ErrExtensionOperationUnavailable)
 }
 
 // showRepository is ResolveRepository that also returns the full reference
@@ -404,8 +412,7 @@ func (c *Client) showRepository(ctx context.Context, repository tracker.Reposito
 		return RepositoryIdentity{}, "", err
 	}
 	var response repositoryShowResponse
-	args := []string{"repos", "show", "--project", repository.Project, "--repository", repository.Name}
-	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
+	if err := c.extension(ctx, repository.Owner, repositoryCommand(repository, "repos", "show"), &response); err != nil {
 		return RepositoryIdentity{}, "", fmt.Errorf("resolve Azure Repos repository %s: %w", repository, err)
 	}
 	if response.Project == nil || !strings.EqualFold(response.Project.Name, repository.Project) || !canonicalGUID.MatchString(response.Project.ID) {
@@ -421,4 +428,32 @@ func (c *Client) showRepository(ctx context.Context, repository tracker.Reposito
 		ID:           strings.ToLower(response.ID),
 		Name:         response.Name,
 	}, response.DefaultBranch, nil
+}
+
+// projectRepositories lists the repositories of the registered project
+// that the signed-in identity can read, with the read-only az repos list,
+// which prints a JSON array of repositories. It refuses an entry for
+// another project or without GUIDs.
+func (c *Client) projectRepositories(ctx context.Context, repository tracker.Repository) ([]RepositoryIdentity, error) {
+	var response []repositoryShowResponse
+	if err := c.extension(ctx, repository.Owner, []string{"repos", "list", "--project", repository.Project}, &response); err != nil {
+		return nil, fmt.Errorf("list the repositories of project %s: %w", repository.Project, err)
+	}
+	repositories := make([]RepositoryIdentity, 0, len(response))
+	for _, entry := range response {
+		if entry.Project == nil || !strings.EqualFold(entry.Project.Name, repository.Project) || !canonicalGUID.MatchString(entry.ID) {
+			return nil, fmt.Errorf("list the repositories of project %s: an entry names another project or no repository GUID", repository.Project)
+		}
+		repositories = append(repositories, RepositoryIdentity{Organization: repository.Owner, ProjectID: strings.ToLower(entry.Project.ID), Project: entry.Project.Name, ID: strings.ToLower(entry.ID), Name: entry.Name})
+	}
+	return repositories, nil
+}
+
+// validateAssignment is ValidateRepositoryAssignment for one work item of
+// repository, which lists the project's repositories only when a tag names
+// another GUID.
+func (c *Client) validateAssignment(ctx context.Context, repository tracker.Repository, labels []string, identity RepositoryIdentity) error {
+	return ValidateRepositoryAssignment(labels, identity, func() ([]RepositoryIdentity, error) {
+		return c.projectRepositories(ctx, repository)
+	})
 }

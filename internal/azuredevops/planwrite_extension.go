@@ -63,14 +63,23 @@ var _ tracker.PlanItemVerifier = (*Client)(nil)
 // decision 10). It never changes the item. The az rest route has no
 // assignment and accepts the item as before.
 func (c *Client) VerifyPlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem, ref tracker.PlanItemRef) error {
-	if !c.extensionRoute() {
-		return nil
-	}
+	return c.backend().verifyPlanItem(ctx, repository, item, ref)
+}
+
+// verifyPlanItem accepts every item: the az rest route has no repository
+// assignment to verify.
+func (restBackend) verifyPlanItem(context.Context, tracker.Repository, tracker.RenderedPlanItem, tracker.PlanItemRef) error {
+	return nil
+}
+
+// verifyPlanItem checks the project, type, and repository assignment of an
+// item found by correlation.
+func (c extensionBackend) verifyPlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem, ref tracker.PlanItemRef) error {
 	id, err := workItemID(ref)
 	if err != nil {
 		return err
 	}
-	current, err := c.extensionWorkItem(ctx, repository, id)
+	current, err := c.workItem(ctx, repository, id)
 	if err != nil {
 		return err
 	}
@@ -88,10 +97,10 @@ func (c *Client) VerifyPlanItem(ctx context.Context, repository tracker.Reposito
 	return nil
 }
 
-// extensionCreatePlanItem creates the rendered item with az boards
-// work-item create in the registered project: its type, title, description,
-// correlation and assignment tags, and configured fields, nothing else.
-func (c *Client) extensionCreatePlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
+// createPlanItem creates the rendered item with az boards work-item create
+// in the registered project: its type, title, description, correlation and
+// assignment tags, and configured fields, nothing else.
+func (c extensionBackend) createPlanItem(ctx context.Context, repository tracker.Repository, item tracker.RenderedPlanItem) (tracker.PlanItemRef, error) {
 	if err := checkAssignmentTags(item); err != nil {
 		return tracker.PlanItemRef{}, err
 	}
@@ -111,11 +120,12 @@ func (c *Client) extensionCreatePlanItem(ctx context.Context, repository tracker
 	return workItemRef(repository, response.ID), nil
 }
 
-// extensionFindPlanItems returns every work item of the registered project,
-// in any state, whose tags hold tag exactly. az boards query sends no
-// project context, so the WIQL names the project; it returns at most 1000
-// items, which a unique correlation tag does not reach.
-func (c *Client) extensionFindPlanItems(ctx context.Context, repository tracker.Repository, tag string) ([]tracker.PlanItemRef, error) {
+// findPlanItems returns every work item of the registered project, in any
+// state, whose tags hold the correlation tag exactly. az boards query sends
+// no project context, so the WIQL names the project; it returns at most
+// 1000 items, which a unique correlation tag does not reach.
+func (c extensionBackend) findPlanItems(ctx context.Context, repository tracker.Repository, correlation string) ([]tracker.PlanItemRef, error) {
+	tag := correlationTag(correlation)
 	wiql := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
 		" AND [System.Tags] CONTAINS " + wiqlString(tag) + " ORDER BY [System.Id]"
 	var found []struct {
@@ -131,7 +141,7 @@ func (c *Client) extensionFindPlanItems(ctx context.Context, repository tracker.
 	slices.Sort(ids)
 	refs := []tracker.PlanItemRef{}
 	for start := 0; start < len(ids); start += workItemBatchSize {
-		batch, err := c.extensionWorkItems(ctx, repository, ids[start:min(start+workItemBatchSize, len(ids))])
+		batch, err := c.workItems(ctx, repository, ids[start:min(start+workItemBatchSize, len(ids))])
 		if err != nil {
 			return nil, err
 		}
@@ -165,23 +175,23 @@ func (r relationItem) has(name string, to int) bool {
 	})
 }
 
-// extensionLinkName returns the friendly name of the link type reference.
-func (c *Client) extensionLinkName(ctx context.Context, repository tracker.Repository, reference string) (string, error) {
-	types, err := c.linkTypeList(ctx, repository)
+// linkName returns the friendly name of the link type reference.
+func (c extensionBackend) linkName(ctx context.Context, repository tracker.Repository, reference string) (string, error) {
+	types, err := c.listLinkTypes(ctx, repository)
 	if err != nil {
 		return "", fmt.Errorf("read the link types of %s: %w", repository.Owner, classifyPlanError(err))
 	}
 	return linkTypeName(types, reference)
 }
 
-// extensionCreatePlanRelationship adds the link on the From work item with
-// az boards work-item relation add --id <from> --target-id <to>: for a
+// createPlanRelationship adds the link on the From work item with az
+// boards work-item relation add --id <from> --target-id <to>: for a
 // parent link the Parent link type, so To becomes From's parent; for a
 // dependency the Predecessor link type, so To must be done first. The
 // command reads the item back after its update; a response without the
 // relation is an unknown outcome that the lookup verifies.
-func (c *Client) extensionCreatePlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, reference string) error {
-	name, err := c.extensionLinkName(ctx, repository, reference)
+func (c extensionBackend) createPlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, reference string) error {
+	name, err := c.linkName(ctx, repository, reference)
 	if err != nil {
 		return err
 	}
@@ -196,10 +206,10 @@ func (c *Client) extensionCreatePlanRelationship(ctx context.Context, repository
 	return nil
 }
 
-// extensionFindPlanRelationship reports whether the From work item already
-// has the named link to To, read with az boards work-item relation show.
-func (c *Client) extensionFindPlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, reference string) (bool, error) {
-	name, err := c.extensionLinkName(ctx, repository, reference)
+// findPlanRelationship reports whether the From work item already has the
+// named link to To, read with az boards work-item relation show.
+func (c extensionBackend) findPlanRelationship(ctx context.Context, repository tracker.Repository, from, to int, reference string) (bool, error) {
+	name, err := c.linkName(ctx, repository, reference)
 	if err != nil {
 		return false, err
 	}

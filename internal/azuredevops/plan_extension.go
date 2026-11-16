@@ -17,18 +17,20 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
-// checkRouteSupportsPlan refuses, before any call, what the client's route
-// cannot publish: the extension route needs an explicit planning mapping,
-// because its default would substitute types; the az rest route has no
-// repository assignment, so a plan target would be dropped silently.
-func (c *Client) checkRouteSupportsPlan(graph tracker.PlanGraph) error {
-	if c.extensionRoute() {
-		if c.Planning == nil {
-			return tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
-				"the devops_extension route needs an explicit azure_devops.planning mapping, for example Epic for kind parent and Product Backlog Item for kinds task and investigation; Factory does not substitute a default mapping")
-		}
-		return nil
+// checkPlanSupport refuses, before any call, a plan without an explicit
+// planning mapping: the default mapping would substitute types.
+func (c extensionBackend) checkPlanSupport(tracker.PlanGraph) error {
+	if c.Planning == nil {
+		return tracker.NewPlanError(tracker.PlanErrorInvalidMapping,
+			"the devops_extension route needs an explicit azure_devops.planning mapping, for example Epic for kind parent and Product Backlog Item for kinds task and investigation; Factory does not substitute a default mapping")
 	}
+	return nil
+}
+
+// checkPlanSupport refuses, before any call, a plan node with a target
+// repository: the az rest route has no repository assignment, so the
+// target would be dropped silently.
+func (restBackend) checkPlanSupport(graph tracker.PlanGraph) error {
 	for _, item := range graph.Items {
 		if item.TargetRepository != "" {
 			return tracker.NewPlanError(tracker.PlanErrorUnsupportedCapability,
@@ -36,6 +38,19 @@ func (c *Client) checkRouteSupportsPlan(graph tracker.PlanGraph) error {
 		}
 	}
 	return nil
+}
+
+// preparePlan assigns the plan targets. Permission evaluation is not
+// available on the extension route (ADR 0030 decision 12): preflight
+// proves read access only, and a refused create or link still proves no
+// write.
+func (c extensionBackend) preparePlan(ctx context.Context, repository tracker.Repository, mapping config.AzurePlanMapping, graph tracker.PlanGraph, preview *tracker.PlanPreview) error {
+	return c.assignPlanTargets(ctx, repository, mapping, graph, preview)
+}
+
+// preparePlan checks the plan permissions of the az login identity.
+func (c restBackend) preparePlan(ctx context.Context, repository tracker.Repository, _ config.AzurePlanMapping, _ tracker.PlanGraph, _ *tracker.PlanPreview) error {
+	return c.checkPlanPermissions(ctx, repository)
 }
 
 // assignPlanTargets gives every executable item (the lowest mapped level)
@@ -162,24 +177,42 @@ func extensionDescription(markdown string) string {
 	return builder.String()
 }
 
-// planRead reads one project resource for preflight: through az rest at
-// path on the az rest route, or through the verified az devops invoke pair
-// of the ADR 0030 inventory on the extension route.
-func (c *Client) planRead(ctx context.Context, repository tracker.Repository, path string, query url.Values, read invokeRequest, destination any) error {
-	if !c.extensionRoute() {
-		return c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, query, apiVersion)}, destination)
-	}
+// planRead reads the project resource at path through az rest.
+func (c restBackend) planRead(ctx context.Context, repository tracker.Repository, path string, query url.Values, _ invokeRequest, destination any) error {
+	return c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, query, apiVersion)}, destination)
+}
+
+// planRead reads the verified az devops invoke pair read of the ADR 0030
+// inventory.
+func (c extensionBackend) planRead(ctx context.Context, repository tracker.Repository, _ string, query url.Values, read invokeRequest, destination any) error {
+	return c.invoke(ctx, repository.Owner, planInvokeRequest(repository, query, read), destination)
+}
+
+// planInvokeRequest completes read for the extension route: the extension
+// API version, the project route when read names no route, and query as
+// its query parameters. Callers pass the query only as query, never in
+// read.
+func planInvokeRequest(repository tracker.Repository, query url.Values, read invokeRequest) invokeRequest {
 	read.APIVersion = extensionAPIVersion
 	if read.Route == nil {
 		read.Route = projectRoute(repository)
 	}
-	for key := range query {
-		if read.Query == nil {
-			read.Query = map[string]string{}
-		}
-		read.Query[key] = query.Get(key)
+	read.Query = queryParameters(query)
+	return read
+}
+
+// queryParameters converts query to the single-valued parameters of az
+// devops invoke, keeping the first value of each key. An empty query has
+// no parameters.
+func queryParameters(query url.Values) map[string]string {
+	if len(query) == 0 {
+		return nil
 	}
-	return c.invoke(ctx, repository.Owner, read, destination)
+	parameters := make(map[string]string, len(query))
+	for key := range query {
+		parameters[key] = query.Get(key)
+	}
+	return parameters
 }
 
 // linkType is the projection of one work-item link type.
@@ -189,19 +222,34 @@ type linkType struct {
 	Attributes    map[string]any `json:"attributes"`
 }
 
-// linkTypeList reads the link types of the organization: through az rest,
-// or with az boards work-item relation list-type on the extension route.
-func (c *Client) linkTypeList(ctx context.Context, repository tracker.Repository) ([]linkType, error) {
-	if c.extensionRoute() {
-		var types []linkType
-		err := c.extension(ctx, repository.Owner, []string{"boards", "work-item", "relation", "list-type"}, &types)
-		return types, err
-	}
+// listLinkTypes reads the link types of the organization with az boards
+// work-item relation list-type.
+func (c extensionBackend) listLinkTypes(ctx context.Context, repository tracker.Repository) ([]linkType, error) {
+	var types []linkType
+	err := c.extension(ctx, repository.Owner, []string{"boards", "work-item", "relation", "list-type"}, &types)
+	return types, err
+}
+
+// listLinkTypes reads the link types of the organization through az rest.
+func (c restBackend) listLinkTypes(ctx context.Context, repository tracker.Repository) ([]linkType, error) {
 	var response struct {
 		Value []linkType `json:"value"`
 	}
 	err := c.call(ctx, request{Method: "GET", URL: organizationURL(repository.Owner, "wit/workitemrelationtypes", nil, apiVersion)}, &response)
 	return response.Value, err
+}
+
+// checkLinkSelectable requires a unique friendly name for link, because
+// the relation commands select a link type by its name.
+func (extensionBackend) checkLinkSelectable(types []linkType, link string) error {
+	_, err := linkTypeName(types, link)
+	return err
+}
+
+// checkLinkSelectable accepts every enabled link: az rest selects a link
+// type by its reference name.
+func (restBackend) checkLinkSelectable([]linkType, string) error {
+	return nil
 }
 
 // linkTypeName returns the friendly name that az boards work-item relation

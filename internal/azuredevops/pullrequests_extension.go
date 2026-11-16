@@ -55,10 +55,9 @@ func cliText(flag, value string) (string, error) {
 	return flag + "=" + value, nil
 }
 
-// extensionPullRequestIDs lists, in host order, the pull requests of the
-// registered repository in every status whose refs match the exact branch
-// pair.
-func (c *Client) extensionPullRequestIDs(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]int, error) {
+// pullRequestIDs lists, in host order, the pull requests of the registered
+// repository in every status whose refs match the exact branch pair.
+func (c extensionBackend) pullRequestIDs(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]int, error) {
 	source, err := cliText("--source-branch", headBranch)
 	if err != nil {
 		return nil, err
@@ -68,7 +67,7 @@ func (c *Client) extensionPullRequestIDs(ctx context.Context, repository tracker
 		return nil, err
 	}
 	var response []extensionPullRequestResponse
-	args := []string{"repos", "pr", "list", "--project", repository.Project, "--repository", repository.Name, source, target, "--status", "all", "--top", "100"}
+	args := append(repositoryCommand(repository, "repos", "pr", "list"), source, target, "--status", "all", "--top", "100")
 	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
 		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}
@@ -115,9 +114,9 @@ func pullRequestTextArgs(request codehost.PullRequestRequest) ([]string, error) 
 	return []string{title, description}, nil
 }
 
-// extensionCreatePullRequest creates one pull request with az repos pr
-// create in the registered project and repository.
-func (c *Client) extensionCreatePullRequest(ctx context.Context, repository tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
+// createPullRequest creates one pull request with az repos pr create in
+// the registered project and repository.
+func (c extensionBackend) createPullRequest(ctx context.Context, repository tracker.Repository, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
 	text, err := pullRequestTextArgs(request)
 	if err != nil {
 		return codehost.PullRequest{}, err
@@ -176,9 +175,17 @@ func (c *Client) pullRequestTarget(ctx context.Context, repository tracker.Repos
 // adopted pull request left it out. It never creates a pull request, and it
 // fails unless the association list confirms the link.
 func (c *Client) EnsurePullRequestWorkItem(ctx context.Context, repository tracker.Repository, number int, link codehost.WorkItemLink) error {
-	if !c.extensionRoute() {
-		return errNoWorkItemRoute
-	}
+	return c.backend().ensurePullRequestWorkItem(ctx, repository, number, link)
+}
+
+// ensurePullRequestWorkItem refuses a native association on az rest.
+func (restBackend) ensurePullRequestWorkItem(context.Context, tracker.Repository, int, codehost.WorkItemLink) error {
+	return errNoWorkItemRoute
+}
+
+// ensurePullRequestWorkItem verifies and adds the native association with
+// az repos pr work-item list and add.
+func (c extensionBackend) ensurePullRequestWorkItem(ctx context.Context, repository tracker.Repository, number int, link codehost.WorkItemLink) error {
 	if err := validatePullRequestTarget(repository, number); err != nil {
 		return err
 	}
@@ -253,11 +260,10 @@ func (c *Client) gitInvoke(ctx context.Context, repository tracker.Repository, m
 	return c.invoke(ctx, repository.Owner, invokeRequest{Area: "git", Resource: resource, Method: method, APIVersion: apiVersion, Route: parameters, Query: query, Body: body}, destination)
 }
 
-// extensionReviewerLogins checks that pull request number belongs to the
-// registered repository, because az repos pr reviewer list is
-// organization-scoped and its output names no repository, and then reads
-// the reviewers.
-func (c *Client) extensionReviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
+// reviewerLogins checks that pull request number belongs to the registered
+// repository, because az repos pr reviewer list is organization-scoped and
+// its output names no repository, and then reads the reviewers.
+func (c extensionBackend) reviewerLogins(ctx context.Context, repository tracker.Repository, number int) (map[string]string, error) {
 	if _, err := c.extensionPullRequest(ctx, repository, number, ""); err != nil {
 		return nil, fmt.Errorf("list reviewers of pull request %d: %w", number, err)
 	}
@@ -273,6 +279,64 @@ func (c *Client) extensionReviewerLogins(ctx context.Context, repository tracker
 		logins[identityKey(reviewer.ID)] = reviewer.UniqueName
 	}
 	return logins, nil
+}
+
+// readPullRequest reads one pull request with az repos pr show and checks
+// that it belongs to the registered repository.
+func (c extensionBackend) readPullRequest(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+	response, err := c.extensionPullRequest(ctx, repository, number, "")
+	if err != nil {
+		return codehost.PullRequest{}, err
+	}
+	return response.pullRequest(repository), nil
+}
+
+// updatePullRequest replaces the title and description with az repos pr
+// update.
+func (c extensionBackend) updatePullRequest(ctx context.Context, repository tracker.Repository, number int, request codehost.PullRequestRequest) (codehost.PullRequest, error) {
+	text, err := pullRequestTextArgs(request)
+	if err != nil {
+		return codehost.PullRequest{}, err
+	}
+	return c.extensionUpdatePullRequest(ctx, repository, number, text, fmt.Sprintf("update pull request %d", number))
+}
+
+// setPullRequestDraft sets or clears the draft flag with az repos pr
+// update.
+func (c extensionBackend) setPullRequestDraft(ctx context.Context, repository tracker.Repository, number int, draft bool) (codehost.PullRequest, error) {
+	return c.extensionUpdatePullRequest(ctx, repository, number, []string{"--draft", strconv.FormatBool(draft)}, fmt.Sprintf("set pull request %d draft=%t", number, draft))
+}
+
+// postCommitStatus posts one commit status payload through the git
+// statuses invoke route.
+func (c extensionBackend) postCommitStatus(ctx context.Context, repository tracker.Repository, sha string, payload map[string]any) error {
+	return c.gitInvoke(ctx, repository, "POST", "statuses", map[string]string{"commitId": sha}, nil, payload, nil)
+}
+
+// readCommitStatuses reads one page of the statuses of a commit through
+// the git statuses invoke route.
+func (c extensionBackend) readCommitStatuses(ctx context.Context, repository tracker.Repository, sha string, skip int, destination any) error {
+	query := map[string]string{"latestOnly": "false", "top": strconv.Itoa(statusPageSize), "skip": strconv.Itoa(skip)}
+	return c.gitInvoke(ctx, repository, "GET", "statuses", map[string]string{"commitId": sha}, query, nil, destination)
+}
+
+// readThreads reads the threads of one pull request through the git
+// pullRequestThreads invoke route.
+func (c extensionBackend) readThreads(ctx context.Context, repository tracker.Repository, number int, destination any) error {
+	return c.gitInvoke(ctx, repository, "GET", "pullRequestThreads", map[string]string{"pullRequestId": strconv.Itoa(number)}, nil, nil, destination)
+}
+
+// createThread posts one pull request thread through the git
+// pullRequestThreads invoke route.
+func (c extensionBackend) createThread(ctx context.Context, repository tracker.Repository, number int, payload map[string]any, destination any) error {
+	return c.gitInvoke(ctx, repository, "POST", "pullRequestThreads", map[string]string{"pullRequestId": strconv.Itoa(number)}, nil, payload, destination)
+}
+
+// editThreadComment replaces the content of one thread comment through the
+// git pullRequestThreadComments invoke route.
+func (c extensionBackend) editThreadComment(ctx context.Context, repository tracker.Repository, number, thread, id int, body string) error {
+	route := map[string]string{"pullRequestId": strconv.Itoa(number), "threadId": strconv.Itoa(thread), "commentId": strconv.Itoa(id)}
+	return c.gitInvoke(ctx, repository, "PATCH", "pullRequestThreadComments", route, nil, map[string]string{"content": body}, nil)
 }
 
 // errNoWorkItemRoute reports a work-item association on the az rest route,

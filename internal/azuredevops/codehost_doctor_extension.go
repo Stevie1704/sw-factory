@@ -10,12 +10,12 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 )
 
-// extensionCodeHostStartupChecks diagnoses Azure Repos on the extension
+// codeHostStartupChecks diagnoses Azure Repos on the extension
 // route with read-only az repos and az devops invoke probes. It needs
 // neither Boards nor az login. The extension route has no verified
 // permission evaluation (ADR 0030), so the write permissions are reported
 // as unverified, never as passed.
-func (c *Client) extensionCodeHostStartupChecks(repository tracker.Repository) []doctor.Check {
+func (c extensionBackend) codeHostStartupChecks(repository tracker.Repository) []doctor.Check {
 	defaultBranch := ""
 	return []doctor.Check{
 		func(ctx context.Context) doctor.Result {
@@ -48,7 +48,7 @@ func (c *Client) probeExtensionCodeHost(ctx context.Context, repository tracker.
 		return errors.New("the repository has no default branch")
 	}
 	var pulls []struct{}
-	if err := c.extension(ctx, repository.Owner, []string{"repos", "pr", "list", "--project", repository.Project, "--repository", repository.Name, "--status", "active", "--top", "1"}, &pulls); err != nil {
+	if err := c.extension(ctx, repository.Owner, append(repositoryCommand(repository, "repos", "pr", "list"), "--status", "active", "--top", "1"), &pulls); err != nil {
 		return err
 	}
 	var refs []struct {
@@ -56,7 +56,7 @@ func (c *Client) probeExtensionCodeHost(ctx context.Context, repository tracker.
 		ObjectID string `json:"objectId"`
 	}
 	filter := strings.TrimPrefix(defaultBranch, "refs/")
-	if err := c.extension(ctx, repository.Owner, []string{"repos", "ref", "list", "--project", repository.Project, "--repository", repository.Name, "--filter", filter}, &refs); err != nil {
+	if err := c.extension(ctx, repository.Owner, append(repositoryCommand(repository, "repos", "ref", "list"), "--filter", filter), &refs); err != nil {
 		return err
 	}
 	sha := ""

@@ -38,11 +38,11 @@ func extensionCommentRequest(repository tracker.Repository, number int, method s
 	return invokeRequest{Area: "wit", Resource: "comments", Method: method, APIVersion: extensionCommentAPIVersion, Route: route, Query: parameters, Body: body}
 }
 
-// extensionWriteComment creates a Markdown comment on a work item, or edits
+// writeComment creates a Markdown comment on a work item, or edits
 // comment commentID when it is positive, and refuses a result that the
 // service did not store as Markdown, because status markers and Markdown
 // text would not survive an HTML conversion.
-func (c *Client) extensionWriteComment(ctx context.Context, repository tracker.Repository, number, commentID int, body string) (tracker.Comment, error) {
+func (c extensionBackend) writeComment(ctx context.Context, repository tracker.Repository, number, commentID int, body string) (tracker.Comment, error) {
 	method, action := "POST", "create comment"
 	req := extensionCommentRequest(repository, number, method, markdownFormat(), map[string]string{"text": body})
 	if commentID > 0 {
@@ -61,13 +61,30 @@ func (c *Client) extensionWriteComment(ctx context.Context, repository tracker.R
 	return comment, nil
 }
 
-// extensionFindStatusComment recovers the status comment by its marker
+// createComment posts one Markdown comment through az devops invoke.
+func (c extensionBackend) createComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
+	return c.writeComment(ctx, repository, number, 0, body)
+}
+
+// editComment replaces the text of one comment through az devops invoke.
+func (c extensionBackend) editComment(ctx context.Context, repository tracker.Repository, number, id int, body string) error {
+	_, err := c.writeComment(ctx, repository, number, id, body)
+	return err
+}
+
+// readComments reads one page of the comments of a work item through az
+// devops invoke.
+func (c extensionBackend) readComments(ctx context.Context, repository tracker.Repository, number int, query url.Values, destination any) error {
+	return c.invoke(ctx, repository.Owner, extensionCommentRequest(repository, number, "GET", query, nil), destination)
+}
+
+// findStatusComment recovers the status comment by its marker
 // alone. The extension route cannot read the signed-in identity (ADR 0030),
 // so it cannot apply the author check of ADR 0019; it accepts exactly one
 // live comment with the marker and refuses more than one instead of
 // guessing, so a copied marker never redirects the status comment and never
 // causes a duplicate.
-func (c *Client) extensionFindStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
+func (c extensionBackend) findStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
 	responses, err := c.workItemComments(ctx, repository, number)
 	if err != nil {
 		return tracker.Comment{}, err
@@ -98,10 +115,10 @@ func projectRoute(repository tracker.Repository, pairs ...string) map[string]str
 	return route
 }
 
-// extensionWorkItems reads work items through the project-scoped
+// workItems reads work items through the project-scoped
 // workItemsBatch resource. Missing items and items of another project are
 // left out, so a work item number never reaches into another project.
-func (c *Client) extensionWorkItems(ctx context.Context, repository tracker.Repository, ids []int) ([]workItemResponse, error) {
+func (c extensionBackend) workItems(ctx context.Context, repository tracker.Repository, ids []int) ([]workItemResponse, error) {
 	var response struct {
 		Value []*workItemResponse `json:"value"`
 	}
@@ -122,9 +139,9 @@ func (c *Client) extensionWorkItems(ctx context.Context, repository tracker.Repo
 	return items, nil
 }
 
-// extensionWorkItem reads one work item of the registered project.
-func (c *Client) extensionWorkItem(ctx context.Context, repository tracker.Repository, number int) (workItemResponse, error) {
-	items, err := c.extensionWorkItems(ctx, repository, []int{number})
+// workItem reads one work item of the registered project.
+func (c extensionBackend) workItem(ctx context.Context, repository tracker.Repository, number int) (workItemResponse, error) {
+	items, err := c.workItems(ctx, repository, []int{number})
 	if err != nil {
 		return workItemResponse{}, err
 	}
@@ -143,14 +160,23 @@ var _ tracker.RepositoryAssignmentValidator = (*Client)(nil)
 // GUID, and returns the identity to freeze with the run. The az rest route
 // needs no assignment and returns nil without a call.
 func (c *Client) ClaimRepositoryAssignment(ctx context.Context, repository tracker.Repository, issue tracker.Issue) (*tracker.RepositoryAssignment, error) {
-	if !c.extensionRoute() {
-		return nil, nil
-	}
-	identity, err := c.ResolveRepository(ctx, repository)
+	return c.backend().claimRepositoryAssignment(ctx, repository, issue)
+}
+
+// claimRepositoryAssignment needs no assignment on az rest and returns nil
+// without a call.
+func (restBackend) claimRepositoryAssignment(context.Context, tracker.Repository, tracker.Issue) (*tracker.RepositoryAssignment, error) {
+	return nil, nil
+}
+
+// claimRepositoryAssignment validates the factory-repo tag of issue against
+// the registered repository's GUID.
+func (c extensionBackend) claimRepositoryAssignment(ctx context.Context, repository tracker.Repository, issue tracker.Issue) (*tracker.RepositoryAssignment, error) {
+	identity, err := c.resolveRepository(ctx, repository)
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateRepositoryAssignment(issue.Labels, identity); err != nil {
+	if err := c.validateAssignment(ctx, repository, issue.Labels, identity); err != nil {
 		return nil, fmt.Errorf("work item %d cannot be claimed by this installation: %w", issue.Number, err)
 	}
 	return &tracker.RepositoryAssignment{
@@ -167,12 +193,12 @@ func wiqlString(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-// extensionEligibleIssues is ListEligibleIssues on the extension route. The
+// eligibleIssues is ListEligibleIssues on the extension route. The
 // WIQL names the project explicitly, because az boards query sends no
 // project context for @project, and filters by the assignment tag only as
 // an optimization: every listed work item passes the exact assignment check,
 // so overlapping installations never list each other's work.
-func (c *Client) extensionEligibleIssues(ctx context.Context, repository tracker.Repository) ([]tracker.Issue, error) {
+func (c extensionBackend) eligibleIssues(ctx context.Context, repository tracker.Repository) ([]tracker.Issue, error) {
 	identity, err := c.ResolveRepository(ctx, repository)
 	if err != nil {
 		return nil, err
@@ -194,12 +220,12 @@ func (c *Client) extensionEligibleIssues(ctx context.Context, repository tracker
 	sort.Ints(ids)
 	issues := make([]tracker.Issue, 0, len(ids))
 	for start := 0; start < len(ids); start += workItemBatchSize {
-		batch, err := c.extensionWorkItems(ctx, repository, ids[start:min(start+workItemBatchSize, len(ids))])
+		batch, err := c.workItems(ctx, repository, ids[start:min(start+workItemBatchSize, len(ids))])
 		if err != nil {
 			return nil, err
 		}
 		for _, response := range batch {
-			if ValidateRepositoryAssignment(splitTags(response.Fields.Tags), identity) != nil {
+			if c.validateAssignment(ctx, repository, splitTags(response.Fields.Tags), identity) != nil {
 				continue
 			}
 			issue, err := c.eligibleIssue(ctx, repository, response)
@@ -235,12 +261,12 @@ func keepMetadataTags(labels, current []string) []string {
 	return result
 }
 
-// extensionReplaceIssueLabels replaces the tag list of one work item with
+// replaceIssueLabels replaces the tag list of one work item with
 // az boards work-item update. The command is organization-scoped, so the
 // work item is first read inside the registered project; the read also
 // supplies the assignment and correlation tags that the write keeps.
-func (c *Client) extensionReplaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
-	current, err := c.extensionWorkItem(ctx, repository, number)
+func (c extensionBackend) replaceIssueLabels(ctx context.Context, repository tracker.Repository, number int, labels []string) error {
+	current, err := c.workItem(ctx, repository, number)
 	if err != nil {
 		return fmt.Errorf("replace tags on work item %d: %w", number, err)
 	}
@@ -250,4 +276,17 @@ func (c *Client) extensionReplaceIssueLabels(ctx context.Context, repository tra
 		return fmt.Errorf("replace tags on work item %d: %w", number, err)
 	}
 	return nil
+}
+
+// readUpdates reads one page of the update history of a work item through
+// az devops invoke.
+func (c extensionBackend) readUpdates(ctx context.Context, repository tracker.Repository, number, skip int, destination any) error {
+	query := map[string]string{"$top": strconv.Itoa(updatePageSize), "$skip": strconv.Itoa(skip)}
+	return c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "updates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "id", strconv.Itoa(number)), Query: query}, destination)
+}
+
+// readTypeStates reads the states of one work item type through az devops
+// invoke.
+func (c extensionBackend) readTypeStates(ctx context.Context, repository tracker.Repository, workItemType string, destination any) error {
+	return c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "workItemTypeStates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "type", workItemType)}, destination)
 }
