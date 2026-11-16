@@ -18,6 +18,10 @@ import (
 type workItemResponse struct {
 	ID     int `json:"id"`
 	Fields struct {
+		// TeamProject names the project of the work item. The extension
+		// route verifies it, because some of its commands are
+		// organization-scoped (ADR 0030).
+		TeamProject string    `json:"System.TeamProject"`
 		Title       string    `json:"System.Title"`
 		Type        string    `json:"System.WorkItemType"`
 		State       string    `json:"System.State"`
@@ -36,7 +40,13 @@ func (c *Client) Issue(ctx context.Context, repository tracker.Repository, numbe
 		return tracker.Issue{}, err
 	}
 	var response workItemResponse
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion)}, &response); err != nil {
+	var err error
+	if c.extensionRoute() {
+		response, err = c.extensionWorkItem(ctx, repository, number)
+	} else {
+		err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion)}, &response)
+	}
+	if err != nil {
 		return tracker.Issue{}, fmt.Errorf("read work item %d: %w", number, err)
 	}
 	issue, err := c.issue(ctx, repository, response)
@@ -113,8 +123,14 @@ func (c *Client) typeStates(ctx context.Context, repository tracker.Repository, 
 			Category string `json:"category"`
 		} `json:"value"`
 	}
-	path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
-	if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, &response); err != nil {
+	var err error
+	if c.extensionRoute() {
+		err = c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "workItemTypeStates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "type", workItemType)}, &response)
+	} else {
+		path := "wit/workitemtypes/" + url.PathEscape(workItemType) + "/states"
+		err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, nil, apiVersion)}, &response)
+	}
+	if err != nil {
 		return nil, err
 	}
 	states = make(map[string]string, len(response.Value))
@@ -157,6 +173,9 @@ func (c *Client) ListEligibleIssues(ctx context.Context, repository tracker.Repo
 	if err := validateRepository(repository); err != nil {
 		return nil, err
 	}
+	if c.extensionRoute() {
+		return c.extensionEligibleIssues(ctx, repository)
+	}
 	var query struct {
 		WorkItems []struct {
 			ID int `json:"id"`
@@ -192,6 +211,9 @@ func (c *Client) ListEligibleIssues(ctx context.Context, repository tracker.Repo
 
 // workItems reads one batch of work items.
 func (c *Client) workItems(ctx context.Context, repository tracker.Repository, ids []int) ([]workItemResponse, error) {
+	if c.extensionRoute() {
+		return c.extensionWorkItems(ctx, repository, ids)
+	}
 	values := make([]string, 0, len(ids))
 	for _, id := range ids {
 		values = append(values, strconv.Itoa(id))
@@ -242,8 +264,15 @@ func (c *Client) readyTagger(ctx context.Context, repository tracker.Repository,
 				} `json:"fields"`
 			} `json:"value"`
 		}
-		query := url.Values{"$top": {strconv.Itoa(updatePageSize)}, "$skip": {strconv.Itoa(skip)}}
-		if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/updates", number), query, apiVersion)}, &response); err != nil {
+		var err error
+		if c.extensionRoute() {
+			query := map[string]string{"$top": strconv.Itoa(updatePageSize), "$skip": strconv.Itoa(skip)}
+			err = c.invoke(ctx, repository.Owner, invokeRequest{Area: "wit", Resource: "updates", APIVersion: extensionAPIVersion, Route: projectRoute(repository, "id", strconv.Itoa(number)), Query: query}, &response)
+		} else {
+			query := url.Values{"$top": {strconv.Itoa(updatePageSize)}, "$skip": {strconv.Itoa(skip)}}
+			err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/updates", number), query, apiVersion)}, &response)
+		}
+		if err != nil {
 			return "", fmt.Errorf("read update history of work item %d: %w", number, err)
 		}
 		for _, update := range response.Value {

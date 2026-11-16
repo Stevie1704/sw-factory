@@ -25,6 +25,9 @@ func (c *Client) ReplaceIssueLabels(ctx context.Context, repository tracker.Repo
 	if err := validateIssueTarget(repository, number); err != nil {
 		return err
 	}
+	if c.extensionRoute() {
+		return c.extensionReplaceIssueLabels(ctx, repository, number, labels)
+	}
 	patch := []map[string]string{{"op": "add", "path": "/fields/System.Tags", "value": joinTags(labels)}}
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", number), nil, apiVersion), Body: patch, ContentType: "application/json-patch+json"}
 	if err := c.call(ctx, req, nil); err != nil {
@@ -87,8 +90,17 @@ func (c *Client) workItemComments(ctx context.Context, repository tracker.Reposi
 		var response struct {
 			Comments          []workItemCommentResponse `json:"comments"`
 			ContinuationToken string                    `json:"continuationToken"`
+			// HeaderToken is the X-MS-ContinuationToken header that az
+			// devops invoke copies into its output.
+			HeaderToken string `json:"continuation_token"`
 		}
-		if err := c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), query, commentAPIVersion)}, &response); err != nil {
+		var err error
+		if c.extensionRoute() {
+			err = c.invoke(ctx, repository.Owner, extensionCommentRequest(repository, number, "GET", query, nil), &response)
+		} else {
+			err = c.call(ctx, request{Method: "GET", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), query, commentAPIVersion)}, &response)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("list comments on work item %d: %w", number, err)
 		}
 		for _, comment := range response.Comments {
@@ -96,10 +108,14 @@ func (c *Client) workItemComments(ctx context.Context, repository tracker.Reposi
 				comments = append(comments, comment)
 			}
 		}
-		if response.ContinuationToken == "" || response.ContinuationToken == token {
+		next := response.ContinuationToken
+		if next == "" {
+			next = response.HeaderToken
+		}
+		if next == "" || next == token {
 			return comments, nil
 		}
-		token = response.ContinuationToken
+		token = next
 	}
 }
 
@@ -107,6 +123,9 @@ func (c *Client) workItemComments(ctx context.Context, repository tracker.Reposi
 func (c *Client) CreateIssueComment(ctx context.Context, repository tracker.Repository, number int, body string) (tracker.Comment, error) {
 	if err := validateIssueTarget(repository, number); err != nil {
 		return tracker.Comment{}, err
+	}
+	if c.extensionRoute() {
+		return c.extensionWriteComment(ctx, repository, number, 0, body)
 	}
 	var response workItemCommentResponse
 	req := request{Method: "POST", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments", number), markdownFormat(), commentAPIVersion), Body: map[string]string{"text": body}}
@@ -124,6 +143,9 @@ func (c *Client) CreateIssueComment(ctx context.Context, repository tracker.Repo
 func (c *Client) FindStatusComment(ctx context.Context, repository tracker.Repository, number int, marker string) (tracker.Comment, error) {
 	if strings.TrimSpace(marker) == "" {
 		return tracker.Comment{}, errors.New("status comment marker is required")
+	}
+	if c.extensionRoute() {
+		return c.extensionFindStatusComment(ctx, repository, number, marker)
 	}
 	coordinator, err := c.AuthenticatedLogin(ctx)
 	if err != nil {
@@ -150,6 +172,10 @@ func (c *Client) EditIssueComment(ctx context.Context, repository tracker.Reposi
 		return fmt.Errorf("%q is not an Azure DevOps work item comment identity", commentID)
 	}
 	if err := validateIssueTarget(repository, number); err != nil {
+		return err
+	}
+	if c.extensionRoute() {
+		_, err := c.extensionWriteComment(ctx, repository, number, id, body)
 		return err
 	}
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workItems/%d/comments/%d", number, id), markdownFormat(), commentAPIVersion), Body: map[string]string{"text": body}}
