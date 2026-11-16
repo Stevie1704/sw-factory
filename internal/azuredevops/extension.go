@@ -47,9 +47,7 @@ func (e *LoginRequiredError) Error() string {
 func NewClientForRoute(organization string, authorizedUsers []string, route config.AzureRoute) *Client {
 	client := NewClient(organization, authorizedUsers)
 	client.Route = route
-	if route == config.AzureRouteDevOpsExtension {
-		client.Runner = extensionRunner{timeout: CommandTimeout}
-	}
+	client.Runner = client.backend().defaultRunner()
 	return client
 }
 
