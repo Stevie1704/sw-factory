@@ -68,7 +68,7 @@ func (c *Client) extensionPullRequestIDs(ctx context.Context, repository tracker
 		return nil, err
 	}
 	var response []extensionPullRequestResponse
-	args := []string{"repos", "pr", "list", "--project", repository.Project, "--repository", repository.Name, source, target, "--status", "all", "--top", "100"}
+	args := append(repositoryCommand(repository, "repos", "pr", "list"), source, target, "--status", "all", "--top", "100")
 	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
 		return nil, fmt.Errorf("find pull request for %q: %w", headBranch, err)
 	}

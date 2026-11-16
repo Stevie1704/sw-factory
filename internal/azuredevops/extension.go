@@ -237,6 +237,13 @@ func (c *Client) extension(ctx context.Context, organization string, args []stri
 	return nil
 }
 
+// repositoryCommand returns the az words of command followed by the
+// explicit --project and --repository of the registered repository, by
+// name.
+func repositoryCommand(repository tracker.Repository, command ...string) []string {
+	return append(command, "--project", repository.Project, "--repository", repository.Name)
+}
+
 // plainSegment reports whether value is safe as one name segment.
 func plainSegment(value string) bool {
 	return !strings.ContainsAny(value, "/\\?#%") && strings.IndexFunc(value, unicode.IsControl) < 0
@@ -394,8 +401,7 @@ func (c *Client) showRepository(ctx context.Context, repository tracker.Reposito
 		return RepositoryIdentity{}, "", err
 	}
 	var response repositoryShowResponse
-	args := []string{"repos", "show", "--project", repository.Project, "--repository", repository.Name}
-	if err := c.extension(ctx, repository.Owner, args, &response); err != nil {
+	if err := c.extension(ctx, repository.Owner, repositoryCommand(repository, "repos", "show"), &response); err != nil {
 		return RepositoryIdentity{}, "", fmt.Errorf("resolve Azure Repos repository %s: %w", repository, err)
 	}
 	if response.Project == nil || !strings.EqualFold(response.Project.Name, repository.Project) || !canonicalGUID.MatchString(response.Project.ID) {

@@ -169,17 +169,34 @@ func (c *Client) planRead(ctx context.Context, repository tracker.Repository, pa
 	if !c.extensionRoute() {
 		return c.call(ctx, request{Method: "GET", URL: projectURL(repository, path, query, apiVersion)}, destination)
 	}
+	return c.invoke(ctx, repository.Owner, planInvokeRequest(repository, query, read), destination)
+}
+
+// planInvokeRequest completes read for the extension route: the extension
+// API version, the project route when read names no route, and query as
+// its query parameters. Callers pass the query only as query, never in
+// read.
+func planInvokeRequest(repository tracker.Repository, query url.Values, read invokeRequest) invokeRequest {
 	read.APIVersion = extensionAPIVersion
 	if read.Route == nil {
 		read.Route = projectRoute(repository)
 	}
-	for key := range query {
-		if read.Query == nil {
-			read.Query = map[string]string{}
-		}
-		read.Query[key] = query.Get(key)
+	read.Query = queryParameters(query)
+	return read
+}
+
+// queryParameters converts query to the single-valued parameters of az
+// devops invoke, keeping the first value of each key. An empty query has
+// no parameters.
+func queryParameters(query url.Values) map[string]string {
+	if len(query) == 0 {
+		return nil
 	}
-	return c.invoke(ctx, repository.Owner, read, destination)
+	parameters := make(map[string]string, len(query))
+	for key := range query {
+		parameters[key] = query.Get(key)
+	}
+	return parameters
 }
 
 // linkType is the projection of one work-item link type.
