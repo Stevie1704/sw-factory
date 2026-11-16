@@ -111,11 +111,46 @@ type AzureDevOpsConfig struct {
 	// Planning maps neutral plan kinds to the project's work-item types for
 	// plan publication. Nil selects AgileAzurePlanMapping.
 	Planning *AzurePlanMapping `yaml:"planning,omitempty"`
+	// Route selects how the adapter reaches Azure DevOps. Empty keeps the
+	// az rest route of ADR 0019 (ADR 0030).
+	Route AzureRoute `yaml:"route,omitempty"`
+	// PlanRepositories names other repositories of the same project that a
+	// plan published by this installation may assign PBIs to. Each one is
+	// executed by its own installation. Only the extension route accepts it.
+	PlanRepositories []string `yaml:"plan_repositories,omitempty"`
 }
+
+// AzureRoute selects the Azure CLI command family of an Azure DevOps
+// registration.
+type AzureRoute string
+
+const (
+	// AzureRouteAzRest calls the REST API through az rest with an Entra ID
+	// login (ADR 0019). It is the route of a registration without a route.
+	AzureRouteAzRest AzureRoute = "az_rest"
+	// AzureRouteDevOpsExtension calls az boards, az repos, and az devops
+	// invoke of the azure-devops extension, authenticated by az devops login
+	// (ADR 0030).
+	AzureRouteDevOpsExtension AzureRoute = "devops_extension"
+)
 
 // IsZero reports whether no Azure DevOps field is set.
 func (c AzureDevOpsConfig) IsZero() bool {
-	return c == AzureDevOpsConfig{}
+	return c.Organization == "" && c.Project == "" && c.Repository == "" && c.Planning == nil && c.Route == "" && len(c.PlanRepositories) == 0
+}
+
+// EffectiveRoute returns the selected route; an omitted route is az rest.
+func (c AzureDevOpsConfig) EffectiveRoute() AzureRoute {
+	if c.Route == "" {
+		return AzureRouteAzRest
+	}
+	return c.Route
+}
+
+// PlanTargetRepositories returns the repository names a plan PBI may target:
+// the registered repository first, then the configured plan repositories.
+func (c AzureDevOpsConfig) PlanTargetRepositories() []string {
+	return append([]string{c.Repository}, c.PlanRepositories...)
 }
 
 type PollingConfig struct {
@@ -980,7 +1015,7 @@ func validateLegacyProvider(prefix string, repository RepositoryRegistration) er
 		if strings.TrimSpace(field.value) == "" {
 			return validation(prefix+".azure_devops."+field.name, "is required")
 		}
-		if strings.ContainsAny(field.value, "/\\?#%") || strings.IndexFunc(field.value, unicode.IsControl) >= 0 {
+		if !plainAzureName(field.value) {
 			return validation(prefix+".azure_devops."+field.name, "must be a plain name without path, query, or control characters")
 		}
 	}
@@ -988,6 +1023,39 @@ func validateLegacyProvider(prefix string, repository RepositoryRegistration) er
 		if err := planning.Validate(); err != nil {
 			return validation(prefix+".azure_devops.planning", err.Error())
 		}
+	}
+	return validateAzureRoute(prefix+".azure_devops", repository.AzureDevOps)
+}
+
+// plainAzureName reports whether value can be one Azure DevOps name segment:
+// no path, query, escape, or control characters.
+func plainAzureName(value string) bool {
+	return !strings.ContainsAny(value, "/\\?#%") && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+// validateAzureRoute accepts an omitted or known route, and plan
+// repositories only on the extension route, each a distinct plain name other
+// than the registered repository.
+func validateAzureRoute(prefix string, azure AzureDevOpsConfig) error {
+	route := azure.EffectiveRoute()
+	if route != AzureRouteAzRest && route != AzureRouteDevOpsExtension {
+		return validation(prefix+".route", "must be az_rest or devops_extension")
+	}
+	if len(azure.PlanRepositories) == 0 {
+		return nil
+	}
+	if route != AzureRouteDevOpsExtension {
+		return validation(prefix+".plan_repositories", "requires route devops_extension")
+	}
+	seen := map[string]bool{strings.ToLower(azure.Repository): true}
+	for _, name := range azure.PlanRepositories {
+		if strings.TrimSpace(name) == "" || !plainAzureName(name) {
+			return validation(prefix+".plan_repositories", "must list plain repository names without path, query, or control characters")
+		}
+		if seen[strings.ToLower(name)] {
+			return validation(prefix+".plan_repositories", "must list distinct repositories other than the registered repository")
+		}
+		seen[strings.ToLower(name)] = true
 	}
 	return nil
 }
