@@ -350,7 +350,9 @@ func (b *Boards) extensionBatch(call ExtensionCall) (any, error) {
 // itemJSON renders one item as Azure DevOps returns it: its fields with the
 // project and type, and the multiline formats that differ from HTML.
 func (b *Boards) itemJSON(item Item) map[string]any {
-	fields := map[string]any{"System.TeamProject": Project, "System.WorkItemType": item.Type}
+	// Azure DevOps fills the project, the type, and the type's initial
+	// state on create; the stored item keeps only what the writer sent.
+	fields := map[string]any{"System.TeamProject": Project, "System.WorkItemType": item.Type, "System.State": "New"}
 	for name, value := range item.Fields {
 		fields[name] = value
 	}

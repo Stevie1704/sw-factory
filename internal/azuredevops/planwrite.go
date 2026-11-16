@@ -39,6 +39,11 @@ func classifyPlanError(err error) error {
 		return &tracker.PlanError{Kind: tracker.PlanErrorUnsupportedCapability, Err: err}
 	}
 	message := err.Error()
+	for _, text := range extensionNoWriteTexts {
+		if strings.Contains(message, text) {
+			return &tracker.PlanError{Kind: tracker.PlanErrorInvalidMapping, Err: err}
+		}
+	}
 	switch {
 	case strings.Contains(message, "Unauthorized(") || strings.Contains(message, "Forbidden("):
 		return &tracker.PlanError{Kind: tracker.PlanErrorPermission, Err: err}
@@ -67,6 +72,9 @@ func (c *Client) CreatePlanItem(ctx context.Context, repository tracker.Reposito
 	}
 	if strings.TrimSpace(item.Type) == "" || !slices.Contains(item.Labels, correlationTag(item.Correlation)) {
 		return tracker.PlanItemRef{}, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "node %s: the item has no type or no correlation tag", item.NodeID)
+	}
+	if c.extensionRoute() {
+		return c.extensionCreatePlanItem(ctx, repository, item)
 	}
 	patch := createPatch(item)
 	var response struct {
@@ -117,6 +125,9 @@ func (c *Client) FindPlanItems(ctx context.Context, repository tracker.Repositor
 		return nil, tracker.NewPlanError(tracker.PlanErrorInvalidMapping, "a correlation key is required")
 	}
 	tag := correlationTag(correlation)
+	if c.extensionRoute() {
+		return c.extensionFindPlanItems(ctx, repository, tag)
+	}
 	query := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Tags] CONTAINS '" +
 		strings.ReplaceAll(tag, "'", "''") + "' ORDER BY [System.Id]"
 	var result struct {
@@ -163,6 +174,9 @@ func (c *Client) CreatePlanRelationship(ctx context.Context, repository tracker.
 	if err != nil {
 		return err
 	}
+	if c.extensionRoute() {
+		return c.extensionCreatePlanRelationship(ctx, repository, from, to, link)
+	}
 	patch := []patchOperation{{Op: "add", Path: "/relations/-", Value: map[string]string{"rel": link, "url": workItemAPIURL(repository, to)}}}
 	req := request{Method: "PATCH", URL: projectURL(repository, fmt.Sprintf("wit/workitems/%d", from), nil, apiVersion), Body: patch, ContentType: "application/json-patch+json"}
 	if err := c.call(ctx, req, nil); err != nil {
@@ -177,6 +191,9 @@ func (c *Client) FindPlanRelationship(ctx context.Context, repository tracker.Re
 	from, to, link, err := planLink(repository, relationship)
 	if err != nil {
 		return false, err
+	}
+	if c.extensionRoute() {
+		return c.extensionFindPlanRelationship(ctx, repository, from, to, link)
 	}
 	var response relationResponse
 	query := url.Values{"$expand": {"relations"}}
