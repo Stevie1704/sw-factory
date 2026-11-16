@@ -92,6 +92,29 @@ func TestExtensionStartupChecksDiagnoseLoginAndExtensionDistinctly(t *testing.T)
 	}
 }
 
+// TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems verifies
+// that agent-ready PBIs without a usable assignment, which the queue never
+// lists, are named with the tag to add, while PBIs assigned to another
+// installation's repository are not.
+func TestExtensionStartupChecksWarnAboutUnassignedAgentReadyWorkItems(t *testing.T) {
+	t.Parallel()
+
+	webTag := "factory-repo:" + azuredevopstest.WebRepositoryID
+	az := newFakeAz(t).
+		on("repos show", repositoryShow("service", azuredevopstest.RepositoryID)).
+		on(routeQuery, `[{"id":3,"fields":{"System.Id":3,"System.Tags":"agent-ready; `+assignedTag+`"}},
+			{"id":5,"fields":{"System.Id":5,"System.Tags":"agent-ready; `+webTag+`"}},
+			{"id":7,"fields":{"System.Id":7,"System.Tags":"agent-ready"}},
+			{"id":9,"fields":{"System.Id":9,"System.Tags":"agent-ready; factory-repo:service"}}]`)
+	boards := extensionChecks(az).Results[2]
+	if boards.Status != doctor.StatusWarning || !strings.Contains(boards.Problem, "7, 9") || strings.Contains(boards.Problem, "5") || !strings.Contains(boards.Action, assignedTag) {
+		t.Fatalf("boards = %#v, want a warning naming work items 7 and 9 and the tag to add", boards)
+	}
+	if wiql := az.extensionCalled(routeQuery)[0].Flag("--wiql"); !strings.Contains(wiql, "[System.Tags]") || !strings.HasPrefix(wiql, "SELECT [System.Id], [System.Tags]") {
+		t.Fatalf("doctor WIQL = %q, want the tags selected", wiql)
+	}
+}
+
 // TestExtensionStartupChecksReportAMissingRepositoryAfterASignIn verifies
 // that an Azure DevOps refusal for the repository proves a working sign-in
 // and fails only the repository check.

@@ -130,9 +130,9 @@ its PAT option, and ADR 0025 decisions 4 and 6.
     the run's marker, returns a zero comment for none, and refuses more than
     one, so a copied marker never redirects the status comment and never
     causes a duplicate. This deliberately weakens the author check of ADR
-    0019 on this route only: another editor can block a run by copying its
-    marker, but cannot take over its status comment, because only the author
-    can edit a comment.
+    0019 on this route only: another editor can stop a run by copying its
+    marker into a second comment, and the run then fails with an error that
+    names the repair.
 13. **The claim revalidates the assignment and freezes it.** The tracker
     port `tracker.RepositoryAssignmentValidator` runs right before a claim,
     on the direct and the polling path, before a worktree, a run record, or
@@ -140,7 +140,8 @@ its PAT option, and ADR 0025 decisions 4 and 6.
     `store.Run.TrackerRepository` from the first save. The poll lists only
     work items whose single assignment tag names the registered repository,
     so an unassigned or foreign PBI never blocks the queue; a direct claim of
-    one returns the `AssignmentError` repair. `Issue` does not validate the
+    one returns the `AssignmentError` repair, and the doctor's Boards check
+    warns about agent-ready PBIs without a usable assignment. `Issue` does not validate the
     assignment, so a tag edit after the claim cannot stop an active run.
 
 ## Operation inventory
@@ -186,7 +187,7 @@ host.
 | Work item create: POST `wit/workitems/${type}` | `az boards work-item create --type --title --description --fields --project` | Verified command. **Unresolved:** the command sends only `/fields/...` operations (`work_item.py`), so it cannot set `/multilineFieldsFormat/System.Description=Markdown`; the Markdown description of ADR 0025 decision 5 needs a decision in #305. `invoke wit/workItems` resolves to the create route and could send the full patch, but the spec requires the dedicated command. |
 | Relation create: PATCH `wit/workitems/{from}` `/relations/-` | `az boards work-item relation add --id --relation-type <name> --target-id` | Verified command; organization-scoped. `relations.py` maps `<name>` case-insensitively to the service's relation-type `name` (for example `Parent`, `Predecessor`) and sends its reference name; the names come from the organization, not from the CLI. |
 | Relation lookup: GET `wit/workitems/{from}?$expand=relations` | `az boards work-item relation show --id` | Verified command. It replaces each `rel` reference name with the friendly name, so a lookup must compare names, not `System.LinkTypes.*`. |
-| Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location). Implemented (#304). The response gains `continuation_token` from the `X-MS-ContinuationToken` header, which the list follows. `7.1-preview` is a documented version form (REST API versioning: `{major}.{minor}[-{stage}[.{resource-version}]]`), and the SDK's `_negotiate_request_version` sends it unchanged. **Unresolved:** which resource version the service selects without one is not verified; every create and edit therefore refuses a result whose `format` is not `markdown`. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
+| Comments list, create, edit: `wit/workItems/{id}/comments[/{cid}]` | `invoke --area wit --resource comments`, query `format=markdown`, API `7.1-preview` | Resolves to `{project}/_apis/wit/workItems/{workItemId}/comments/{commentId}` (7.2 over the 5.0 location; the recorded location has `resourceVersion` 4 and `releasedVersion` 0.0, so it exists only as a preview). Implemented (#304). The response gains `continuation_token` from the `X-MS-ContinuationToken` header, which the list follows. `7.1-preview` is a documented version form (REST API versioning: `{major}.{minor}[-{stage}[.{resource-version}]]`), and the SDK's `_negotiate_request_version` sends it unchanged. **Unresolved:** which resource version the service selects without one is not verified; every create and edit therefore refuses a result whose `format` is not `markdown`. `--discussion` writes `System.History` without a comment ID and is not a substitute. |
 | Process types: GET `wit/workitemtypes` | `invoke --area wit --resource workItemTypes` | Resolves to `{project}/_apis/wit/workItemTypes/{type}`. |
 | Field definitions: GET `wit/fields` | `invoke --area wit --resource fields` | Resolves to `{project}/_apis/wit/fields/{fieldNameOrRefName}`. |
 | Type fields: GET `wit/workitemtypes/{type}/fields?$expand=allowedValues` | `invoke --area wit --resource workItemTypesField` | Resolves to `{project}/_apis/wit/workitemtypes/{type}/fields/{field}`. |

@@ -412,7 +412,9 @@ An existing registration without `route` keeps the `az rest` route.
   `az boards query` on this route and never writes. It reports a missing or
   expired login (`run az devops login`), a missing extension
   (`run az extension add --name azure-devops`), a timeout, and an
-  unreachable service as different failures. The identity and permission
+  unreachable service as different failures. It warns about agent-ready
+  work items that carry no usable `factory-repo` tag, because no
+  installation claims them. The identity and permission
   checks show as skipped: no verified command on this route reads the
   signed-in identity or evaluates its permissions. Check by hand that the
   PAT's identity has Contribute, Create branch, and Contribute to pull

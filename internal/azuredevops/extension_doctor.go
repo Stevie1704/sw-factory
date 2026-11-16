@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/doctor"
@@ -16,6 +17,7 @@ var (
 	extensionMissingCondition = doctor.Condition{Code: "azure_devops.extension.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
 	serviceUnreachable        = doctor.Condition{Code: "azure_devops.service.unreachable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectInspection, Topic: "setup", Unobserved: true}
 	boardsUnreadable          = doctor.Condition{Code: "azure_devops.boards.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "setup"}
+	boardsUnassigned          = doctor.Condition{Code: "azure_devops.boards.unassigned", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "setup"}
 )
 
 // Reasons for the checks that the extension route cannot perform. They are
@@ -53,15 +55,7 @@ func (c *Client) extensionStartupChecks(repository tracker.Repository) []doctor.
 			return doctor.Success("azure_devops.repository.ready", name)
 		},
 		func(ctx context.Context) doctor.Result {
-			const name = "azure devops boards"
-			wiql := "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) + " AND [System.Tags] CONTAINS " + wiqlString(tracker.LabelAgentReady)
-			if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, nil); err != nil {
-				if result, ok := unresponsive("azure_devops.boards.timeout", name, err); ok {
-					return result
-				}
-				return doctor.Failure(boardsUnreadable, name, fmt.Sprintf("the work items of project %s could not be queried", repository.Project), "grant the az devops login identity View work items in the project, then run factory doctor again")
-			}
-			return doctor.Success("azure_devops.boards.ready", name)
+			return c.extensionBoardsResult(ctx, repository)
 		},
 		func(context.Context) doctor.Result {
 			return doctor.Skipped("azure_devops.identity.not_available", "azure devops identity", identityNotAvailable)
@@ -70,6 +64,47 @@ func (c *Client) extensionStartupChecks(repository tracker.Repository) []doctor.
 			return doctor.Skipped("azure_devops.permissions.not_available", "azure devops permissions", permissionsNotAvailable)
 		},
 	}
+}
+
+// extensionBoardsResult queries the project's agent-ready work items, which
+// proves Boards read access, and warns about those without a usable
+// repository assignment: the queue never lists them, so the operator would
+// otherwise learn of them only from a direct claim. Work items assigned to
+// another repository belong to another installation and are not reported.
+func (c *Client) extensionBoardsResult(ctx context.Context, repository tracker.Repository) doctor.Result {
+	const name = "azure devops boards"
+	wiql := "SELECT [System.Id], [System.Tags] FROM WorkItems WHERE [System.TeamProject] = " + wiqlString(repository.Project) +
+		" AND [System.Tags] CONTAINS " + wiqlString(tracker.LabelAgentReady) + " ORDER BY [System.Id]"
+	var found []struct {
+		ID     int `json:"id"`
+		Fields struct {
+			Tags string `json:"System.Tags"`
+		} `json:"fields"`
+	}
+	if err := c.extension(ctx, repository.Owner, []string{"boards", "query", "--wiql", wiql, "--project", repository.Project}, &found); err != nil {
+		if result, ok := unresponsive("azure_devops.boards.timeout", name, err); ok {
+			return result
+		}
+		return doctor.Failure(boardsUnreadable, name, fmt.Sprintf("the work items of project %s could not be queried", repository.Project), "grant the az devops login identity View work items in the project, then run factory doctor again")
+	}
+	identity, err := c.ResolveRepository(ctx, repository)
+	if err != nil {
+		// The repository check reports why the assignment cannot be checked.
+		return doctor.Success("azure_devops.boards.ready", name)
+	}
+	unassigned := []string{}
+	for _, item := range found {
+		var refused *AssignmentError
+		if errors.As(ValidateRepositoryAssignment(splitTags(item.Fields.Tags), identity), &refused) && refused.Problem != AssignmentMismatched {
+			unassigned = append(unassigned, strconv.Itoa(item.ID))
+		}
+	}
+	if len(unassigned) > 0 {
+		return doctor.Warning(boardsUnassigned, name,
+			fmt.Sprintf("agent-ready work items %s have no usable repository assignment, so no installation claims them", strings.Join(unassigned, ", ")),
+			fmt.Sprintf("add the tag %s to each one that repository %s implements, and keep exactly one factory-repo tag per work item", RepositoryAssignmentTag(identity.ID), identity.Name))
+	}
+	return doctor.Success("azure_devops.boards.ready", name)
 }
 
 // extensionAuthenticationResult classifies the first authenticated command
