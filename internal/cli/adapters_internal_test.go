@@ -62,6 +62,9 @@ func TestAdaptersCarryTheSelectedAzureRoute(t *testing.T) {
 
 	for _, route := range []config.AzureRoute{"", config.AzureRouteDevOpsExtension} {
 		registration := config.RepositoryRegistration{Path: "/work/service", AzureDevOps: config.AzureDevOpsConfig{Organization: "contoso", Project: "Factory Pilot", Repository: "service", Route: route}, AuthorizedUsers: []string{"alice@contoso.com"}, OperationalDataPath: "/var/lib/factory/factory.db", RepositoryConfigPath: "/work/service/factory.yaml", Polling: config.PollingConfig{Interval: "30s", Backoff: "5m"}}
+		if route == config.AzureRouteDevOpsExtension {
+			registration.AzureDevOps.PlanRepositories = []string{"web"}
+		}
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		if err := config.SaveHost(path, config.HostConfig{SchemaVersion: 2, Repositories: []config.RepositoryRegistration{registration}}); err != nil {
 			t.Fatal(err)
@@ -77,6 +80,9 @@ func TestAdaptersCarryTheSelectedAzureRoute(t *testing.T) {
 		want := registration.AzureDevOps.EffectiveRoute()
 		if trackerClient.Route != want || codeHost.Route != want {
 			t.Fatalf("routes = %q (tracker), %q (code host), want %q", trackerClient.Route, codeHost.Route, want)
+		}
+		if strings.Join(trackerClient.PlanRepositories, ",") != strings.Join(registration.AzureDevOps.PlanRepositories, ",") {
+			t.Fatalf("PlanRepositories = %q, want %q", trackerClient.PlanRepositories, registration.AzureDevOps.PlanRepositories)
 		}
 	}
 }

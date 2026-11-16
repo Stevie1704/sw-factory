@@ -1,10 +1,14 @@
 package azuredevopstest
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -171,7 +175,7 @@ var repositoryIDs = map[string]string{Repository: RepositoryID, WebRepository: W
 // runExtension records and answers one extension-route command. The caller
 // holds b.mu. FailOnce with a route key, for example "repos show", fails the
 // next matching command once.
-func (b *Boards) runExtension(args []string) ([]byte, error) {
+func (b *Boards) runExtension(ctx context.Context, args []string) ([]byte, error) {
 	call, err := ParseExtensionCall(args)
 	if err != nil {
 		b.t.Errorf("scripted az: %v", err)
@@ -182,7 +186,7 @@ func (b *Boards) runExtension(args []string) ([]byte, error) {
 		delete(b.faults, call.Route())
 		return nil, errors.New(fault.message)
 	}
-	response, err := b.answerExtension(call)
+	response, err := b.answerExtension(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -194,11 +198,247 @@ func (b *Boards) runExtension(args []string) ([]byte, error) {
 }
 
 // answerExtension returns the scripted response of one extension command.
-func (b *Boards) answerExtension(call ExtensionCall) (any, error) {
-	if call.Route() == "repos show" {
+// Project-scoped invoke routes must name the scripted project.
+func (b *Boards) answerExtension(ctx context.Context, call ExtensionCall) (any, error) {
+	route := call.Parameters("--route-parameters")
+	if call.Command[0] == "devops" && route["project"] != Project {
+		return nil, fmt.Errorf("ERROR: project %q of %s is not the scripted project", route["project"], call.Route())
+	}
+	switch call.Route() {
+	case "repos show":
 		return RepositoryResponse(call)
+	case "devops invoke GET wit/workItemTypes":
+		types := []map[string]any{}
+		for _, value := range b.process {
+			types = append(types, map[string]any{"name": value.Name, "isDisabled": value.Disabled})
+		}
+		return map[string]any{"count": len(types), "value": types}, nil
+	case "devops invoke GET work/backlogconfiguration":
+		return b.backlogConfiguration(), nil
+	case "devops invoke GET wit/fields":
+		return b.fieldList(), nil
+	case "devops invoke GET wit/workItemTypesField":
+		if call.Parameters("--query-parameters")["$expand"] != "allowedValues" {
+			b.t.Errorf("%s does not expand allowed values", call.Route())
+		}
+		return b.typeResource(route["type"] + "/fields")
+	case "devops invoke GET wit/workItemTypeStates":
+		return b.typeResource(route["type"] + "/states")
+	case "boards work-item relation list-type":
+		return relationTypes(), nil
+	case "boards work-item create":
+		return b.extensionCreate(ctx, call)
+	case "boards query":
+		return b.extensionQuery(call)
+	case "devops invoke POST wit/workItemsBatch":
+		return b.extensionBatch(call)
+	case "boards work-item relation add":
+		return b.extensionLink(call)
+	case "boards work-item relation show":
+		id, _ := strconv.Atoi(call.Flag("--id"))
+		return b.friendlyItem(id)
 	}
 	return nil, errNoExtensionRoute(call)
+}
+
+// relationTypes returns the work link types of the scripted organization,
+// with the names and reference names of the Microsoft link type reference.
+func relationTypes() []map[string]any {
+	types := []map[string]any{}
+	for _, pair := range [][2]string{
+		{"Parent", "System.LinkTypes.Hierarchy-Reverse"}, {"Child", "System.LinkTypes.Hierarchy-Forward"},
+		{"Predecessor", "System.LinkTypes.Dependency-Reverse"}, {"Successor", "System.LinkTypes.Dependency-Forward"},
+		{"Related", "System.LinkTypes.Related"},
+	} {
+		types = append(types, map[string]any{"name": pair[0], "referenceName": pair[1], "attributes": map[string]any{"enabled": true, "usage": "workItemLink"}})
+	}
+	return types
+}
+
+// extensionCreate answers az boards work-item create. Like the extension
+// (work_item.py), it writes only /fields operations, so every multiline
+// field keeps the HTML default format.
+func (b *Boards) extensionCreate(ctx context.Context, call ExtensionCall) (any, error) {
+	if call.Flag("--project") != Project {
+		return nil, fmt.Errorf("ERROR: create in project %q, want the scripted project", call.Flag("--project"))
+	}
+	fields := map[string]any{"System.Title": call.Flag("--title")}
+	if _, ok := call.Flags["--description"]; ok {
+		if len(call.Flags["--description"]) != 1 {
+			b.t.Errorf("--description has %d values, want one", len(call.Flags["--description"]))
+		}
+		fields["System.Description"] = call.Flag("--description")
+	}
+	for _, pair := range call.Flags["--fields"] {
+		name, value, ok := strings.Cut(pair, "=")
+		if !ok {
+			return nil, errors.New(`ERROR: The --fields argument should consist of space separated "field=value" pairs.`)
+		}
+		fields[name] = value
+	}
+	title := call.Flag("--title")
+	fault, faulted := b.faults["create:"+title]
+	if faulted {
+		delete(b.faults, "create:"+title)
+		if !fault.afterWrite {
+			return nil, errors.New(fault.message)
+		}
+	}
+	b.add(call.Flag("--type"), fields, nil)
+	if faulted {
+		return nil, errors.New(fault.message)
+	}
+	if b.held["create:"+title] {
+		delete(b.held, "create:"+title)
+		b.mu.Unlock()
+		<-ctx.Done()
+		b.mu.Lock()
+		return nil, errors.Join(errors.New("az boards work-item create: the request was interrupted"), ctx.Err())
+	}
+	return b.itemJSON(b.items[len(b.items)-1]), nil
+}
+
+// wiqlProject matches the explicit project condition of an extension WIQL.
+var wiqlProject = regexp.MustCompile(`\[System\.TeamProject\] = '([^']*)'`)
+
+// extensionQuery answers az boards query: every item whose tags contain the
+// text of every CONTAINS condition, as Azure DevOps matches substrings.
+func (b *Boards) extensionQuery(call ExtensionCall) (any, error) {
+	if fault, ok := b.faults["wiql"]; ok {
+		delete(b.faults, "wiql")
+		return nil, errors.New(fault.message)
+	}
+	wiql := call.Flag("--wiql")
+	if match := wiqlProject.FindStringSubmatch(wiql); match == nil || match[1] != Project || call.Flag("--project") != Project {
+		b.t.Errorf("wiql %q does not name the scripted project explicitly", wiql)
+	}
+	conditions := wiqlTag.FindAllStringSubmatch(wiql, -1)
+	found := []map[string]any{}
+	for _, item := range b.items {
+		matches := len(conditions) > 0
+		for _, condition := range conditions {
+			matches = matches && slices.ContainsFunc(item.Tags(), func(tag string) bool {
+				return strings.Contains(strings.ToLower(tag), strings.ToLower(condition[1]))
+			})
+		}
+		if matches {
+			found = append(found, map[string]any{"id": item.ID, "fields": map[string]any{"System.Id": item.ID}})
+		}
+	}
+	return found, nil
+}
+
+// extensionBatch answers the workItemsBatch read of the scripted project.
+func (b *Boards) extensionBatch(call ExtensionCall) (any, error) {
+	var body struct {
+		IDs []int `json:"ids"`
+	}
+	if err := json.Unmarshal([]byte(call.Body), &body); err != nil {
+		b.t.Errorf("decode workItemsBatch body %q: %v", call.Body, err)
+	}
+	values := []map[string]any{}
+	for _, id := range body.IDs {
+		for _, item := range b.items {
+			if item.ID == id {
+				values = append(values, b.itemJSON(item))
+			}
+		}
+	}
+	return map[string]any{"count": len(values), "value": values}, nil
+}
+
+// itemJSON renders one item as Azure DevOps returns it: its fields with the
+// project and type, and the multiline formats that differ from HTML.
+func (b *Boards) itemJSON(item Item) map[string]any {
+	fields := map[string]any{"System.TeamProject": Project, "System.WorkItemType": item.Type}
+	for name, value := range item.Fields {
+		fields[name] = value
+	}
+	response := map[string]any{"id": item.ID, "fields": fields}
+	if len(item.Formats) > 0 {
+		response["multilineFieldsFormat"] = item.Formats
+	}
+	return response
+}
+
+// relationURL is the API URL of a work item that a relation names.
+func relationURL(id int) string {
+	return "https://dev.azure.com/" + Organization + "/_apis/wit/workItems/" + strconv.Itoa(id)
+}
+
+// extensionLink answers az boards work-item relation add: it maps the
+// friendly relation name to its reference name, adds the relation on --id,
+// and returns the item with friendly relation names (relations.py).
+func (b *Boards) extensionLink(call ExtensionCall) (any, error) {
+	id, _ := strconv.Atoi(call.Flag("--id"))
+	target, _ := strconv.Atoi(call.Flag("--target-id"))
+	reference := ""
+	for _, value := range relationTypes() {
+		if strings.EqualFold(value["name"].(string), call.Flag("--relation-type")) {
+			reference = value["referenceName"].(string)
+		}
+	}
+	if reference == "" {
+		return nil, errors.New(`ERROR: --relation-type is not valid. Use "az boards work-item relation list-type" command to list possible relation types in your project`)
+	}
+	if !slices.ContainsFunc(b.items, func(item Item) bool { return item.ID == target }) {
+		return nil, errors.New("ERROR: Id(s) supplied in --target-id is not valid")
+	}
+	fault, faulted := b.faults["link:"+strconv.Itoa(id)]
+	if faulted {
+		delete(b.faults, "link:"+strconv.Itoa(id))
+		if !fault.afterWrite {
+			return nil, errors.New(fault.message)
+		}
+	}
+	for index := range b.items {
+		if b.items[index].ID == id {
+			b.items[index].Relations = append(b.items[index].Relations, Relation{Rel: reference, URL: relationURL(target)})
+			if faulted {
+				return nil, errors.New(fault.message)
+			}
+			return b.friendlyItem(id)
+		}
+	}
+	return nil, errors.New("ERROR: TF401232: Work item " + strconv.Itoa(id) + " does not exist")
+}
+
+// friendlyItem answers az boards work-item relation show: the item with
+// each relation's reference name replaced by its friendly name.
+func (b *Boards) friendlyItem(id int) (any, error) {
+	for _, item := range b.items {
+		if item.ID != id {
+			continue
+		}
+		relations := []Relation{}
+		for _, relation := range item.Relations {
+			for _, value := range relationTypes() {
+				if value["referenceName"] == relation.Rel {
+					relation.Rel = value["name"].(string)
+				}
+			}
+			relations = append(relations, relation)
+		}
+		response := b.itemJSON(item)
+		response["relations"] = relations
+		return response, nil
+	}
+	return nil, errors.New("ERROR: TF401232: Work item " + strconv.Itoa(id) + " does not exist")
+}
+
+// ExtensionWrites returns every recorded extension command that can change
+// a work item: creates, relation adds, and updates.
+func (b *Boards) ExtensionWrites() []ExtensionCall {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	writes := []ExtensionCall{}
+	for _, call := range b.extensionCalls {
+		switch call.Route() {
+		case "boards work-item create", "boards work-item relation add", "boards work-item update", "devops invoke PATCH wit/workItems", "devops invoke POST wit/workItems":
+			writes = append(writes, call)
+		}
+	}
+	return writes
 }
 
 // RepositoryResponse answers az repos show for a scripted repository of the
