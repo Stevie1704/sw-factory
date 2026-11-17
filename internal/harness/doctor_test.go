@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -65,6 +66,66 @@ func TestStartupChecksProbeBothHarnessesAndConfiguredCredentials(t *testing.T) {
 	}
 }
 
+// TestStartupChecksProbeOnlyTheHarnessesThePolicyCanSelect verifies a
+// repository whose roles select only Codex starts on a single-harness worker
+// image: the executable, skill, and credential probes never ask the image for
+// Claude or Copilot, so their absence cannot block the run.
+func TestStartupChecksProbeOnlyTheHarnessesThePolicyCanSelect(t *testing.T) {
+	codexPath := filepath.Join(t.TempDir(), "auth.json")
+	claudePath := filepath.Join(t.TempDir(), ".credentials.json")
+	for _, path := range []string{codexPath, claudePath} {
+		if err := os.WriteFile(path, []byte("credential contents"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checker := &harnessDoctorChecker{absent: []string{harness.NameClaude, harness.NameCopilot}}
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
+			"test": config.HarnessCodex, "implementation": config.HarnessCodex,
+		}},
+		Authentication:        config.AuthenticationConfig{CodexAuthPath: codexPath, ClaudeAuthPath: claudePath},
+		Image:                 probedImage,
+		Checker:               checker,
+		AuthenticationChecker: checker,
+		SkillChecker:          checker,
+		SkillEvidencePath:     writeSkillEvidenceForHarnesses(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills(), harness.NameCodex),
+	})...)
+	if !report.Ready() || len(report.Warnings()) != 0 {
+		t.Fatalf("harness report = %#v, want ready without warnings on a Codex-only image", report)
+	}
+	if want := []string{harness.NameCodex}; !slices.Equal(checker.probed, want) {
+		t.Fatalf("probed harnesses = %v, want only %v", checker.probed, want)
+	}
+}
+
+// TestStartupChecksNameTheVariantForAHarnessMissingFromTheImage verifies a
+// policy that selects a harness the pinned image does not include fails with
+// an action that names the worker base image variants.
+func TestStartupChecksNameTheVariantForAHarnessMissingFromTheImage(t *testing.T) {
+	checker := &harnessDoctorChecker{absent: []string{harness.NameClaude}}
+	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
+		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
+			"test": config.HarnessCodex, "implementation": config.HarnessClaude,
+		}},
+		Image:             probedImage,
+		Checker:           checker,
+		SkillChecker:      checker,
+		SkillEvidencePath: writeSkillEvidence(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills()),
+	})...)
+	var failure *doctor.Result
+	for index, result := range report.Results {
+		if result.Code == "harness.executable.unusable" {
+			failure = &report.Results[index]
+		}
+	}
+	if report.Ready() || failure == nil {
+		t.Fatalf("harness report = %#v, want the missing Claude executable to block", report)
+	}
+	if !strings.Contains(failure.Action, "sw-factory-base-claude") || !strings.Contains(failure.Action, "combined") {
+		t.Fatalf("action = %q, want the Claude variant and the combined image named", failure.Action)
+	}
+}
+
 // TestStartupChecksKeepMissingOptionalCredentialsNonBlocking verifies a host
 // may defer authentication to an interactive worker session.
 func TestStartupChecksKeepMissingOptionalCredentialsNonBlocking(t *testing.T) {
@@ -75,31 +136,8 @@ func TestStartupChecksKeepMissingOptionalCredentialsNonBlocking(t *testing.T) {
 		SkillChecker:      &harnessDoctorChecker{},
 		SkillEvidencePath: writeSkillEvidence(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills()),
 	})...)
-	if !report.Ready() || len(report.Warnings()) != 2 {
-		t.Fatalf("harness report = %#v, want two non-blocking auth warnings", report)
-	}
-}
-
-// TestStartupChecksMakeUnselectedHarnessSmokeAdvisory verifies a repository
-// only needs smoke evidence for the harnesses its policy can select.
-func TestStartupChecksMakeUnselectedHarnessSmokeAdvisory(t *testing.T) {
-	report := doctor.Run(context.Background(), harness.StartupChecks(harness.StartupRequest{
-		Policy: &config.RepositoryConfig{RoleHarnessDefaults: map[string]config.Harness{
-			"implementation": config.HarnessCodex,
-		}},
-		Image:             probedImage,
-		Checker:           &harnessDoctorChecker{},
-		SkillChecker:      &harnessDoctorChecker{},
-		SkillEvidencePath: writeSkillEvidenceForHarnesses(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills(), harness.NameCodex),
-	})...)
-	if !report.Ready() {
-		t.Fatalf("harness report = %#v, want unselected Claude smoke to be advisory", report)
-	}
-	if got := skillContractFailures(report); got != 0 {
-		t.Fatalf("harness skill contract failures = %d, want none", got)
-	}
-	if got := skillContractWarnings(report); got != 1 {
-		t.Fatalf("harness skill contract warnings = %d, want one for unselected Claude", got)
+	if !report.Ready() || len(report.Warnings()) != 1 {
+		t.Fatalf("harness report = %#v, want one non-blocking Codex auth warning", report)
 	}
 }
 
@@ -218,6 +256,8 @@ func TestStartupChecksDoNotRenderWorkerAuthenticationErrors(t *testing.T) {
 type harnessDoctorChecker struct {
 	err           error
 	calls         int
+	absent        []string
+	probed        []string
 	authCalls     int
 	authError     error
 	skillCalls    int
@@ -228,14 +268,21 @@ type harnessDoctorChecker struct {
 }
 
 // CheckHarness implements the worker harness diagnosis seam.
-func (c *harnessDoctorChecker) CheckHarness(context.Context, worker.HarnessCheckRequest) error {
+func (c *harnessDoctorChecker) CheckHarness(_ context.Context, request worker.HarnessCheckRequest) error {
 	c.calls++
+	c.probed = append(c.probed, request.Name)
+	if slices.Contains(c.absent, request.Name) {
+		return errors.New("harness executable is not usable in the worker image")
+	}
 	return c.err
 }
 
 // CheckHarnessAuthentication implements the worker credential diagnosis seam.
-func (c *harnessDoctorChecker) CheckHarnessAuthentication(context.Context, worker.HarnessAuthenticationCheckRequest) error {
+func (c *harnessDoctorChecker) CheckHarnessAuthentication(_ context.Context, request worker.HarnessAuthenticationCheckRequest) error {
 	c.authCalls++
+	if slices.Contains(c.absent, request.Name) {
+		return errors.New("harness authentication is not usable in the worker image")
+	}
 	return c.authError
 }
 
@@ -248,6 +295,9 @@ func (c *harnessDoctorChecker) CheckHeadless(context.Context, worker.HeadlessChe
 // CheckSkillContract implements the worker skill contract diagnosis seam.
 func (c *harnessDoctorChecker) CheckSkillContract(_ context.Context, request worker.SkillContractRequest) (worker.SkillContract, error) {
 	c.skillCalls++
+	if slices.Contains(c.absent, request.Harness) {
+		return worker.SkillContract{}, errors.New("the worker image does not satisfy the harness skill contract")
+	}
 	if c.skillError != nil {
 		return worker.SkillContract{}, c.skillError
 	}
@@ -304,7 +354,7 @@ func writeSkillEvidenceForHarnesses(t *testing.T, digest, version string, skills
 }
 
 // TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill verifies a role
-// cannot start against an image whose shipped harness omits a role-mandated
+// cannot start against an image whose selected harness omits a role-mandated
 // skill from its model-visible catalog.
 func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 	secret := "probe-output-secret"
@@ -316,8 +366,8 @@ func TestStartupChecksRefuseAWorkerImageThatHidesAMandatorySkill(t *testing.T) {
 		SkillChecker:      checker,
 		SkillEvidencePath: writeSkillEvidence(t, probedImage.Digest, probedHarnessVersion, harness.MandatorySkills()),
 	})...)
-	if got := skillContractFailures(report); got != 2 {
-		t.Fatalf("harness skill contract failures = %d, want one per shipped harness", got)
+	if got := skillContractFailures(report); got != 1 {
+		t.Fatalf("harness skill contract failures = %d, want one for the selected harness", got)
 	}
 	for _, result := range report.Results {
 		if strings.Contains(result.Problem+result.Action, secret) {

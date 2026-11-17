@@ -32,7 +32,7 @@ func assertWorkerUpgradePause(t *testing.T, paused store.Run, harnessName string
 	if paused.Status != store.StatusWaitingForHuman || !strings.HasPrefix(paused.LifecycleReason, LifecycleReasonHarnessMissing) || !strings.Contains(paused.LifecycleReason, "("+harnessName+")") {
 		t.Fatalf("paused run = status %q reason %q, want a human pause that names the missing harness", paused.Status, paused.LifecycleReason)
 	}
-	for _, wanted := range []string{"scripts/build-worker.sh", "worker_build.digest"} {
+	for _, wanted := range []string{"scripts/build-worker.sh", "worker_build.digest", "includes the selected harness"} {
 		if !strings.Contains(paused.LifecycleReason, wanted) {
 			t.Fatalf("pause reason = %q, want the upgrade instruction %q", paused.LifecycleReason, wanted)
 		}

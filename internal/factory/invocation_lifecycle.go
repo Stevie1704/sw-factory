@@ -1769,9 +1769,11 @@ func (l *invocationLifecycle) pauseForHarnessMissing(ctx context.Context, regist
 }
 
 // workerUpgradeInstruction is the operator action after a launch on a worker
-// image that has no executable for the selected harness. A Run keeps the
-// image it froze at claim, so only Runs claimed after the repin can use it.
-const workerUpgradeInstruction = "rebuild the worker with scripts/build-worker.sh and re-pin worker_build.digest in factory.yaml; this Run keeps its frozen image, so cancel it with /factory cancel"
+// image that has no executable for the selected harness: an image built
+// before the factory supported it, or one built from a single-harness base
+// variant of another harness. A Run keeps the image it froze at claim, so only
+// Runs claimed after the repin can use it.
+const workerUpgradeInstruction = "rebuild the worker with scripts/build-worker.sh from a worker base image that includes the selected harness (its single-harness variant or the combined image) and re-pin worker_build.digest in factory.yaml; this Run keeps its frozen image, so cancel it with /factory cancel"
 
 // pauseForHarnessExit pauses after an unexpected harness exit. A memory-limit
 // kill and a harness missing from the worker image name their cause; every
