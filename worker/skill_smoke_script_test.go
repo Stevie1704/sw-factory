@@ -12,6 +12,10 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
+// quoteEverySkill is a stub harness reply that quotes the first instruction
+// line of every worker skill, which the smoke accepts as skill evidence.
+const quoteEverySkill = `awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md`
+
 // TestSkillSmokeReportsHarnessFailureSeparately verifies that a harness which
 // fails before it answers, such as one with an expired credential, is
 // reported with its own diagnosis instead of as a skill that did not load,
@@ -43,7 +47,7 @@ func TestSkillSmokeRecordsAHarnessThatQuotesEachSkill(t *testing.T) {
 	smoke := runSkillSmoke(t, `
 case "$*" in
   *--version*) echo "2.1.232 (Claude Code)" ;;
-  *) cat > /dev/null; echo "Smoke reply"; echo "harness warning" >&2; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; echo "Smoke reply"; echo "harness warning" >&2; `+quoteEverySkill+` ;;
 esac
 `)
 	if smoke.err != nil {
@@ -76,7 +80,7 @@ const answeringHarness = `
 case "$*" in
   *--version*) echo "2.1.232 (Claude Code)" ;;
   *"\` + "`" + `${FAILING_SKILL:-none}\` + "`" + `"*) cat > /dev/null; echo "I could not find a skill with that name." ;;
-  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; ` + quoteEverySkill + ` ;;
 esac
 `
 
@@ -264,7 +268,7 @@ const answeringCopilot = `
 printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
 case "$*" in
   *--version*) printf 'GitHub Copilot CLI 1.0.98.\nRun '"'"'copilot update'"'"' to check for updates.\n' ;;
-  *) cat >> "$SMOKE_STDIN_LOG"; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat >> "$SMOKE_STDIN_LOG"; ` + quoteEverySkill + ` ;;
 esac
 `
 
@@ -461,7 +465,7 @@ func TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall(t *testing.T
 printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
 case "$*" in
   *--version*) ` + version + ` ;;
-  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; ` + quoteEverySkill + ` ;;
 esac
 `
 			smoke := runCopilotSmoke(t, body)
@@ -490,7 +494,7 @@ func TestSkillSmokeNeverRecordsAHarnessWithoutAVersion(t *testing.T) {
 	smoke := runSkillSmoke(t, `
 case "$*" in
   *--version*) exit 127 ;;
-  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; `+quoteEverySkill+` ;;
 esac
 `)
 	if smoke.err == nil {

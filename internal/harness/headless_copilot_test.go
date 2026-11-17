@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -313,6 +314,11 @@ func containsCopilotArgument(command []string, argument string) bool {
 // one invocation, not to the isolation contract a smoke must share.
 var copilotPerInvocationOptions = []string{"--prompt", "--output-format", "--model", "--reasoning-effort", "--session-id"}
 
+// copilotSmokeOnlyOptions are the options the skill smoke may add: plain-text
+// output, so a reply can be matched against the skill sentinel, and the
+// prompt option whose value the script appends at run time.
+var copilotSmokeOnlyOptions = []string{"--silent", "--prompt"}
+
 // TestCopilotSkillSmokeUsesTheProductionIsolationOptions verifies that the
 // live skill smoke asks Copilot with the launcher and every isolation option
 // of a production launch, and adds only plain-text output, so smoke evidence
@@ -330,15 +336,15 @@ func TestCopilotSkillSmokeUsesTheProductionIsolationOptions(t *testing.T) {
 	}
 	for _, option := range production[1:] {
 		name, _, _ := strings.Cut(option, "=")
-		if containsCopilotArgument(copilotPerInvocationOptions, name) {
+		if slices.Contains(copilotPerInvocationOptions, name) {
 			continue
 		}
-		if !containsCopilotArgument(smoke, option) {
+		if !slices.Contains(smoke, option) {
 			t.Errorf("smoke invocation %q lacks the production option %q", smoke, option)
 		}
 	}
 	for _, option := range smoke[1:] {
-		if option != "--silent" && option != "--prompt" && !containsCopilotArgument(production, option) {
+		if !slices.Contains(copilotSmokeOnlyOptions, option) && !slices.Contains(production, option) {
 			t.Errorf("smoke invocation passes %q, which a production launch does not", option)
 		}
 	}

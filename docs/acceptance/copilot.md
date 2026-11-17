@@ -28,7 +28,7 @@ and the operator decides RB-8.
 | --- | --- |
 | Pinned CLI | `@github/copilot@1.0.98` (`GitHub Copilot CLI 1.0.98.`), npm integrity in the spike record |
 | Pinned worker image | `factory.yaml` pins `sha256:e69ce3cf…`, the Go worker on the combined base `sw-factory-base` ([worker image size record](worker-image-variants.md)). The combined base contains the pinned CLI. This repository selects only Codex, so no Copilot run uses this image. |
-| Skill smoke | `worker/skill-smoke.json` has no `copilot` record. No live smoke ran, so none was written. `internal/acceptance:TestCommittedCopilotSmokeEvidenceRequiresARecordedLiveRun` refuses a committed `copilot` record without a passed live run in [the results file](copilot-results.json), or for another CLI release. |
+| Skill smoke | `worker/skill-smoke.json` has no `copilot` record. No live smoke ran, so none was written. `internal/acceptance:TestCommittedCopilotSmokeEvidenceRequiresARecordedLiveRun` refuses a committed `copilot` record unless [the results file](copilot-results.json) records a passed live run for the same worker digest, and it refuses a record for another CLI release. |
 | Deterministic suite | `make check` passes without network access and without a Copilot credential. |
 
 Consequence for operators: until an operator records a Copilot smoke for a

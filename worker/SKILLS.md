@@ -162,8 +162,7 @@ startup diagnosis checks only its `worker skill contract`.
 There is no `copilot` record, and none may be written without a live run.
 `make check` refuses a committed `copilot` record unless
 [the Copilot results](../docs/acceptance/copilot-results.json) record a passed
-live run. The
-smoke can drive Copilot, but no dedicated Copilot credential was available,
+live run for that image digest. The smoke can drive Copilot, but no dedicated Copilot credential was available,
 so no live call has happened (release blocker RB-7 in
 [Copilot CLI release evidence](../docs/acceptance/copilot.md)). A repository
 that can select Copilot therefore fails `factory doctor` with

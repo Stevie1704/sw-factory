@@ -89,7 +89,9 @@ worker_credential() {
 # approval gates, exactly as a run does. Copilot runs through the
 # factory-copilot launcher with the isolation options of the production
 # adapter (internal/harness/headless_copilot.go), but answers in plain text so
-# the reply can be matched against the skill sentinel.
+# the reply can be matched against the skill sentinel. Keep each command on
+# one `name) echo "..." ;;` line: TestCopilotSkillSmokeUsesTheProductionIsolationOptions
+# reads the copilot line and compares it with the production launch.
 harness_invocation() {
   case "$1" in
     codex) echo "codex exec --skip-git-repo-check -s danger-full-access -c project_doc_max_bytes=0" ;;
@@ -104,11 +106,11 @@ harness_invocation() {
 # equals worker.CopilotVersionLine, the line startup diagnosis requires.
 COPILOT_PROVED_VERSION="GitHub Copilot CLI 1.0.98."
 
-# unproved_version prints the refusal for a harness version that cannot key
-# a record, and fails. An empty version means the image has no such harness.
-# A Copilot release other than the proved one is refused because startup
-# diagnosis rejects that image, so its smoke would be paid for nothing.
-unproved_version() {
+# refuse_unproved_version prints the refusal for a harness version that cannot
+# key a record, and fails. An empty version means the image has no such
+# harness. A Copilot release other than the proved one is refused because
+# startup diagnosis rejects that image, so its smoke would be paid for nothing.
+refuse_unproved_version() {
   if [ "$1" = copilot ] && [ "$2" != "$COPILOT_PROVED_VERSION" ]; then
     echo "$WORKER_REFERENCE has Copilot CLI \"${2:-<none>}\", not the proved \"$COPILOT_PROVED_VERSION\"; skipping the copilot smoke. Rebuild the worker image from sw-factory-base-copilot or the combined sw-factory-base with the current scripts/build-worker.sh, and record the new digest."
     return 1
@@ -216,7 +218,7 @@ for harness_name in $HARNESSES; do
     --cap-drop ALL --security-opt no-new-privileges --network none \
     --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version" \
     | head -n 1 | tr -cd '\040-\176' | cut -c1-120)"
-  if ! version_refusal="$(unproved_version "$harness_name" "$version")"; then
+  if ! version_refusal="$(refuse_unproved_version "$harness_name" "$version")"; then
     echo "$version_refusal" >&2
     unrecorded="$unrecorded $harness_name"
     continue
