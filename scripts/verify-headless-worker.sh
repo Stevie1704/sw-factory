@@ -1,11 +1,12 @@
 #!/bin/sh
 
 # Exercise the detached worker protocol through a real Docker container for
-# every production harness adapter. The fake harnesses are deterministic and
-# offline, so this verifies the worker boundary without spending a harness
-# request or requiring credentials. From a Factory source checkout, it then runs
-# the real-worker Go checks for command lifetime and resource limits against
-# the same image.
+# every production harness adapter the image includes. The fake harnesses
+# are deterministic and offline, so this verifies the worker boundary without
+# spending a harness request or requiring credentials. Then it runs each real
+# pinned harness executable offline. From a Factory source checkout, it then
+# runs the real-worker Go checks for command lifetime and resource limits
+# against the same image.
 set -eu
 
 DOCKER="${DOCKER:-docker}"
@@ -83,7 +84,6 @@ while [ "$#" -gt 0 ]; do
 done
 
 test -s /home/factory/.codex/skills/implement/SKILL.md
-test -s /home/factory/.claude/skills/implement/SKILL.md
 printf '%s\n' "loaded" > /results/headless-verification-skill
 if [ "$resume" -eq 1 ]; then
   printf '%s' "$prompt" > /results/headless-verification-resume-prompt
@@ -305,18 +305,32 @@ printf '%s\n' "$copilot_sentinel" > "$copilot_token"
 # factory-managed 0444 copy.
 chmod 0444 "$copilot_token"
 
-# An image built before the Copilot harness has no launcher. It stays
-# verifiable for Codex and Claude, and the Copilot checks say they did not run.
-copilot_supported=no
-if "$DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh \
-    "$WORKER_REFERENCE" -c 'test -x /usr/local/bin/factory-copilot' >/dev/null 2>&1; then
-  copilot_supported=yes
+# The harnesses label of a worker base variant names the harnesses its images
+# include, and a repository worker image inherits it. An image built before
+# the variants has no label: it includes Codex and Claude, and Copilot when it
+# has the launcher factory-copilot.
+harnesses="$("$DOCKER" image inspect --format '{{index .Config.Labels "io.github.stevie1704.sw-factory.harnesses"}}' "$WORKER_REFERENCE")"
+if [ -z "$harnesses" ] || [ "$harnesses" = "<no value>" ]; then
+  harnesses="claude codex"
+  if "$DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh \
+      "$WORKER_REFERENCE" -c 'test -x /usr/local/bin/factory-copilot' >/dev/null 2>&1; then
+    harnesses="claude codex copilot"
+  fi
 fi
+echo "Verifying the harnesses $harnesses of $WORKER_REFERENCE"
+
+# includes reports whether the image includes one harness.
+includes() {
+  case " $harnesses " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 set -- --mount "type=bind,src=$fake_codex,dst=/tmp/factory-verification-codex,readonly" \
   --mount "type=bind,src=$fake_claude,dst=/tmp/factory-verification-claude,readonly" \
   --mount "type=bind,src=$results_directory,dst=/results"
-if [ "$copilot_supported" = yes ]; then
+if includes copilot; then
   # The fake replaces only the network-facing CLI; the launcher under test is
   # the image's own factory-copilot.
   set -- "$@" \
@@ -504,6 +518,33 @@ verify_harness() {
   echo "  native resume verified"
 }
 
+# assert_codex_session_contract runs the real pinned Codex binary in a
+# disposable offline container with the exact options the adapter builds. The
+# fake harness above only proves the worker boundary; this proves the native
+# executable itself starts a native thread in a Git worktree at /work and
+# resumes that same thread. Both events land before the request that fails
+# without network or credential, so the check needs neither.
+assert_codex_session_contract() {
+  echo "Verifying the pinned Codex session contract"
+  probe='set -eu
+cd /work
+git init -q
+codex_thread() {
+  timeout 10 codex exec --json -s danger-full-access -c project_doc_max_bytes=0 "$@" </dev/null 2>/dev/null \
+    | jq -r "select(.type == \"thread.started\") | .thread_id" | head -n 1
+}
+started="$(codex_thread noop)"
+test -n "$started"
+resumed="$(codex_thread resume "$started" noop)"
+test "$resumed" = "$started"'
+  if ! "$DOCKER" run --rm --pull=never --cap-drop ALL --security-opt no-new-privileges --network none \
+      --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$probe"; then
+    echo "the pinned Codex binary did not start and resume a native thread" >&2
+    exit 1
+  fi
+  echo "  native thread start and resume verified"
+}
+
 # assert_claude_session_contract runs the real pinned Claude Code binary in the
 # offline container with the exact options the adapter builds. Asserting that
 # skill files exist would only prove the image copied them, and asserting that
@@ -577,7 +618,8 @@ factory-copilot --prompt=noop --output-format=json --allow-all-tools --no-ask-us
   >/tmp/copilot.stdout 2>/tmp/copilot.stderr || status=$?
 test "$status" -eq 1
 test ! -s /tmp/copilot.stdout
-test "$(head -n 1 /tmp/copilot.stderr)" = "Error: Authentication token found but could not be validated."
+# A slow first start reports its package extraction time before the error.
+grep -qx "Error: Authentication token found but could not be validated." /tmp/copilot.stderr
 if grep -q "'"$copilot_sentinel"'" /tmp/copilot.stderr; then exit 1; fi
 test ! -e /home/factory/.copilot/mcp-config.json
 cmp -s /usr/local/share/factory-copilot/settings.json /home/factory/.copilot/settings.json
@@ -596,15 +638,26 @@ done'
   echo "  credential refusal, token projection, managed settings, pinned release, and curated skills verified"
 }
 
-verify_harness codex headless-verification-session '"type":"thread.started"'
-verify_harness claude 8f14e45f-ceea-467a-9575-1b0a4b2a4bd9 '"subtype":"init"'
-assert_claude_session_contract
-if [ "$copilot_supported" = yes ]; then
-  verify_harness copilot 3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53 '"sessionId":"3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53"'
-  assert_copilot_launcher_contract
-else
-  echo "Copilot checks did not run: $WORKER_REFERENCE predates the Copilot harness (no factory-copilot)"
-fi
+for harness in codex claude copilot; do
+  if ! includes "$harness"; then
+    echo "The $harness checks did not run: $WORKER_REFERENCE does not include $harness"
+    continue
+  fi
+  case "$harness" in
+    codex)
+      verify_harness codex headless-verification-session '"type":"thread.started"'
+      assert_codex_session_contract
+      ;;
+    claude)
+      verify_harness claude 8f14e45f-ceea-467a-9575-1b0a4b2a4bd9 '"subtype":"init"'
+      assert_claude_session_contract
+      ;;
+    copilot)
+      verify_harness copilot 3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53 '"sessionId":"3b9e1c7a-5f2d-4e8b-a6c0-9d4f2e1b7a53"'
+      assert_copilot_launcher_contract
+      ;;
+  esac
+done
 
 # The resources a release exports carry no Go source. The release automation
 # already ran these checks against the base image the release names.

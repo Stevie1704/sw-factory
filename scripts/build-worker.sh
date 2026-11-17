@@ -2,6 +2,16 @@
 
 # Build and locally verify the versioned worker image chain, then print the
 # immutable digest snippet that belongs in the repository factory.yaml.
+#
+# The chain is four worker base image variants from worker/base.Dockerfile,
+# which share the minimal runtime layers, and the repository Go project image
+# from worker/Dockerfile on the combined variant:
+#
+#   WORKER_BASE_IMAGE                    combined: Codex, Claude Code, Copilot
+#   <WORKER_BASE_IMAGE name>-codex:<tag>    Codex only
+#   <WORKER_BASE_IMAGE name>-claude:<tag>   Claude Code only
+#   <WORKER_BASE_IMAGE name>-copilot:<tag>  GitHub Copilot CLI only
+#   WORKER_IMAGE:WORKER_TAG              combined variant plus skills and Go
 set -eu
 
 DOCKER="${DOCKER:-docker}"
@@ -47,28 +57,134 @@ if [ -n "${COPILOT_VERSION:-}" ] && [ "$COPILOT_VERSION" != "$proved_copilot" ];
 fi
 COPILOT_VERSION="$proved_copilot"
 
+# The variant references derive from the combined one, so it must carry a tag.
+case "${WORKER_BASE_IMAGE##*/}" in
+  *:*) ;;
+  *)
+    echo "WORKER_BASE_IMAGE=$WORKER_BASE_IMAGE must name a tag, such as ghcr.io/stevie1704/sw-factory-base:v1" >&2
+    exit 2
+    ;;
+esac
+
 platform_args=""
 if [ -n "$WORKER_PLATFORM" ]; then
   platform_args="--platform=$WORKER_PLATFORM"
 fi
 
-echo "Building factory base image $WORKER_BASE_IMAGE with Go $GO_VERSION"
-# --pull refreshes the moving Go and Node base tags, so a rebuild picks up
-# their published security updates instead of a stale local copy.
-# shellcheck disable=SC2086
-"$DOCKER" build $platform_args --pull \
-  --build-arg "GO_VERSION=$GO_VERSION" \
-  --build-arg "NPM_VERSION=$NPM_VERSION" \
-  --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION" \
-  --build-arg "CODEX_VERSION=$CODEX_VERSION" \
-  --build-arg "COPILOT_VERSION=$COPILOT_VERSION" \
-  --build-arg "FACTORY_BASE_VERSION=1" \
-  --build-arg "FACTORY_RELEASE=$FACTORY_RELEASE" \
-  --file worker/base.Dockerfile \
-  --tag "$WORKER_BASE_IMAGE" \
-  .
+# base_reference prints the image reference of one worker base variant: the
+# combined image for all, and IMAGE-HARNESS:TAG for a single harness.
+base_reference() {
+  if [ "$1" = all ]; then
+    printf '%s\n' "$WORKER_BASE_IMAGE"
+  else
+    printf '%s-%s:%s\n' "${WORKER_BASE_IMAGE%:*}" "$1" "${WORKER_BASE_IMAGE##*:}"
+  fi
+}
 
-echo "Building repository worker image $WORKER_REFERENCE"
+# variant_harnesses prints the harnesses one variant includes, as its label
+# names them.
+variant_harnesses() {
+  if [ "$1" = all ]; then
+    echo "claude codex copilot"
+  else
+    echo "$1"
+  fi
+}
+
+VARIANTS="all codex claude copilot"
+# --pull refreshes the moving Go, Node, and Debian base tags on the first
+# build, so a rebuild picks up their published security updates instead of a
+# stale local copy. The later variants reuse that build's stages.
+pull=--pull
+for variant in $VARIANTS; do
+  reference="$(base_reference "$variant")"
+  echo "Building factory base image $reference (harnesses: $(variant_harnesses "$variant")) with Go $GO_VERSION"
+  # shellcheck disable=SC2086
+  "$DOCKER" build $platform_args $pull \
+    --build-arg "GO_VERSION=$GO_VERSION" \
+    --build-arg "NPM_VERSION=$NPM_VERSION" \
+    --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION" \
+    --build-arg "CODEX_VERSION=$CODEX_VERSION" \
+    --build-arg "COPILOT_VERSION=$COPILOT_VERSION" \
+    --build-arg "FACTORY_BASE_VERSION=1" \
+    --build-arg "FACTORY_RELEASE=$FACTORY_RELEASE" \
+    --file worker/base.Dockerfile \
+    --target "harness-$variant" \
+    --tag "$reference" \
+    .
+  pull=--pull=false
+done
+
+# Each variant must carry exactly its harnesses at their pinned releases, the
+# release label, the worker contract, and no Node, npm, Yarn, Go, or gh
+# installation. The checks run as the worker user without network.
+for variant in $VARIANTS; do
+  reference="$(base_reference "$variant")"
+  harnesses="$(variant_harnesses "$variant")"
+  echo "Verifying factory base image $reference"
+  labels="$("$DOCKER" image inspect "$reference" --format '{{index .Config.Labels "io.github.stevie1704.sw-factory.harnesses"}}|{{index .Config.Labels "io.github.stevie1704.sw-factory.release"}}')"
+  if [ "$labels" != "$harnesses|$FACTORY_RELEASE" ]; then
+    echo "$reference carries the labels '$labels', want harnesses '$harnesses' and release '$FACTORY_RELEASE'" >&2
+    exit 1
+  fi
+  "$DOCKER" run --rm --pull=never --network none \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --env "HARNESSES=$harnesses" \
+    --env "CLAUDE_LINE=$CLAUDE_VERSION (Claude Code)" \
+    --env "CODEX_LINE=codex-cli $CODEX_VERSION" \
+    --env "COPILOT_LINE=GitHub Copilot CLI $COPILOT_VERSION." \
+    "$reference" /bin/sh -c '
+    set -eu
+    test "$(id -u)" = 10001
+    test "$HOME" = /home/factory
+    test "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
+    test ! -w /run/factory-auth
+    test -x /usr/local/bin/factory-report
+    test -x /usr/local/bin/factory-worker-headless
+    command -v git >/dev/null
+    for absent in node nodejs npm npx yarn yarnpkg corepack go gofmt gh; do
+      if command -v "$absent" >/dev/null; then
+        echo "the base image carries $absent" >&2
+        exit 1
+      fi
+    done
+    test ! -e /usr/local/lib/node_modules && test ! -e /usr/local/go
+    if ls -d /opt/yarn-* >/dev/null 2>&1; then
+      echo "the base image carries Yarn" >&2
+      exit 1
+    fi
+    installed=""
+    for harness in claude codex copilot; do
+      case " $HARNESSES " in
+        *" $harness "*)
+          case "$harness" in
+            claude) test "$(claude --version | head -n 1)" = "$CLAUDE_LINE"; installed="$installed claude-code" ;;
+            codex) test "$(codex --version | head -n 1)" = "$CODEX_LINE"; installed="$installed codex" ;;
+            copilot)
+              # The Copilot CLI starts only through its launcher.
+              test "$(copilot --version | head -n 1)" = "$COPILOT_LINE"
+              test -x /usr/local/bin/factory-copilot
+              test -r /usr/local/share/factory-copilot/settings.json
+              installed="$installed copilot"
+              ;;
+          esac
+          ;;
+        *)
+          if command -v "$harness" >/dev/null; then
+            echo "the base image carries the excluded harness $harness" >&2
+            exit 1
+          fi
+          if [ "$harness" = copilot ]; then test ! -e /usr/local/bin/factory-copilot; fi
+          ;;
+      esac
+    done
+    test "$(ls /opt/factory/harnesses | sort | tr "\n" " ")" = "$(printf "%s\n" $installed | sort | tr "\n" " ")"
+  '
+done
+
+echo "Building repository Go worker image $WORKER_REFERENCE"
 # shellcheck disable=SC2086
 "$DOCKER" build $platform_args --pull=false \
   --build-arg "FACTORY_BASE_IMAGE=$WORKER_BASE_IMAGE" \
@@ -135,8 +251,12 @@ git_projection="$temporary_root/git"
 worker_archive="$temporary_root/checkout.tar"
 mkdir "$worker_checkout" "$git_projection"
 
-# Remove temporary sanitized worker inputs after the Docker gate run exits.
+# Remove temporary sanitized worker inputs and the temporary names of the
+# variant verification images after the build exits.
 cleanup_worker_inputs() {
+  for variant in codex claude copilot; do
+    "$DOCKER" image rm "$WORKER_IMAGE-verify-$variant:$WORKER_TAG" >/dev/null 2>&1 || true
+  done
   rm -rf "$temporary_root"
 }
 trap cleanup_worker_inputs EXIT HUP INT TERM
@@ -210,7 +330,38 @@ echo "Running repository setup and gates in $local_reference"
 echo "Running real headless worker lifecycle verification"
 scripts/verify-headless-worker.sh "$local_reference"
 
+# Each single-harness variant gets the same verification as the repository
+# image, on the skill layer of worker/Dockerfile without the Go toolchain. The
+# skill image is a disposable verification artifact and is removed again.
+for variant in codex claude copilot; do
+  reference="$(base_reference "$variant")"
+  echo "Running real headless worker lifecycle verification for $reference"
+  # shellcheck disable=SC2086
+  "$DOCKER" build $platform_args --pull=false --quiet \
+    --build-arg "FACTORY_BASE_IMAGE=$reference" \
+    --build-arg "GO_VERSION=$GO_VERSION" \
+    --file worker/Dockerfile \
+    --target worker-skills \
+    --iidfile "$temporary_root/skills-$variant.iid" \
+    worker >/dev/null
+  # The real-worker checks address an image as name@digest, so the skill image
+  # gets a temporary name.
+  skills_id="$(cat "$temporary_root/skills-$variant.iid")"
+  skills_name="$WORKER_IMAGE-verify-$variant"
+  "$DOCKER" tag "$skills_id" "$skills_name:$WORKER_TAG"
+  scripts/verify-headless-worker.sh "$skills_name@$skills_id"
+done
+
+base_images=""
+for variant in $VARIANTS; do
+  reference="$(base_reference "$variant")"
+  base_images="$base_images
+  $variant: $reference ($("$DOCKER" image inspect "$reference" --format '{{.Id}}'))"
+done
+
 cat <<EOF
+
+Worker base images built and verified locally:$base_images
 
 Worker image built and verified locally.
 worker_build:

@@ -2,8 +2,10 @@
 
 # Scan one local worker image: its OS, npm, harness, and Go packages with the
 # pinned grype image, and the Go helpers and toolchain it ships with the pinned
-# govulncheck through scan-go-artifacts.sh. The image is never pulled here, so
-# the scan covers exactly the artifact that was built or pulled before.
+# govulncheck through scan-go-artifacts.sh. A worker base image variant ships
+# no Go toolchain; a repository Go worker image does. The image is never
+# pulled here, so the scan covers exactly the artifact that was built or
+# pulled before.
 #
 # Usage: scan-worker-image.sh [IMAGE_REFERENCE]
 # The reference defaults to worker_build.image@worker_build.digest from
@@ -51,8 +53,18 @@ record_status() {
 
 echo "Extracting Go helpers and toolchain from $reference"
 mkdir "$scan_root/bin" || exit 2
+go_binaries="/usr/local/bin/factory-report /usr/local/bin/factory-worker-headless"
+# The probe prints its answer, so a failed docker run is never read as an
+# image without Go.
+go_toolchain="$("$DOCKER" run --rm --pull=never --network none --entrypoint /bin/sh "$reference" \
+  -c 'if test -e /usr/local/go/bin/go; then echo present; else echo absent; fi')" || exit 2
+case "$go_toolchain" in
+  present) go_binaries="$go_binaries /usr/local/go/bin/go" ;;
+  absent) echo "$reference ships no Go toolchain at /usr/local/go" ;;
+  *) exit 2 ;;
+esac
 container="$("$DOCKER" create --pull=never "$reference")" || exit 2
-for path in /usr/local/bin/factory-report /usr/local/bin/factory-worker-headless /usr/local/go/bin/go; do
+for path in $go_binaries; do
   if ! "$DOCKER" cp -L "$container:$path" "$scan_root/bin/"; then
     echo "could not extract $path from $reference" >&2
     record_status 2
