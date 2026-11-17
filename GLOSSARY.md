@@ -604,6 +604,20 @@ checkout, installed binaries, worker images, repository caches, host credential
 sources, GitHub history and label definitions, and remote branches.
 _Avoid_: Cleanup, uninstall, deregistration, factory reinstall
 
+**Quiescent installation**:
+An installation in which no coordinator holds the lock, no run is
+non-terminal, no effect is pending, and no invocation, worker, publication, or
+session command is in progress. Maintenance that changes the operational store
+or the release starts only from this state.
+_Avoid_: Idle (alone), stopped
+
+**Maintenance checkpoint**:
+A consistent, manifest-described snapshot of the operational store of one
+quiescent installation, bound to its host, registration, and Factory release.
+It contains private issue and specification text and no credentials. It is
+not a whole-installation backup and cannot rewind remote state.
+_Avoid_: Backup (alone), pre-migration backup, snapshot (alone)
+
 
 **Local Markdown issue**:
 An accepted UTF-8 Markdown specification under `docs/issues/` with a schema,
