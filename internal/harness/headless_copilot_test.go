@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -306,6 +307,60 @@ func containsCopilotArgument(command []string, argument string) bool {
 		}
 	}
 	return false
+}
+
+// copilotPerInvocationOptions are the adapter options whose values belong to
+// one invocation, not to the isolation contract a smoke must share.
+var copilotPerInvocationOptions = []string{"--prompt", "--output-format", "--model", "--reasoning-effort", "--session-id"}
+
+// TestCopilotSkillSmokeUsesTheProductionIsolationOptions verifies that the
+// live skill smoke asks Copilot with the launcher and every isolation option
+// of a production launch, and adds only plain-text output, so smoke evidence
+// describes the configuration that suppresses executable configuration and
+// GitHub tools and keeps curated skill activation.
+func TestCopilotSkillSmokeUsesTheProductionIsolationOptions(t *testing.T) {
+	workerRuntime := &headlessTestWorker{respond: copilotEcho}
+	if _, err := harness.NewCopilotHeadless(workerRuntime).StartHeadless(context.Background(), copilotRequest()); err != nil {
+		t.Fatalf("StartHeadless() error = %v", err)
+	}
+	production := workerRuntime.starts[0].Command
+	smoke := copilotSmokeInvocation(t)
+	if smoke[0] != production[0] {
+		t.Fatalf("smoke runs %q, production runs %q", smoke[0], production[0])
+	}
+	for _, option := range production[1:] {
+		name, _, _ := strings.Cut(option, "=")
+		if containsCopilotArgument(copilotPerInvocationOptions, name) {
+			continue
+		}
+		if !containsCopilotArgument(smoke, option) {
+			t.Errorf("smoke invocation %q lacks the production option %q", smoke, option)
+		}
+	}
+	for _, option := range smoke[1:] {
+		if option != "--silent" && option != "--prompt" && !containsCopilotArgument(production, option) {
+			t.Errorf("smoke invocation passes %q, which a production launch does not", option)
+		}
+	}
+}
+
+// copilotSkillSmokeLine matches the copilot invocation of the skill smoke.
+var copilotSkillSmokeLine = regexp.MustCompile(`(?m)^\s*copilot\) echo "([^"]+)" ;;$`)
+
+// copilotSmokeInvocation returns the copilot command words of
+// scripts/smoke-skills.sh; the prompt follows them at run time.
+func copilotSmokeInvocation(t *testing.T) []string {
+	t.Helper()
+	script, err := os.ReadFile(filepath.Join("..", "..", "scripts", "smoke-skills.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, invocations, _ := strings.Cut(string(script), "\nharness_invocation() {")
+	match := copilotSkillSmokeLine.FindStringSubmatch(invocations)
+	if match == nil {
+		t.Fatal("scripts/smoke-skills.sh has no copilot invocation")
+	}
+	return strings.Fields(match[1])
 }
 
 // containsCopilotOption reports whether command passes option bare or in the
