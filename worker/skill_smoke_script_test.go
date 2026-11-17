@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // TestSkillSmokeReportsHarnessFailureSeparately verifies that a harness which
@@ -440,5 +442,64 @@ esac
 				t.Errorf("the token reached the smoke output")
 			}
 		})
+	}
+}
+
+// TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall verifies
+// that the copilot smoke makes no prompt call and records nothing when the
+// pinned image has no copilot executable or a CLI release other than the one
+// the compatibility record proved, because startup diagnosis rejects both
+// images. The refusal names the proved release and the base image variant.
+func TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall(t *testing.T) {
+	tests := map[string]string{
+		"no copilot in the image": `echo "/bin/sh: 1: copilot: not found" >&2; exit 127`,
+		"another CLI release":     `echo "GitHub Copilot CLI 1.0.99."`,
+	}
+	for name, version := range tests {
+		t.Run(name, func(t *testing.T) {
+			body := `
+printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
+case "$*" in
+  *--version*) ` + version + ` ;;
+  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+esac
+`
+			smoke := runCopilotSmoke(t, body)
+			if smoke.err == nil {
+				t.Fatalf("smoke passed with an unproved Copilot CLI:\n%s", smoke.stderr)
+			}
+			if records := recordsOf(t, smoke.evidence, "copilot"); len(records) != 0 {
+				t.Errorf("smoke recorded copilot evidence for an unproved CLI:\n%s", smoke.evidence)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(smoke.dockerArguments), "\n") {
+				if !strings.Contains(line, "--version") {
+					t.Errorf("smoke made a prompt call for an unproved CLI: %s", line)
+				}
+			}
+			if !strings.Contains(smoke.stderr, worker.CopilotVersionLine) || !strings.Contains(smoke.stderr, "sw-factory-base-copilot") {
+				t.Errorf("refusal does not name the proved release and the base image variant:\n%s", smoke.stderr)
+			}
+		})
+	}
+}
+
+// TestSkillSmokeNeverRecordsAHarnessWithoutAVersion verifies that a harness
+// whose version probe prints nothing, such as a harness the image does not
+// contain, gets no record keyed by an empty version.
+func TestSkillSmokeNeverRecordsAHarnessWithoutAVersion(t *testing.T) {
+	smoke := runSkillSmoke(t, `
+case "$*" in
+  *--version*) exit 127 ;;
+  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+esac
+`)
+	if smoke.err == nil {
+		t.Fatalf("smoke passed without a harness version:\n%s", smoke.stderr)
+	}
+	if strings.Contains(smoke.evidence, `"harness": "claude"`) {
+		t.Errorf("smoke recorded evidence without a harness version:\n%s", smoke.evidence)
+	}
+	if !strings.Contains(smoke.stderr, "No claude version") {
+		t.Errorf("smoke does not name the missing version:\n%s", smoke.stderr)
 	}
 }

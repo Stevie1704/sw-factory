@@ -99,6 +99,26 @@ harness_invocation() {
   esac
 }
 
+# COPILOT_PROVED_VERSION is the first `copilot --version` line of the release
+# that the compatibility record docs/spikes/copilot-cli-1.0.98 proved. It
+# equals worker.CopilotVersionLine, the line startup diagnosis requires.
+COPILOT_PROVED_VERSION="GitHub Copilot CLI 1.0.98."
+
+# unproved_version prints the refusal for a harness version that cannot key
+# a record, and fails. An empty version means the image has no such harness.
+# A Copilot release other than the proved one is refused because startup
+# diagnosis rejects that image, so its smoke would be paid for nothing.
+unproved_version() {
+  if [ "$1" = copilot ] && [ "$2" != "$COPILOT_PROVED_VERSION" ]; then
+    echo "$WORKER_REFERENCE has Copilot CLI \"${2:-<none>}\", not the proved \"$COPILOT_PROVED_VERSION\"; skipping the copilot smoke. Rebuild the worker image from sw-factory-base-copilot or the combined sw-factory-base with the current scripts/build-worker.sh, and record the new digest."
+    return 1
+  fi
+  if [ -z "$2" ]; then
+    echo "No $1 version in $WORKER_REFERENCE; skipping its smoke. Build the worker image from a base image variant that contains $1 (sw-factory-base-$1 or the combined sw-factory-base)."
+    return 1
+  fi
+}
+
 # skill_sentinel returns the first instruction line of one skill body. A reply
 # that quotes it shows the harness surfaced that skill's body to the model in
 # this invocation. It is not proof the model could not have read the file
@@ -196,6 +216,11 @@ for harness_name in $HARNESSES; do
     --cap-drop ALL --security-opt no-new-privileges --network none \
     --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version" \
     | head -n 1 | tr -cd '\040-\176' | cut -c1-120)"
+  if ! version_refusal="$(unproved_version "$harness_name" "$version")"; then
+    echo "$version_refusal" >&2
+    unrecorded="$unrecorded $harness_name"
+    continue
+  fi
   echo "Smoking $harness_name $version in $WORKER_REFERENCE"
 
   verified='[]'
