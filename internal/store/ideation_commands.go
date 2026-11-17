@@ -126,10 +126,17 @@ type IdeationCommandResult struct {
 const ideationCommandColumns = `request_id, session_id, kind, expected_revision, payload, sequence, state, attempts,
 	outcome, detail, session_revision, result, accepted_at, completed_at, scope, subject_id`
 
+// inboxAppendAttempts bounds how often AcceptIdeationCommand runs its
+// transaction after a transient store failure. SQLite's busy handler has no
+// fairness: a writer that runs transactions back to back can keep an append
+// waiting for the whole busy timeout, and each new attempt starts a new wait.
+const inboxAppendAttempts = 3
+
 // AcceptIdeationCommand appends command to the inbox in the accepted state. A
 // stored command with the same request ID and content is a replay: it returns
 // the stored command, with any outcome, and true. The same ID with other
-// content returns ErrIdeationRequestReused.
+// content returns ErrIdeationRequestReused. A transient store failure, such as
+// a busy store, is retried a bounded number of times before it is returned.
 func (s *Store) AcceptIdeationCommand(ctx context.Context, command IdeationCommand) (IdeationCommand, bool, error) {
 	if command.Scope == "session" {
 		command.Scope = ""
@@ -141,6 +148,17 @@ func (s *Store) AcceptIdeationCommand(ctx context.Context, command IdeationComma
 		command.AcceptedAt = time.Now()
 	}
 	command.AcceptedAt = command.AcceptedAt.UTC()
+	for attempt := 1; ; attempt++ {
+		stored, replayed, err := s.appendIdeationCommand(ctx, command)
+		if err == nil || !IsTransient(err) || attempt == inboxAppendAttempts {
+			return stored, replayed, err
+		}
+	}
+}
+
+// appendIdeationCommand runs one append transaction for a validated command.
+// A failed attempt rolls back, so AcceptIdeationCommand can run it again.
+func (s *Store) appendIdeationCommand(ctx context.Context, command IdeationCommand) (IdeationCommand, bool, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return IdeationCommand{}, false, fmt.Errorf("begin ideation command %q: %w", command.RequestID, err)
@@ -421,7 +439,9 @@ func OpenCommandInbox(ctx context.Context, path string) (*CommandInbox, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := (&url.URL{Scheme: "file", Path: absolutePath, RawQuery: "mode=rw&_pragma=busy_timeout(5000)"}).String()
+	// _txlock=immediate starts each append with BEGIN IMMEDIATE, which takes the
+	// write lock at BEGIN rather than at the first write of a deferred transaction.
+	dsn := (&url.URL{Scheme: "file", Path: absolutePath, RawQuery: "mode=rw&_txlock=immediate&_pragma=busy_timeout(5000)"}).String()
 	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open command inbox: %w", err)
