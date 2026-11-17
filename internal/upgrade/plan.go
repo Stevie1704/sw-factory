@@ -34,11 +34,16 @@ const (
 type Component string
 
 const (
+	// ComponentBinary is the factory command that PATH names.
 	ComponentBinary Component = "binary"
+	// ComponentWorker is the pinned worker image.
 	ComponentWorker Component = "worker"
+	// ComponentPolicy is the checked-in factory.yaml.
 	ComponentPolicy Component = "policy"
-	ComponentSmoke  Component = "smoke"
-	ComponentStore  Component = "store"
+	// ComponentSmoke is the skill smoke evidence of the pinned worker.
+	ComponentSmoke Component = "smoke"
+	// ComponentStore is the operational store schema.
+	ComponentStore Component = "store"
 )
 
 // ComponentState tells whether a component matches the target release.
@@ -101,9 +106,9 @@ type Target struct {
 type ImageObservation struct {
 	Reference string
 	Present   bool
-	// Problem tells why presence could not be observed, for example because
-	// Docker is not reachable.
-	Problem string
+	// Absence is the inspection error of an image that is not present. Docker
+	// does not tell a missing image from an unreachable daemon.
+	Absence string
 }
 
 // WorkerObservation is the pinned worker image and the release it was built
@@ -111,8 +116,11 @@ type ImageObservation struct {
 type WorkerObservation struct {
 	Image   string
 	Present bool
+	// Absence is the inspection error of an image that is not present.
+	Absence string
 	// Release is the release label of the image, or empty.
 	Release string
+	// Problem tells why the release label is not readable.
 	Problem string
 }
 
@@ -220,12 +228,9 @@ var RecoveryLimits = []string{
 
 // Build derives the plan from one observation. It never changes anything.
 func Build(observation Observation) Plan {
-	planner := planner{observation: observation}
+	planner := planner{observation: observation, states: map[Component]ComponentState{}}
 	components := planner.components()
-	planner.states = map[Component]ComponentState{}
-	for _, status := range components {
-		planner.states[status.Name] = status.State
-	}
+	planner.proved = planner.evidence()
 	operations := planner.operations()
 	blockers := planner.blockers()
 	sequence(operations, blockers)
@@ -249,7 +254,26 @@ func Build(observation Observation) Plan {
 // planner holds one observation and the facts derived from it so far.
 type planner struct {
 	observation Observation
-	states      map[Component]ComponentState
+	// states holds each component state, in component order.
+	states map[Component]ComponentState
+	// proved tells, per operation from install_binary to doctor, whether
+	// current evidence proves it.
+	proved map[OperationID]bool
+}
+
+// evidence decides, once, which operation from install_binary to doctor
+// current evidence proves.
+func (p planner) evidence() map[OperationID]bool {
+	return map[OperationID]bool{
+		OperationInstallBinary:    p.observation.InstalledIsTarget,
+		OperationPrepareResources: p.onboardingVerified(onboarding.StepPrepare),
+		OperationOnboardingPlan:   p.observation.Onboarding != nil,
+		OperationRebuildWorker:    p.states[ComponentWorker] == StateNew,
+		OperationGateProof:        p.onboardingVerified(onboarding.StepGateProof),
+		OperationSkillSmoke:       p.states[ComponentSmoke] == StateNew,
+		OperationMigrateStore:     p.states[ComponentStore] == StateNew,
+		OperationDoctor:           p.onboardingVerified(onboarding.StepDoctor),
+	}
 }
 
 // command returns the target binary, quoted for a POSIX shell.
@@ -333,8 +357,9 @@ func (p planner) planFile() string {
 	return onboarding.Quote(p.observation.OnboardingPlanPath)
 }
 
-// done returns the state of an operation that current evidence proves.
-func done(proved bool) OperationState {
+// provedState returns done for an operation that current evidence proves,
+// and pending otherwise.
+func provedState(proved bool) OperationState {
 	if proved {
 		return OperationDone
 	}
@@ -346,41 +371,41 @@ func done(proved bool) OperationState {
 func (p planner) operations() []Operation {
 	o := p.observation
 	return []Operation{
-		{ID: OperationQuiesce, State: done(p.quiescent() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
+		{ID: OperationQuiesce, State: provedState(p.quiescent() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
 			Description:     "finish or cancel every active run with the binary that claimed it, then stop the foreground coordinator with Ctrl-C or factory stop " + p.configFlag(),
 			ExpectedEffects: []string{"no coordinator holds the repository lock", "no run, invocation, or pending effect is active"}},
-		{ID: OperationInstallBinary, State: done(o.InstalledIsTarget), Effect: doctor.EffectLocalMutation,
+		{ID: OperationInstallBinary, State: provedState(p.proved[OperationInstallBinary]), Effect: doctor.EffectLocalMutation,
 			Description:     "install the archive of " + o.Target.Version + " in place of the old one, so that command -v factory names " + o.FactoryCommand,
 			ExpectedEffects: []string{"factory version --json reports the target version and revision"}},
-		{ID: OperationPrepareResources, State: done(p.onboardingVerified(onboarding.StepPrepare)), Effect: doctor.EffectLocalMutation,
+		{ID: OperationPrepareResources, State: provedState(p.proved[OperationPrepareResources]), Effect: doctor.EffectLocalMutation,
 			Description:     "export the release resources of the target to a new directory below $HOME",
 			Command:         p.command() + " onboard prepare --output <new directory below $HOME> --json",
 			ExpectedEffects: []string{"a new resource directory that the operator owns"}},
-		{ID: OperationOnboardingPlan, State: done(o.Onboarding != nil), Effect: doctor.EffectLocalMutation,
+		{ID: OperationOnboardingPlan, State: provedState(p.proved[OperationOnboardingPlan]), Effect: doctor.EffectLocalMutation,
 			Description:     "create or refresh the onboarding plan with the target binary, so its evidence is evaluated against the target release",
 			Command:         p.command() + " onboard plan --repository " + onboarding.Quote(o.RepositoryPath) + " --output " + p.planFile() + " " + p.configFlag() + " --resources <prepared directory> --json",
 			ExpectedEffects: []string{"the onboarding plan file and its lock"}},
-		{ID: OperationRebuildWorker, State: done(p.states[ComponentWorker] == StateNew), Effect: doctor.EffectLocalMutation,
+		{ID: OperationRebuildWorker, State: provedState(p.proved[OperationRebuildWorker]), Effect: doctor.EffectLocalMutation,
 			Description:     "rebuild the worker image from the target worker base image " + o.Target.WorkerBaseImage + " and record its digest in factory.yaml, as Step 3 of the onboarding procedure describes",
 			Command:         p.onboardingAction(onboarding.StepImage, ""),
 			ExpectedEffects: []string{"a new local worker image", "a changed worker_build.digest in factory.yaml"}},
-		{ID: OperationGateProof, State: done(p.onboardingVerified(onboarding.StepGateProof)), Effect: doctor.EffectLocalMutation,
+		{ID: OperationGateProof, State: provedState(p.proved[OperationGateProof]), Effect: doctor.EffectLocalMutation,
 			Description:     "prove setup and every gate in the new worker; valid evidence is reused",
 			Command:         p.onboardingAction(onboarding.StepGateProof, p.command()+" onboard record --plan "+p.planFile()+" gate-proof --json"),
 			ExpectedEffects: []string{"gate proof evidence in the onboarding plan"}},
-		{ID: OperationSkillSmoke, State: done(p.states[ComponentSmoke] == StateNew), Effect: doctor.EffectExternalMutation, Paid: true,
+		{ID: OperationSkillSmoke, State: provedState(p.proved[OperationSkillSmoke]), Effect: doctor.EffectExternalMutation, Paid: true,
 			Description:     "record the skill smoke of every selectable harness for the new worker digest; only missing skills are called again",
 			Command:         p.onboardingAction(onboarding.StepSkillSmoke, ""),
 			ExpectedEffects: []string{"paid model calls", "new records in worker/skill-smoke.json"}},
-		{ID: OperationMigrateStore, State: done(p.states[ComponentStore] == StateNew), Effect: doctor.EffectLocalMutation,
+		{ID: OperationMigrateStore, State: provedState(p.proved[OperationMigrateStore]), Effect: doctor.EffectLocalMutation,
 			Description:     "migrate the operational store with the explicit entry point; the old binary refuses the store afterwards",
 			Command:         p.command() + " upgrade migrate-store " + p.configFlag() + " --json",
 			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp>", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
-		{ID: OperationDoctor, State: done(p.onboardingVerified(onboarding.StepDoctor)), Effect: doctor.EffectInspection,
+		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectInspection,
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
 			Command:         p.onboardingAction(onboarding.StepDoctor, p.command()+" onboard record --plan "+p.planFile()+" doctor --json"),
 			ExpectedEffects: []string{"doctor evidence in the onboarding plan"}},
-		{ID: OperationStartCoordinator, State: done(o.CoordinatorRunning && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
+		{ID: OperationStartCoordinator, State: provedState(o.CoordinatorRunning && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
 			Description:     "start the coordinator of the target in the foreground and keep its terminal open; a supervised service is not supported yet",
 			Command:         p.command() + " start " + p.configFlag(),
 			ExpectedEffects: []string{"the coordinator claims eligible issues and continues runs"}},
@@ -391,9 +416,12 @@ func (p planner) operations() []Operation {
 // to doctor is proved by evidence. Then the upgrade is done, and active work
 // and a live coordinator are ordinary operation, not blockers.
 func (p planner) laterOperationsDone() bool {
-	return p.observation.InstalledIsTarget && p.onboardingVerified(onboarding.StepPrepare) && p.observation.Onboarding != nil &&
-		p.states[ComponentWorker] == StateNew && p.onboardingVerified(onboarding.StepGateProof) &&
-		p.states[ComponentSmoke] == StateNew && p.states[ComponentStore] == StateNew && p.onboardingVerified(onboarding.StepDoctor)
+	for _, proved := range p.proved {
+		if !proved {
+			return false
+		}
+	}
+	return true
 }
 
 // quiescent reports whether no coordinator runs and the store holds no

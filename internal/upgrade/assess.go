@@ -2,15 +2,22 @@ package upgrade
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/onboarding"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 // components derives the state of every component.
+// Each state is recorded before the next is derived, because the smoke
+// state depends on the worker state.
 func (p planner) components() []ComponentStatus {
-	return []ComponentStatus{p.binary(), p.worker(), p.policy(), p.smoke(), p.store()}
+	var statuses []ComponentStatus
+	for _, derive := range []func() ComponentStatus{p.binary, p.worker, p.policy, p.smoke, p.store} {
+		status := derive()
+		p.states[status.Name] = status.State
+		statuses = append(statuses, status)
+	}
+	return statuses
 }
 
 // binary compares the factory command on PATH with the target binary.
@@ -37,7 +44,7 @@ func (p planner) worker() ComponentStatus {
 	case w.Problem != "":
 		status.State, status.Detail = StateUnknown, w.Problem
 	case !w.Present:
-		status.State, status.Detail = StateIncomplete, "the pinned image "+w.Image+" is not available locally"
+		status.State, status.Detail = StateIncomplete, "the pinned image "+w.Image+" is not available locally, or Docker is not reachable: "+w.Absence
 	case p.observation.Target.Build != "release":
 		status.State, status.Detail = StateNew, "a development build accepts any worker image"
 	case w.Release == p.observation.Target.Version:
@@ -74,7 +81,7 @@ func (p planner) smoke() ComponentStatus {
 		missing += len(harness.Missing)
 	}
 	switch {
-	case p.worker().State != StateNew:
+	case p.states[ComponentWorker] != StateNew:
 		status.State, status.Detail = StateOld, "the smoke belongs to the old worker"
 	case missing == 0:
 		status.State = StateNew
@@ -90,19 +97,20 @@ func (p planner) smoke() ComponentStatus {
 func (p planner) store() ComponentStatus {
 	s := p.observation.Store
 	status := ComponentStatus{Name: ComponentStore}
+	finding := s.SchemaFinding()
 	switch {
 	case p.observation.StoreProblem != "":
 		status.State, status.Detail = StateUnknown, p.observation.StoreProblem
-	case !s.Exists:
-		status.State, status.Detail = StateUnknown, "no operational store exists at "+s.Path
 	case s.InterruptedWrite:
 		status.State, status.Detail = StateIncomplete, "a rollback journal shows an interrupted write"
+	case finding != nil && !s.Exists:
+		status.State, status.Detail = StateUnknown, finding.Detail
+	case finding != nil:
+		status.State, status.Detail = StateUnsupported, finding.Detail
 	case s.SchemaVersion == store.CurrentSchemaVersion:
 		status.State = StateNew
-	case s.Supported():
-		status.State, status.Detail = StateOld, fmt.Sprintf("schema %d; the target uses %d", s.SchemaVersion, store.CurrentSchemaVersion)
 	default:
-		status.State, status.Detail = StateUnsupported, fmt.Sprintf("schema %d; the target inspects %d to %d", s.SchemaVersion, store.MinimumUpgradeSchemaVersion, store.CurrentSchemaVersion)
+		status.State, status.Detail = StateOld, fmt.Sprintf("schema %d; the target uses %d", s.SchemaVersion, store.CurrentSchemaVersion)
 	}
 	return status
 }
@@ -121,7 +129,7 @@ func (p planner) blockers() []Blocker {
 	}
 	if !o.PolicyValid {
 		blockers = append(blockers, Blocker{Code: "configuration.invalid", Detail: o.PolicyProblem,
-			Action: "repair factory.yaml, then check it with " + p.command() + " config validate --file " + onboarding.Quote(o.RepositoryPath+"/factory.yaml") + " --json"})
+			Action: "repair factory.yaml, then check it with " + p.validateCommand()})
 	}
 	blockers = append(blockers, p.workerBlockers()...)
 	if o.OnboardingPlanProblem != "" {
@@ -131,27 +139,28 @@ func (p planner) blockers() []Blocker {
 	return blockers
 }
 
+// storeActions are the actions of the store findings. None of them is a
+// backup or an older binary.
+var storeActions = map[string]string{
+	"store.missing":            "check operational_data_path in the host configuration; Factory has no supported procedure that recreates a lost store with its history (ADR 0032)",
+	"store.schema_newer":       "use the release that migrated the store, or a newer one, as the target binary; the store is not changed",
+	"store.schema_unsupported": "this build cannot prove that the store is quiescent; file a report with factory bug-report and keep the current binary",
+}
+
 // storeBlockers lists the store conditions that the target cannot continue
-// with. None of them is resolved by a backup or an older binary.
+// with.
 func (p planner) storeBlockers() []Blocker {
 	o := p.observation
-	s := o.Store
 	switch {
 	case o.StoreProblem != "":
 		return []Blocker{{Code: "store.unreadable", Detail: o.StoreProblem,
 			Action: "repair the access to the operational store, for example its private file modes, then plan again; follow factory guide debug"}}
-	case !s.Exists:
-		return []Blocker{{Code: "store.missing", Detail: "no operational store exists at " + s.Path,
-			Action: "check operational_data_path in the host configuration; Factory has no supported procedure that recreates a lost store with its history (ADR 0032)"}}
-	case s.InterruptedWrite:
+	case o.Store.InterruptedWrite:
 		return []Blocker{{Code: "store.interrupted_write", Detail: "a rollback journal beside the store shows a write that stopped before its commit",
 			Action: "run " + p.command() + " upgrade migrate-store " + p.configFlag() + " --json; it rolls the interrupted write back and checks quiescence before it migrates"}}
-	case s.SchemaVersion > store.CurrentSchemaVersion:
-		return []Blocker{{Code: "store.schema_newer", Detail: fmt.Sprintf("the store has schema %d; this build supports %d", s.SchemaVersion, store.CurrentSchemaVersion),
-			Action: "use the release that migrated the store, or a newer one, as the target binary; the store is not changed"}}
-	case !s.Supported():
-		return []Blocker{{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; upgrade inspection reads %d to %d", s.SchemaVersion, store.MinimumUpgradeSchemaVersion, store.CurrentSchemaVersion),
-			Action: "this build cannot prove that the store is quiescent; file a report with factory bug-report and keep the current binary"}}
+	}
+	if finding := o.Store.SchemaFinding(); finding != nil {
+		return []Blocker{{Code: finding.Code, Detail: finding.Detail, Action: storeActions[finding.Code]}}
 	}
 	return nil
 }
@@ -161,29 +170,42 @@ func (p planner) storeBlockers() []Blocker {
 func (p planner) activityBlockers() []Blocker {
 	o := p.observation
 	var blockers []Blocker
-	if o.CoordinatorProblem != "" {
-		blockers = append(blockers, Blocker{Code: "coordinator.unobserved", Detail: o.CoordinatorProblem, Action: "repair the access to the coordinator lock directory, then plan again"})
-	} else if o.CoordinatorRunning {
-		blockers = append(blockers, Blocker{Code: "coordinator.running", Detail: "a live coordinator keeps its own release and would combine it with a worker or store of another release",
-			Action: "stop it with Ctrl-C in its terminal, or run factory stop " + p.configFlag() + " with the binary that started it"})
+	if coordinator := p.coordinatorBlocker(); coordinator != nil {
+		blockers = append(blockers, *coordinator)
 	}
 	if !o.Store.Supported() || o.Store.InterruptedWrite {
 		return blockers
 	}
 	owner := p.storeOwner()
-	if len(o.Store.ActiveRuns) != 0 {
-		blockers = append(blockers, Blocker{Code: "run.active", Detail: "active runs: " + strings.Join(o.Store.ActiveRuns, ", "),
-			Action: "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy"})
+	actions := map[string]string{
+		"run.active":        "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
+		"invocation.active": "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
+		"effect.pending":    "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
 	}
-	if o.Store.ActiveInvocations != 0 {
-		blockers = append(blockers, Blocker{Code: "invocation.active", Detail: fmt.Sprintf("%d invocations are active", o.Store.ActiveInvocations),
-			Action: "let the coordinator of " + owner + " finish them; never resume an old session with a new image"})
-	}
-	if o.Store.PendingEffects != 0 {
-		blockers = append(blockers, Blocker{Code: "effect.pending", Detail: fmt.Sprintf("%d external effects are journaled", o.Store.PendingEffects),
-			Action: "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes"})
+	for _, finding := range o.Store.ActivityFindings() {
+		blockers = append(blockers, Blocker{Code: finding.Code, Detail: finding.Detail, Action: actions[finding.Code]})
 	}
 	return blockers
+}
+
+// coordinatorBlocker returns the blocker of a live or unobservable
+// coordinator, or nil. A live coordinator started before the upgrade keeps
+// the previous release; when the worker or the store already belongs to the
+// target, the two releases are combined, which is a mismatch.
+func (p planner) coordinatorBlocker() *Blocker {
+	o := p.observation
+	stop := "stop it with Ctrl-C in its terminal, or run factory stop " + p.configFlag() + " with the binary that started it"
+	switch {
+	case o.CoordinatorProblem != "":
+		return &Blocker{Code: "coordinator.unobserved", Detail: o.CoordinatorProblem, Action: "repair the access to the coordinator lock directory, then plan again"}
+	case !o.CoordinatorRunning:
+		return nil
+	case p.states[ComponentWorker] == StateNew || p.states[ComponentStore] == StateNew:
+		return &Blocker{Code: "coordinator.worker_mismatch", Detail: "a live coordinator started before the upgrade completed runs with a worker or store of the target release",
+			Action: stop + "; start the target coordinator only after the doctor operation"}
+	default:
+		return &Blocker{Code: "coordinator.running", Detail: "a live coordinator keeps its own release and would combine it with a worker or store of another release", Action: stop}
+	}
 }
 
 // storeOwner names the binary that reads the current store schema. Before
@@ -202,28 +224,32 @@ func (p planner) workerBlockers() []Blocker {
 		return nil
 	}
 	if o.Worker.Problem != "" {
-		return []Blocker{{Code: "worker.unobserved", Detail: o.Worker.Problem, Action: "make Docker reachable for this account, then plan again"}}
-	}
-	if o.BaseImage.Problem != "" {
-		return []Blocker{{Code: "worker.base_image_unobserved", Detail: o.BaseImage.Problem, Action: "make Docker reachable for this account, then plan again"}}
+		return []Blocker{{Code: "worker.release_unreadable", Detail: o.Worker.Problem, Action: "check that this account can inspect the pinned worker image with docker image inspect, then plan again"}}
 	}
 	if o.BaseImage.Reference != "" && !o.BaseImage.Present {
-		return []Blocker{{Code: "worker.base_image_missing", Detail: "the target worker base image " + o.BaseImage.Reference + " is not available locally",
+		return []Blocker{{Code: "worker.base_image_missing", Detail: "the target worker base image " + o.BaseImage.Reference + " is not available locally, or Docker is not reachable: " + o.BaseImage.Absence,
 			Action: "pull it with docker pull " + o.BaseImage.Reference + " (network access); the plan never pulls an image"}}
 	}
 	return nil
 }
 
-// verification lists the checks of the final state.
+// validateCommand returns the offline check of factory.yaml.
+func (p planner) validateCommand() string {
+	return p.command() + " config validate --file " + onboarding.Quote(p.observation.RepositoryPath+"/factory.yaml") + " --json"
+}
+
+// verification lists the checks of the final state. The plan cannot read
+// the release of a running coordinator, so supervisor.running proves only
+// that a coordinator runs after every other check holds.
 func (p planner) verification() []Verification {
 	o := p.observation
 	return []Verification{
-		{Code: "coordinator.identity", Description: "PATH names the target binary", Command: "factory version --json", Satisfied: o.InstalledIsTarget},
-		{Code: "worker.release", Description: "the pinned worker image was built from the target worker base image", Command: p.command() + " doctor " + p.configFlag() + " --json", Satisfied: p.states[ComponentWorker] == StateNew},
-		{Code: "configuration.valid", Description: "factory.yaml is valid for the target", Command: p.command() + " config validate --file " + onboarding.Quote(o.RepositoryPath+"/factory.yaml") + " --json", Satisfied: o.PolicyValid},
-		{Code: "smoke.complete", Description: "every required skill has a smoke record for the pinned digest", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.states[ComponentSmoke] == StateNew},
-		{Code: "store.ready", Description: fmt.Sprintf("the operational store has schema %d", store.CurrentSchemaVersion), Command: p.command() + " doctor " + p.configFlag() + " --json", Satisfied: p.states[ComponentStore] == StateNew},
-		{Code: "doctor.ready", Description: "the onboarding plan records a passed doctor of the target release", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.onboardingVerified(onboarding.StepDoctor)},
-		{Code: "supervisor.running", Description: "the coordinator of the target runs in the foreground and renews its heartbeat", Command: p.command() + " status " + p.configFlag() + " --json", Satisfied: o.CoordinatorRunning && p.laterOperationsDone()},
+		{Code: "coordinator.identity", Description: "PATH names the target binary", Command: "factory version --json", Satisfied: p.proved[OperationInstallBinary]},
+		{Code: "worker.release", Description: "the pinned worker image was built from the target worker base image", Command: p.command() + " doctor " + p.configFlag() + " --json", Satisfied: p.proved[OperationRebuildWorker]},
+		{Code: "configuration.valid", Description: "factory.yaml is valid for the target", Command: p.validateCommand(), Satisfied: o.PolicyValid},
+		{Code: "smoke.complete", Description: "every required skill has a smoke record for the pinned digest", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.proved[OperationSkillSmoke]},
+		{Code: "store.ready", Description: fmt.Sprintf("the operational store has schema %d", store.CurrentSchemaVersion), Command: p.command() + " doctor " + p.configFlag() + " --json", Satisfied: p.proved[OperationMigrateStore]},
+		{Code: "doctor.ready", Description: "the onboarding plan records a passed doctor of the target release", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.proved[OperationDoctor]},
+		{Code: "supervisor.running", Description: "a coordinator runs in the foreground after every other check holds; the plan cannot read its release, so start it with the target binary", Command: p.command() + " status " + p.configFlag() + " --json", Satisfied: o.CoordinatorRunning && p.laterOperationsDone()},
 	}
 }

@@ -43,6 +43,43 @@ func (i UpgradeInspection) Supported() bool {
 	return i.Exists && i.SchemaVersion >= MinimumUpgradeSchemaVersion && i.SchemaVersion <= CurrentSchemaVersion
 }
 
+// UpgradeFinding is one stable reason why a store must not be migrated now.
+// The upgrade plan and the migration entry point report the same findings.
+type UpgradeFinding struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail"`
+}
+
+// SchemaFinding returns the finding of a store that is missing or whose
+// schema this build cannot inspect, or nil.
+func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
+	switch {
+	case !i.Exists:
+		return &UpgradeFinding{Code: "store.missing", Detail: "no operational store exists at " + i.Path}
+	case i.SchemaVersion > CurrentSchemaVersion:
+		return &UpgradeFinding{Code: "store.schema_newer", Detail: fmt.Sprintf("the store has schema %d; this build supports %d", i.SchemaVersion, CurrentSchemaVersion)}
+	case !i.Supported():
+		return &UpgradeFinding{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build inspects %d to %d", i.SchemaVersion, MinimumUpgradeSchemaVersion, CurrentSchemaVersion)}
+	}
+	return nil
+}
+
+// ActivityFindings returns one finding per kind of active work: runs,
+// invocations, and journaled effects.
+func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
+	var findings []UpgradeFinding
+	if len(i.ActiveRuns) != 0 {
+		findings = append(findings, UpgradeFinding{Code: "run.active", Detail: "active runs: " + strings.Join(i.ActiveRuns, ", ")})
+	}
+	if i.ActiveInvocations != 0 {
+		findings = append(findings, UpgradeFinding{Code: "invocation.active", Detail: fmt.Sprintf("%d invocations are active", i.ActiveInvocations)})
+	}
+	if i.PendingEffects != 0 {
+		findings = append(findings, UpgradeFinding{Code: "effect.pending", Detail: fmt.Sprintf("%d external effects are journaled", i.PendingEffects)})
+	}
+	return findings
+}
+
 // Migration describes what one explicit migration did.
 type Migration struct {
 	// FromVersion and ToVersion are the schema versions before and after.

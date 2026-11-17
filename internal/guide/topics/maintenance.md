@@ -60,6 +60,8 @@ store, a lock file, or the onboarding plan to remove a blocker.
 | --- | --- |
 | `run.active`, `invocation.active`, `effect.pending` | Active work exists. Finish or cancel it with the binary that reads the store schema. |
 | `coordinator.running` | A coordinator holds the repository lock. Stop it. |
+| `coordinator.worker_mismatch` | A coordinator of the previous release runs while the worker or the store already belongs to the target. Stop it. Start the target coordinator only at `start_coordinator`. |
+| `worker.release_unreadable` | The release label of the pinned worker image cannot be read. Check that this account can inspect the image. |
 | `store.schema_newer` | A newer release migrated the store. Use that release or a newer one as the target. |
 | `store.schema_unsupported`, `store.unreadable`, `store.missing` | The target cannot prove the store state. Keep the current binary and follow `factory guide debug` or `factory guide reporting`. |
 | `store.interrupted_write` | A write stopped before its commit. The store migration operation rolls it back first. |
@@ -117,7 +119,9 @@ The upgrade is complete only when `result` is `complete` and every
 `verification` entry has `satisfied: true`: the target binary on `PATH`, the
 pinned worker release, a valid configuration, complete smoke evidence, a
 current store, a recorded doctor of the target, and a running coordinator.
-`factory status --config <path> --json` shows the supervisor.
+`factory status --config <path> --json` shows the supervisor. The plan cannot
+read the release of a running coordinator, so start it with the target
+binary.
 
 ## Recovery limits
 

@@ -4,18 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
-
-// StoreMigrationRefusal is one reason why the explicit store migration did
-// not run. Codes are stable and match the upgrade plan blockers.
-type StoreMigrationRefusal struct {
-	Code   string `json:"code"`
-	Detail string `json:"detail"`
-}
 
 // StoreMigrationResult is the outcome of the explicit store migration.
 type StoreMigrationResult struct {
@@ -23,7 +15,9 @@ type StoreMigrationResult struct {
 	Migration store.Migration
 	// RolledBack reports that an interrupted write was rolled back first.
 	RolledBack bool
-	Refusals   []StoreMigrationRefusal
+	// Refusals are the reasons why nothing migrated. Their codes match the
+	// upgrade plan blockers.
+	Refusals []store.UpgradeFinding
 }
 
 // CoordinatorLockHeld reports, without changing anything, whether a live
@@ -40,7 +34,7 @@ func CoordinatorLockHeld(registration config.RepositoryRegistration) (bool, erro
 func MigrateStore(ctx context.Context, registration config.RepositoryRegistration) (StoreMigrationResult, error) {
 	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration))
 	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
-		return refuseMigration("coordinator.running", "a live coordinator holds the repository lock"), nil
+		return StoreMigrationResult{Refusals: []store.UpgradeFinding{{Code: "coordinator.running", Detail: "a live coordinator holds the repository lock"}}}, nil
 	}
 	if err != nil {
 		return StoreMigrationResult{}, err
@@ -61,8 +55,7 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 			return StoreMigrationResult{}, fmt.Errorf("inspect the operational store: %w", err)
 		}
 	}
-	if refusals := migrationRefusals(inspection); len(refusals) != 0 {
-		result.Refusals = refusals
+	if result.Refusals = migrationRefusals(inspection); len(result.Refusals) != 0 {
 		return result, nil
 	}
 	if result.Migration, err = store.Migrate(ctx, path); err != nil {
@@ -71,31 +64,11 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 	return result, nil
 }
 
-// refuseMigration returns a result with one refusal.
-func refuseMigration(code, detail string) StoreMigrationResult {
-	return StoreMigrationResult{Refusals: []StoreMigrationRefusal{{Code: code, Detail: detail}}}
-}
-
 // migrationRefusals lists every reason why the inspected store must not be
 // migrated now.
-func migrationRefusals(inspection store.UpgradeInspection) []StoreMigrationRefusal {
-	switch {
-	case !inspection.Exists:
-		return []StoreMigrationRefusal{{Code: "store.missing", Detail: "no operational store exists at " + inspection.Path}}
-	case inspection.SchemaVersion > store.CurrentSchemaVersion:
-		return []StoreMigrationRefusal{{Code: "store.schema_newer", Detail: fmt.Sprintf("the store has schema %d; this build supports %d", inspection.SchemaVersion, store.CurrentSchemaVersion)}}
-	case !inspection.Supported():
-		return []StoreMigrationRefusal{{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build inspects %d to %d", inspection.SchemaVersion, store.MinimumUpgradeSchemaVersion, store.CurrentSchemaVersion)}}
+func migrationRefusals(inspection store.UpgradeInspection) []store.UpgradeFinding {
+	if finding := inspection.SchemaFinding(); finding != nil {
+		return []store.UpgradeFinding{*finding}
 	}
-	var refusals []StoreMigrationRefusal
-	if len(inspection.ActiveRuns) != 0 {
-		refusals = append(refusals, StoreMigrationRefusal{Code: "run.active", Detail: "active runs: " + strings.Join(inspection.ActiveRuns, ", ")})
-	}
-	if inspection.ActiveInvocations != 0 {
-		refusals = append(refusals, StoreMigrationRefusal{Code: "invocation.active", Detail: fmt.Sprintf("%d invocations are active", inspection.ActiveInvocations)})
-	}
-	if inspection.PendingEffects != 0 {
-		refusals = append(refusals, StoreMigrationRefusal{Code: "effect.pending", Detail: fmt.Sprintf("%d external effects are journaled", inspection.PendingEffects)})
-	}
-	return refusals
+	return inspection.ActivityFindings()
 }

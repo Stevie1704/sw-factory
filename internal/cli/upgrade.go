@@ -51,13 +51,13 @@ type upgradePlanDocument struct {
 
 // migrateStoreDocument is the JSON result of upgrade migrate-store.
 type migrateStoreDocument struct {
-	SchemaVersion int                             `json:"schema_version"`
-	Command       string                          `json:"command"`
-	Outcome       string                          `json:"outcome"`
-	Migration     *store.Migration                `json:"migration,omitempty"`
-	RolledBack    bool                            `json:"rolled_back_interrupted_write,omitempty"`
-	Refusals      []factory.StoreMigrationRefusal `json:"refusals"`
-	Error         *errorDocument                  `json:"error,omitempty"`
+	SchemaVersion int                    `json:"schema_version"`
+	Command       string                 `json:"command"`
+	Outcome       string                 `json:"outcome"`
+	Migration     *store.Migration       `json:"migration,omitempty"`
+	RolledBack    bool                   `json:"rolled_back_interrupted_write,omitempty"`
+	Refusals      []store.UpgradeFinding `json:"refusals"`
+	Error         *errorDocument         `json:"error,omitempty"`
 }
 
 // migrateStoreSchema is the version of the migrate-store document.
@@ -123,7 +123,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 		writeError(errorsOutput, errors.New("upgrade migrate-store needs --json"))
 		return 2
 	}
-	document := migrateStoreDocument{SchemaVersion: migrateStoreSchema, Command: "upgrade migrate-store", Refusals: []factory.StoreMigrationRefusal{}}
+	document := migrateStoreDocument{SchemaVersion: migrateStoreSchema, Command: "upgrade migrate-store", Refusals: []store.UpgradeFinding{}}
 	host, err := config.LoadHost(*configPath)
 	if err == nil && len(host.Repositories) == 0 {
 		err = errors.New("the host configuration registers no repository")
@@ -237,7 +237,9 @@ func observePolicy(registration config.RepositoryRegistration, observation *upgr
 func observeWorker(ctx context.Context, images upgradeImages, policy config.RepositoryConfig, identity version.Identity, observation *upgrade.Observation) {
 	pinned := worker.ImageReference{Name: policy.WorkerBuild.Image, Digest: policy.WorkerBuild.Digest}
 	observation.Worker.Image = pinned.Name + "@" + pinned.Digest
-	if err := images.CheckImage(ctx, pinned); err == nil {
+	if err := images.CheckImage(ctx, pinned); err != nil {
+		observation.Worker.Absence = err.Error()
+	} else {
 		observation.Worker.Present = true
 		if observation.Worker.Release, err = images.ImageRelease(ctx, pinned); err != nil {
 			observation.Worker.Problem = "the release label of the pinned worker image is not readable: " + err.Error()
@@ -250,10 +252,12 @@ func observeWorker(ctx context.Context, images upgradeImages, policy config.Repo
 	observation.BaseImage.Reference = candidates[0]
 	for _, candidate := range candidates {
 		name, digest, _ := strings.Cut(candidate, "@")
-		if images.CheckImage(ctx, worker.ImageReference{Name: name, Digest: digest}) == nil {
+		err := images.CheckImage(ctx, worker.ImageReference{Name: name, Digest: digest})
+		if err == nil {
 			observation.BaseImage = upgrade.ImageObservation{Reference: candidate, Present: true}
 			return
 		}
+		observation.BaseImage.Absence = err.Error()
 	}
 }
 

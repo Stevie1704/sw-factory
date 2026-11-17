@@ -191,7 +191,10 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 		"schema too old":     {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.MinimumUpgradeSchemaVersion - 1 }, "store.schema_unsupported"},
 		"missing base image": {func(o *upgrade.Observation) { o.BaseImage.Present = false }, "worker.base_image_missing"},
 		"live coordinator":   {func(o *upgrade.Observation) { o.CoordinatorRunning = true }, "coordinator.running"},
-		"no registration":    {func(o *upgrade.Observation) { o.Registered = false; o.RegistrationProblem = "no host configuration" }, "registration.missing"},
+		"old coordinator with new worker": {func(o *upgrade.Observation) {
+			o.CoordinatorRunning, o.Worker.Release = true, targetRelease
+		}, "coordinator.worker_mismatch"},
+		"no registration": {func(o *upgrade.Observation) { o.Registered = false; o.RegistrationProblem = "no host configuration" }, "registration.missing"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			observation := idleBeforeUpgrade()
@@ -307,6 +310,37 @@ func TestBuildVerifiesACompleteUpgrade(t *testing.T) {
 	for _, want := range []string{"coordinator.identity", "worker.release", "configuration.valid", "smoke.complete", "store.ready", "doctor.ready", "supervisor.running"} {
 		if !codes[want] {
 			t.Fatalf("verification lacks %s", want)
+		}
+	}
+}
+
+// TestBuildContinuesAfterEachStep verifies that an interruption after each
+// operation is diagnosed from evidence alone: the plan reports the
+// operation as done and names the following one as the continuation.
+func TestBuildContinuesAfterEachStep(t *testing.T) {
+	staleProofAndDoctor := withStep(withStep(verifiedOnboarding(), onboarding.StepGateProof, onboarding.StateStale, ""), onboarding.StepDoctor, onboarding.StateStale, "")
+	steps := []struct {
+		done func(*upgrade.Observation)
+		next upgrade.OperationID
+	}{
+		{func(o *upgrade.Observation) { o.InstalledBinary, o.InstalledIsTarget = targetFactory, true }, upgrade.OperationPrepareResources},
+		{func(o *upgrade.Observation) { o.Onboarding = staleProofAndDoctor }, upgrade.OperationRebuildWorker},
+		{func(o *upgrade.Observation) { o.Worker.Release = targetRelease }, upgrade.OperationGateProof},
+		{func(o *upgrade.Observation) {
+			o.Onboarding = withStep(verifiedOnboarding(), onboarding.StepDoctor, onboarding.StateStale, "")
+		}, upgrade.OperationSkillSmoke},
+		{func(o *upgrade.Observation) {
+			o.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
+		}, upgrade.OperationMigrateStore},
+		{func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion }, upgrade.OperationDoctor},
+		{func(o *upgrade.Observation) { o.Onboarding = verifiedOnboarding() }, upgrade.OperationStartCoordinator},
+	}
+	observation := idleBeforeUpgrade()
+	for index, step := range steps {
+		step.done(&observation)
+		plan := upgrade.Build(observation)
+		if next := nextOperation(plan); next != step.next || len(plan.Blockers) != 0 {
+			t.Fatalf("after step %d: next = %s, blockers %+v; want %s", index, next, plan.Blockers, step.next)
 		}
 	}
 }

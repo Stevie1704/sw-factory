@@ -112,7 +112,10 @@ same online primitive.
 - the coordinator lock was free when the command acquired it.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
-condition. The operator finishes or cancels the work with the current
+condition. The upgrade store migration (`factory upgrade migrate-store`)
+checks only the first three conditions and the lock, because it does not
+replace the store and keeps its pre-migration copy. A checkpoint needs the
+complete list, because restore replaces the store. The operator finishes or cancels the work with the current
 binary first.
 
 ## Manifest, identity, and integrity
