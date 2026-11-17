@@ -29,14 +29,24 @@ Each release `vX.Y.Z` publishes these artifacts on its GitHub release page:
 | --- | --- |
 | `factory_vX.Y.Z_<os>_<arch>.tar.gz` | `bin/factory` and this file as `README.md` |
 | `checksums.txt` | The SHA-256 of each archive and of `release.json` |
-| `release.json` | The version, the source revision, the worker base image, and the support matrix |
+| `release.json` | The version, the source revision, the worker base images, and the support matrix |
 
-The worker base image is `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z`. A release
-refers to it only by digest. `factory version --json` prints that digest as
-`worker_base_image`. The image is published for both worker platforms. It
-carries the pinned Codex, Claude Code, and GitHub Copilot CLI releases, the
-Copilot launcher `factory-copilot`, and the worker-only helpers
-`factory-report` and `factory-worker-headless`. Copilot support is not
+Each release publishes four worker base images for both worker platforms:
+
+| Image | Harnesses | `factory version --json` field |
+| --- | --- | --- |
+| `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z` | Codex, Claude Code, and GitHub Copilot CLI | `worker_base_image` |
+| `ghcr.io/stevie1704/sw-factory-base-codex:vX.Y.Z` | Codex | `worker_base_images.codex` |
+| `ghcr.io/stevie1704/sw-factory-base-claude:vX.Y.Z` | Claude Code | `worker_base_images.claude` |
+| `ghcr.io/stevie1704/sw-factory-base-copilot:vX.Y.Z` | GitHub Copilot CLI | `worker_base_images.copilot` |
+
+A release refers to each image only by digest, and `factory version --json`
+prints those digests. Each image carries its pinned harness releases as native
+executables, the Copilot launcher `factory-copilot` when it includes Copilot,
+and the worker-only helpers `factory-report` and `factory-worker-headless`. No
+image carries Node, npm, Yarn, or Go; a repository worker image adds the
+toolchain that its gates need. [Configuration](https://github.com/Stevie1704/sw-factory/blob/main/docs/configuration.md#worker-base-image-variants)
+describes how a repository selects an image. Copilot support is not
 released yet: a repository can select it only after an operator records a live
 Copilot skill smoke ([GitHub Copilot
 CLI](https://github.com/Stevie1704/sw-factory/blob/main/docs/configuration.md#github-copilot-cli)). Because of this, the host
@@ -117,27 +127,41 @@ harness the repository can select, Copilot included. Prepare
 the new release's resources with `factory onboard prepare`, or run `factory
 onboard`, to do these steps with an agent.
 
+The worker base images of a release with base image variants carry no Node,
+npm, or Yarn. An earlier base image was built on `node:22-bookworm-slim`. A
+repository whose setup or gates call `node`, `npm`, or `npx` must therefore add
+Node to its worker definition before the rebuild, as the Node example in
+[Repository
+initialization](https://github.com/Stevie1704/sw-factory/blob/main/docs/repository-initialization.md#step-2-write-the-worker-image-definition)
+shows. Otherwise its gates fail in the rebuilt image. A repository whose roles
+select only one harness can also move to that harness's variant
+([Configuration](https://github.com/Stevie1704/sw-factory/blob/main/docs/configuration.md#worker-base-image-variants)).
+
 ## Build from source
 
 The development path builds from a checkout with the approved Go toolchain:
 
 ```sh
 make install        # factory, factory-report, and factory-worker-headless
-make worker-build   # the local development worker base image and the worker
+make worker-build   # the local development worker base images and the worker
 ```
 
 A development build names no worker base image. Give `factory onboard prepare`
-or `factory onboard` the base image that `make worker-build` built, pinned by
-its local image ID:
+or `factory onboard` the base images that `make worker-build` built, pinned by
+their local image IDs:
 
 ```sh
-factory onboard prepare --output "<directory>" --json --worker-base-image \
-  "ghcr.io/stevie1704/sw-factory-base@$(docker image inspect ghcr.io/stevie1704/sw-factory-base:v1 --format '{{.Id}}')"
+base=ghcr.io/stevie1704/sw-factory-base
+id() { docker image inspect "$1" --format '{{.Id}}'; }
+factory onboard prepare --output "<directory>" --json \
+  --worker-base-image "$base@$(id $base:v1)" \
+  --worker-base-images "claude=$base-claude@$(id $base-claude:v1),codex=$base-codex@$(id $base-codex:v1),copilot=$base-copilot@$(id $base-copilot:v1)"
 ```
 
 A development build does not check the release label of the worker image.
 
-`make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@sha256:<digest>`
+`make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@sha256:<digest>
+WORKER_BASE_IMAGES=claude=<image>@sha256:<digest>,codex=...,copilot=...`
 packages the archives, `release.json`, and `checksums.txt` into `dist`. Then
 it scans the packaged binaries. The [release
 workflow](https://github.com/Stevie1704/sw-factory/blob/main/.github/workflows/release.yml)

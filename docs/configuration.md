@@ -977,9 +977,11 @@ targets](#harness-override-targets)).
 
 ### Worker image, smoke evidence, and doctor
 
-1. Build the worker image from a base image that has the pinned CLI
-   (`scripts/build-worker.sh` or `make worker-build`) and record the digest in
-   `factory.yaml`.
+1. Build the worker image from a base image variant that has the pinned CLI:
+   `sw-factory-base-copilot` for a Copilot-only repository, otherwise the
+   combined `sw-factory-base` ([Worker base image
+   variants](#worker-base-image-variants)). Use `scripts/build-worker.sh` or
+   `make worker-build`, and record the digest in `factory.yaml`.
 2. Record the live skill smoke for that digest. It is a paid call; run it only
    with the operator's approval:
 
@@ -1209,25 +1211,82 @@ be downgraded by a route. See the README section on workflow routes.
 
 This repository owns a two-layer worker image definition:
 
-- `worker/base.Dockerfile` defines the versioned factory base image. It pins
-  npm and the Codex and Claude Code npm packages through `NPM_VERSION`,
-  `CODEX_VERSION`, and `CLAUDE_VERSION` build arguments, installs Git and the basic worker
-  utilities, and builds the repository's `factory-report` binary into
-  `/usr/local/bin/factory-report` and the headless process helper into
-  `/usr/local/bin/factory-worker-headless`.
-- `worker/Dockerfile` extends that base with the Go toolchain required by this
-  repository's setup and gates. Go and `gofmt` are exposed through
+- `worker/base.Dockerfile` defines the versioned factory base images. Build
+  stages install the pinned Codex, Claude Code, and GitHub Copilot CLI npm
+  packages through `NPM_VERSION`, `CODEX_VERSION`, `CLAUDE_VERSION`, and
+  `COPILOT_VERSION`, and compile `factory-report` and
+  `factory-worker-headless`. Only the native harness executables, their
+  package manifests and licenses, and the two helpers reach the final images.
+  The final images derive from `debian:bookworm-slim` and carry Git, the basic
+  worker utilities, and the stable worker paths. They carry no Node, npm, Yarn,
+  or Go toolchain.
+- `worker/Dockerfile` is the Go project image of this repository. Its
+  `worker-skills` stage bakes the curated worker skills into every harness
+  home, and its default stage adds the Go toolchain that this repository's
+  setup and gates require. Go and `gofmt` are exposed through
   `/usr/local/bin`, because the worker adapter deliberately supplies the fixed
   non-login `PATH` `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`.
 
-Build and verify both images with Docker from the repository root:
+### Worker base image variants
+
+One base definition builds four variants. They share the minimal runtime
+layers and differ only in the harness layers:
+
+| Variant | `--target` | Image | Label `io.github.stevie1704.sw-factory.harnesses` |
+| --- | --- | --- | --- |
+| Combined | `harness-all` (the default) | `ghcr.io/stevie1704/sw-factory-base` | `claude codex copilot` |
+| Codex only | `harness-codex` | `ghcr.io/stevie1704/sw-factory-base-codex` | `codex` |
+| Claude Code only | `harness-claude` | `ghcr.io/stevie1704/sw-factory-base-claude` | `claude` |
+| GitHub Copilot CLI only | `harness-copilot` | `ghcr.io/stevie1704/sw-factory-base-copilot` | `copilot` |
+
+A release tags each variant `vX.Y.Z` and `vX.Y.Z-<arch>` and names each by its
+index digest: `worker_base_image` is the combined image, and
+`worker_base_images` maps `claude`, `codex`, and `copilot` to their variants.
+`factory version --json`, `release.json`, and the `factory onboard prepare`
+manifest carry both. A local `make worker-build` tags the variants
+`<name>:v1` and `<name>-<harness>:v1`.
+
+A repository selects its variant through the `FACTORY_BASE_IMAGE` build
+argument of its worker definition:
+
+- When every role in `role_harness_defaults` selects the same harness and
+  `allowed_overrides` does not contain `harness`, use that harness's variant.
+- Otherwise, use the combined image. This includes a repository that mixes
+  harnesses across roles and a repository that allows harness overrides.
+
+The startup diagnosis probes only the harnesses the repository can select:
+the role defaults and, when `allowed_overrides` contains `harness`, every
+override target. A selected harness that the pinned image does not include
+fails `harness.executable.unusable` with an action that names its variant and
+the combined image. A Run that still reaches such a launch pauses with the
+`harness missing from worker image` reason. Every variant has all three
+harness homes, so one worker definition bakes the skills the same way on each
+variant; a home without its harness stays unused.
+
+Each variant inherits the release label. The Codex and Claude Code commands are
+links to the native executables of their platform packages, and `copilot` is a
+link to the native Copilot executable, which only the launcher
+`factory-copilot` starts. The npm launchers, which need Node, are not in the
+images. `/opt/factory/harnesses/<directory>/package` (`claude-code`, `codex`,
+or `copilot`) keeps the manifest of each published package and its license
+file where the package ships one; Codex ships none and declares `Apache-2.0`
+in its manifest. The image scan therefore still identifies each harness
+release. `.../native` holds the complete platform package.
+
+[Worker image size record](acceptance/worker-image-variants.md) records the
+measured sizes of the variants and of the Go project image.
+
+Build and verify all images with Docker from the repository root:
 
 ```sh
 make worker-build
 ```
 
-The command builds the versioned base image locally, builds the repository
-worker without pulling that base again, verifies the worker as uid `10001`
+The command builds the four versioned base variants locally and verifies each
+one: its harness and release labels, exactly its harnesses at their pinned
+releases, the worker contract, and the absence of Node, npm, Yarn, Go, and
+`gh`. It builds the repository worker on the combined variant without pulling
+that base again, verifies the worker as uid `10001`
 with `HOME=/home/factory`, checks the stable worker paths and required tools,
 and verifies that the digest-qualified reference resolves locally with
 `--pull=never`. The digest is Docker's local content-addressable image ID, so
@@ -1235,7 +1294,7 @@ the configured image must be built locally under the same image name; this is
 deliberate because the worker runtime never pulls. A registry publish workflow
 should replace it with the registry's manifest digest. The command prints the
 exact `worker_build` block to copy into `factory.yaml`. The defaults pin Codex
-`0.148.0`, Claude Code `2.1.325`, and npm `12.2.2`; override those build arguments explicitly
+`0.148.0`, Claude Code `2.1.325`, and the build-stage npm `12.2.2`; override those build arguments explicitly
 when producing a new versioned image. The Go release is not an override: the
 script reads the approved release from the go.mod `toolchain` line, refuses a
 different `GO_VERSION`, and verifies the build metadata of the shipped helpers
@@ -1250,10 +1309,16 @@ and the complete rebuild, publish, repin, and smoke procedure.
 After the image smoke checks, the same command mounts this checkout and runs
 the configured setup, format, vet, test, and build gates under the worker's
 clean baseline environment. After those repository gates, it runs
-`scripts/verify-headless-worker.sh` in the newly built image. That offline,
-real-Docker check uses a deterministic stand-in for each production harness to
-verify the pinned skill roots, exact prompt delivery, report production,
-cancellation, fresh coordinator-process inspection, and native resume.
+`scripts/verify-headless-worker.sh` in the newly built image, and again on the
+`worker-skills` stage of each single-harness variant. That offline,
+real-Docker check verifies only the harnesses that the image's harnesses label
+names. It uses a deterministic stand-in for each harness to verify the pinned
+skill roots, exact prompt delivery, report production, cancellation, fresh
+coordinator-process inspection, and native resume through the worker helpers.
+It then runs each real pinned executable offline: Codex must start and resume
+a native thread, Claude Code must load every curated skill and refuse
+worktree hooks, and the Copilot CLI behind `factory-copilot` must use only the
+projected token, the managed settings, and the curated skills.
 
 The worker image also carries the curated skill set from `worker/skills`, which
 it installs into each harness role home. The digest recorded here therefore
