@@ -19,6 +19,11 @@ var release string
 // -X; every other build leaves it empty.
 var workerBaseImage string
 
+// workerBaseImages lists the single-harness worker base image variants of a
+// release as comma-separated harness=image@sha256:digest pairs. The release
+// build sets it at link time with -X; every other build leaves it empty.
+var workerBaseImages string
+
 // SchemaVersion is the version of the JSON identity document. Increment it
 // when a field changes meaning or is removed.
 const SchemaVersion = 1
@@ -47,6 +52,10 @@ type Identity struct {
 	// WorkerBaseImage is the digest-pinned worker base image the release
 	// names, or empty when the build names none.
 	WorkerBaseImage string `json:"worker_base_image"`
+	// WorkerBaseImages maps each harness name to the digest-pinned base image
+	// variant that contains only that harness. It is empty when the build
+	// names none.
+	WorkerBaseImages map[string]string `json:"worker_base_images"`
 	// Platform is the OS and architecture the binary runs on, as os/arch.
 	Platform string `json:"platform"`
 }
@@ -58,12 +67,13 @@ var pseudoVersion = regexp.MustCompile(`\d{14}-[0-9a-f]{12}`)
 // Current returns the identity of the running binary.
 func Current() Identity {
 	identity := Identity{
-		SchemaVersion:   SchemaVersion,
-		Version:         buildDevelopment,
-		Build:           buildDevelopment,
-		Revision:        unknown,
-		WorkerBaseImage: workerBaseImage,
-		Platform:        runtime.GOOS + "/" + runtime.GOARCH,
+		SchemaVersion:    SchemaVersion,
+		Version:          buildDevelopment,
+		Build:            buildDevelopment,
+		Revision:         unknown,
+		WorkerBaseImage:  workerBaseImage,
+		WorkerBaseImages: parseWorkerBaseImages(workerBaseImages),
+		Platform:         runtime.GOOS + "/" + runtime.GOARCH,
 	}
 	info, ok := debug.ReadBuildInfo()
 	if ok {
@@ -84,6 +94,18 @@ func Current() Identity {
 		identity.Version, identity.Build = info.Main.Version, buildRelease
 	}
 	return identity
+}
+
+// parseWorkerBaseImages reads the link-time list of harness=image pairs.
+// The release packaging validates every pair before it links the list.
+func parseWorkerBaseImages(list string) map[string]string {
+	images := map[string]string{}
+	for _, pair := range strings.Split(list, ",") {
+		if harness, image, ok := strings.Cut(pair, "="); ok {
+			images[harness] = image
+		}
+	}
+	return images
 }
 
 // isTaggedModuleVersion reports whether Go recorded a tagged module version

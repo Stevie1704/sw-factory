@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,18 @@ import (
 
 // releaseBaseImage is the worker base image the packaged test release names.
 var releaseBaseImage = "ghcr.io/stevie1704/sw-factory-base@sha256:" + strings.Repeat("ef", 32)
+
+// releaseBaseImages are the single-harness worker base image variants the
+// packaged test release names.
+var releaseBaseImages = map[string]string{
+	"claude":  "ghcr.io/stevie1704/sw-factory-base-claude@sha256:" + strings.Repeat("c1", 32),
+	"codex":   "ghcr.io/stevie1704/sw-factory-base-codex@sha256:" + strings.Repeat("c2", 32),
+	"copilot": "ghcr.io/stevie1704/sw-factory-base-copilot@sha256:" + strings.Repeat("c3", 32),
+}
+
+// releaseBaseImagesVariable is the WORKER_BASE_IMAGES value of the packaged
+// test release.
+var releaseBaseImagesVariable = "WORKER_BASE_IMAGES=claude=" + releaseBaseImages["claude"] + ",codex=" + releaseBaseImages["codex"] + ",copilot=" + releaseBaseImages["copilot"]
 
 // releaseRevision is the source revision the packaged test release names.
 var releaseRevision = strings.Repeat("0a", 20)
@@ -40,7 +53,7 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	pack := exec.Command("./scripts/package-release.sh")
 	// An explicit revision keeps the test independent of Git metadata, which
 	// the worker gate's sanitized source copy does not carry.
-	pack.Env = append(os.Environ(), "VERSION=v9.8.7", "REVISION="+releaseRevision, "WORKER_BASE_IMAGE="+releaseBaseImage, "PLATFORMS="+platform, "DIST_DIR="+dist)
+	pack.Env = append(os.Environ(), "VERSION=v9.8.7", "REVISION="+releaseRevision, "WORKER_BASE_IMAGE="+releaseBaseImage, releaseBaseImagesVariable, "PLATFORMS="+platform, "DIST_DIR="+dist)
 	if output, err := pack.CombinedOutput(); err != nil {
 		t.Fatalf("package-release.sh: %v\n%s", err, output)
 	}
@@ -79,27 +92,29 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	environment := hostWithoutGo(t, root)
 	encoded := runInstalled(t, environment, root, binary, "version", "--json")
 	var identity struct {
-		Version         string `json:"version"`
-		Build           string `json:"build"`
-		WorkerBaseImage string `json:"worker_base_image"`
+		Version          string            `json:"version"`
+		Build            string            `json:"build"`
+		WorkerBaseImage  string            `json:"worker_base_image"`
+		WorkerBaseImages map[string]string `json:"worker_base_images"`
 	}
-	if err := json.Unmarshal([]byte(encoded), &identity); err != nil || identity.Version != "v9.8.7" || identity.Build != "release" || identity.WorkerBaseImage != releaseBaseImage {
+	if err := json.Unmarshal([]byte(encoded), &identity); err != nil || identity.Version != "v9.8.7" || identity.Build != "release" || identity.WorkerBaseImage != releaseBaseImage || !maps.Equal(identity.WorkerBaseImages, releaseBaseImages) {
 		t.Fatalf("version --json = %q (%v), want release v9.8.7 naming %s", encoded, err, releaseBaseImage)
 	}
 
 	prepared := filepath.Join(root, "operator home", "prepared resources")
 	encoded = runInstalled(t, environment, root, binary, "onboard", "prepare", "--output", prepared, "--json")
 	var manifest struct {
-		FactoryVersion  string `json:"factory_version"`
-		FactoryCommand  string `json:"factory_command"`
-		WorkerBaseImage string `json:"worker_base_image"`
-		Procedure       string `json:"procedure"`
+		FactoryVersion   string            `json:"factory_version"`
+		FactoryCommand   string            `json:"factory_command"`
+		WorkerBaseImage  string            `json:"worker_base_image"`
+		WorkerBaseImages map[string]string `json:"worker_base_images"`
+		Procedure        string            `json:"procedure"`
 	}
 	resolvedBinary, err := filepath.EvalSymlinks(binary)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := json.Unmarshal([]byte(encoded), &manifest); err != nil || manifest.FactoryVersion != "v9.8.7" || manifest.FactoryCommand != resolvedBinary || manifest.WorkerBaseImage != releaseBaseImage {
+	if err := json.Unmarshal([]byte(encoded), &manifest); err != nil || manifest.FactoryVersion != "v9.8.7" || manifest.FactoryCommand != resolvedBinary || manifest.WorkerBaseImage != releaseBaseImage || !maps.Equal(manifest.WorkerBaseImages, releaseBaseImages) {
 		t.Fatalf("onboard prepare = %q (%v), want release v9.8.7 at %s naming %s", encoded, err, resolvedBinary, releaseBaseImage)
 	}
 	if _, err := os.Stat(manifest.Procedure); err != nil {
@@ -115,8 +130,30 @@ func TestPackagedReleaseOnboardsWithoutGoOrCheckout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(string(recorded), "present\n") || !strings.Contains(string(recorded), "The worker base image is "+releaseBaseImage) {
+	if !strings.HasPrefix(string(recorded), "present\n") || !strings.Contains(string(recorded), "The worker base image is "+releaseBaseImage) ||
+		!strings.Contains(string(recorded), "codex="+releaseBaseImages["codex"]) {
 		t.Fatalf("onboarding harness record = %q, want the release resources and base image", recorded)
+	}
+}
+
+// TestPackageReleaseRefusesAnIncompleteVariantList proves that packaging
+// stops before any build when the release does not name every single-harness
+// worker base image variant by digest.
+func TestPackageReleaseRefusesAnIncompleteVariantList(t *testing.T) {
+	for name, value := range map[string]string{
+		"missing copilot": "claude=" + releaseBaseImages["claude"] + ",codex=" + releaseBaseImages["codex"],
+		"mutable tag":     "claude=" + releaseBaseImages["claude"] + ",codex=ghcr.io/stevie1704/sw-factory-base-codex:v1,copilot=" + releaseBaseImages["copilot"],
+		"unknown harness": "claude=" + releaseBaseImages["claude"] + ",codex=" + releaseBaseImages["codex"] + ",copilot=" + releaseBaseImages["copilot"] + ",gemini=" + releaseBaseImages["codex"],
+	} {
+		t.Run(name, func(t *testing.T) {
+			dist := t.TempDir()
+			pack := exec.Command("./scripts/package-release.sh")
+			pack.Env = append(os.Environ(), "VERSION=v9.8.7", "REVISION="+releaseRevision, "WORKER_BASE_IMAGE="+releaseBaseImage, "WORKER_BASE_IMAGES="+value, "DIST_DIR="+dist, "GO=false")
+			output, err := pack.CombinedOutput()
+			if err == nil || !strings.Contains(string(output), "WORKER_BASE_IMAGES") {
+				t.Fatalf("package-release.sh = %v, output %q; want a refusal naming WORKER_BASE_IMAGES", err, output)
+			}
+		})
 	}
 }
 
@@ -141,7 +178,7 @@ func verifyChecksums(t *testing.T, dist string, names ...string) {
 }
 
 // verifyReleaseManifest proves that release.json names the release, its
-// worker base image, and the documented support matrix.
+// worker base images, and the documented support matrix.
 func verifyReleaseManifest(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -149,18 +186,19 @@ func verifyReleaseManifest(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 	var manifest struct {
-		SchemaVersion   int      `json:"schema_version"`
-		Version         string   `json:"version"`
-		Revision        string   `json:"revision"`
-		WorkerBaseImage string   `json:"worker_base_image"`
-		HostPlatforms   []string `json:"host_platforms"`
-		WorkerPlatforms []string `json:"worker_platforms"`
+		SchemaVersion    int               `json:"schema_version"`
+		Version          string            `json:"version"`
+		Revision         string            `json:"revision"`
+		WorkerBaseImage  string            `json:"worker_base_image"`
+		WorkerBaseImages map[string]string `json:"worker_base_images"`
+		HostPlatforms    []string          `json:"host_platforms"`
+		WorkerPlatforms  []string          `json:"worker_platforms"`
 	}
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		t.Fatalf("release.json = %s: %v", data, err)
 	}
 	wantHosts := "darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
-	if manifest.SchemaVersion != 1 || manifest.Version != "v9.8.7" || manifest.Revision != releaseRevision || manifest.WorkerBaseImage != releaseBaseImage ||
+	if manifest.SchemaVersion != 1 || manifest.Version != "v9.8.7" || manifest.Revision != releaseRevision || manifest.WorkerBaseImage != releaseBaseImage || !maps.Equal(manifest.WorkerBaseImages, releaseBaseImages) ||
 		strings.Join(manifest.HostPlatforms, " ") != wantHosts || strings.Join(manifest.WorkerPlatforms, " ") != "linux/amd64 linux/arm64" {
 		t.Fatalf("release.json = %s, want v9.8.7 at %s, %s, hosts %s, workers linux/amd64 linux/arm64", data, releaseRevision, releaseBaseImage, wantHosts)
 	}

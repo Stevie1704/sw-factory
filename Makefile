@@ -18,8 +18,11 @@ ifneq ($(VERSION),)
 LDFLAGS += -X 'github.com/Stevie1704/sw-factory/internal/version.release=$(VERSION)'
 endif
 
-# make release links this digest-pinned worker base image into every binary.
+# make release links these digest-pinned worker base images into every binary:
+# the combined image, and the single-harness variants as
+# claude=IMAGE@DIGEST,codex=IMAGE@DIGEST,copilot=IMAGE@DIGEST.
 WORKER_BASE_IMAGE ?=
+WORKER_BASE_IMAGES ?=
 DISTDIR ?= dist
 
 BINARIES := \
@@ -90,7 +93,7 @@ run: ## Run the coordinator CLI; pass arguments with ARGS='status --help'.
 report: ## Run the structured-report CLI; pass arguments with ARGS='--help'.
 	$(GO) run ./cmd/factory-report $(ARGS)
 
-worker-build: ## Build and verify the pinned worker images, then print the config digest.
+worker-build: ## Build and verify the worker base variants and the Go worker, then print the config digest.
 	./scripts/build-worker.sh
 
 worker-scan: ## Scan a worker image; pass WORKER_REFERENCE=image@digest (default: factory.yaml).
@@ -99,8 +102,8 @@ worker-scan: ## Scan a worker image; pass WORKER_REFERENCE=image@digest (default
 worker-publish: ## Scan, push, and verify a locally built worker; pass WORKER_REFERENCE=image:tag.
 	./scripts/publish-worker.sh $(WORKER_REFERENCE)
 
-release: toolchain-check ## Package and scan a release; pass VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:digest.
-	VERSION='$(VERSION)' WORKER_BASE_IMAGE='$(WORKER_BASE_IMAGE)' DIST_DIR='$(abspath $(DISTDIR))' GO='$(GO)' ./scripts/package-release.sh
+release: toolchain-check ## Package and scan a release; pass VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:digest WORKER_BASE_IMAGES=claude=...,codex=...,copilot=....
+	VERSION='$(VERSION)' WORKER_BASE_IMAGE='$(WORKER_BASE_IMAGE)' WORKER_BASE_IMAGES='$(WORKER_BASE_IMAGES)' DIST_DIR='$(abspath $(DISTDIR))' GO='$(GO)' ./scripts/package-release.sh
 	./scripts/scan-go-artifacts.sh --source $(DISTDIR)/build/*/bin/factory
 
 clean: ## Remove binaries built by the build target and packaged releases.

@@ -47,6 +47,7 @@ The command prints a JSON manifest. Use only its values from now on:
 | `factory_command` | `<FACTORY_COMMAND>` |
 | `resources` | `<FACTORY_RESOURCES>` |
 | `worker_base_image` | `<FACTORY_BASE_IMAGE>` |
+| `worker_base_images` | `<FACTORY_BASE_IMAGE_VARIANTS>` |
 | top level of the current Git checkout | `<TARGET_REPO_PATH>` |
 
 Run every `factory` command as `factory_command`. A `factory` on `PATH` can be
