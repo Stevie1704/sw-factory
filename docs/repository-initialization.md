@@ -942,36 +942,41 @@ and the Step 8 proof uses a local issue (see below).
 ## Step 7: record the skill smoke
 
 The skill smoke runs once per worker digest, with the release's script,
-writing its evidence into the target repository:
+writing its evidence into the target repository. `<HARNESSES>` is the
+space-separated list of the harnesses the repository can select: every harness
+in `role_harness_defaults` and, when `allowed_overrides` contains `harness`,
+every override target. For a repository on a single-harness base image it is
+that one harness, for example `codex`:
 
 ~~~sh
 cd "<TARGET_REPO_PATH>"
+HARNESSES="<HARNESSES>" \
 EVIDENCE_FILE="<TARGET_REPO_PATH>/worker/skill-smoke.json" \
 WORKER_IMAGE=<IMAGE_NAME> \
 WORKER_DIGEST=<DIGEST> \
   "<FACTORY_RESOURCES>/scripts/smoke-skills.sh"
 ~~~
 
-Always set `WORKER_IMAGE` and `WORKER_DIGEST`. The script reads the expected
-skill text from `<FACTORY_RESOURCES>`, the resources of the release that built
-the base image.
+Always set `HARNESSES`, `WORKER_IMAGE`, and `WORKER_DIGEST`. Without
+`HARNESSES`, the script smokes Codex and Claude Code, and it fails for a
+harness that the image does not include. The script reads the expected skill
+text from `<FACTORY_RESOURCES>`, the resources of the release that built the
+base image.
 
-It reads the operator's Codex and Claude Code credential files, invokes each
+It reads the operator's credential file of each named harness, invokes each
 harness in the image once per mandated skill, and records the result keyed by
 the digest and the harness version. Startup diagnosis reads that record instead
 of repeating the paid call, and a new digest invalidates it.
 
-The diagnosis checks the Codex and Claude Code skill contracts whatever the
-repository declares in `role_harness_defaults`, because the worker image must
-keep both valid. It checks Copilot only when the repository can select it.
-Recorded smoke evidence is blocking only for harnesses named by
-`role_harness_defaults`, or for each override target when `allowed_overrides`
-contains `harness`; an unselected harness with no record is reported as an
-advisory finding. A single-harness repository can therefore
-smoke only its selected harness by setting `HARNESSES` before running the
-script. When only one credential exists, the smoke reports any harness it was
-asked to prove without a credential and exits nonzero, while startup blocks
-only if that harness is eligible under the repository policy.
+The diagnosis checks the skill contract and the smoke evidence only for the
+harnesses the repository can select, the same list as `<HARNESSES>`. A harness
+the repository cannot select is not checked, so a single-harness base image
+passes for a repository that selects only that harness. A selectable harness
+without a usable executable in the image, without a valid skill contract, or
+without a smoke record blocks startup. When a credential is missing, the smoke
+reports the harness it was asked to prove and exits nonzero; smoke only the
+harnesses whose credentials the operator approved, and startup then blocks
+until every selectable harness has a record.
 
 The smoke looks for `~/.codex/auth.json` and `~/.claude/.credentials.json`, and
 `CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. On macOS,

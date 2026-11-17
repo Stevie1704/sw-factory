@@ -1328,13 +1328,14 @@ boundary. Changing a skill needs a rebuild and a new digest.
 
 The recorded worker skill smoke evidence in `worker/skill-smoke.json` is keyed
 by this digest and by each harness's version, so a new digest invalidates it.
-Re-run `./scripts/smoke-skills.sh` after recording a new digest. Startup
-diagnosis blocks missing evidence for harnesses selected by
-`role_harness_defaults`, or for each harness override target when
-`allowed_overrides` contains `harness`; an unselected Codex or Claude harness
-is reported as an advisory finding. Copilot is diagnosed only when the
-repository can select it, so an image built before Copilot support stays
-valid for a Codex and Claude repository.
+Re-run `./scripts/smoke-skills.sh` after recording a new digest, with
+`HARNESSES` set to the harnesses the repository can select. Startup diagnosis
+checks the skill contract and blocks missing evidence for harnesses selected
+by `role_harness_defaults`, or for each harness override target when
+`allowed_overrides` contains `harness`. A harness the repository cannot select
+is not diagnosed, so a single-harness base image stays valid for a repository
+that selects only that harness, and an image built before Copilot support
+stays valid for a Codex and Claude repository.
 
 For a selectable Copilot, `factory doctor` reports these cases separately:
 
