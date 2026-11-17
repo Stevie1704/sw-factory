@@ -71,20 +71,34 @@ The shared runtime (`debian:bookworm-slim`, the worker packages, and the
 helpers) takes about 227 MB unpacked. Git pulls in Perl, which accounts for
 about 56 MB of it.
 
-## Open acceptance items
+## Publication and repin
 
-These items need a registry push or paid harness credentials, so they follow
-the merge:
+The release workflow published the four variants with release `v0.1.0-rc.4`
+on 2026-11-17. It built, verified, and scanned each variant on `linux/amd64`
+and `linux/arm64` before the push. `release.json`, `factory version --json`,
+and the onboarding manifest of that release link these indexes:
 
-- The release workflow has not published the variants yet. The first
-  `vX.Y.Z` tag after this change publishes them and links their digests.
-- `factory.yaml` still pins the earlier `sw-factory-worker` digest. Repin it to
-  the published Go worker on the combined base with the procedure in [Build
-  toolchain and vulnerability scanning](../supply-chain.md#rebuild-scan-publish-and-repin-the-worker).
-- The offline checks above ran each real harness executable in each variant:
-  Codex started and resumed a native thread, Claude Code loaded every curated
-  skill and refused worktree hooks, and the Copilot CLI behind
-  `factory-copilot` used only the projected token, the managed settings, and
-  the curated skills. A paid skill smoke with real credentials
-  (`scripts/smoke-skills.sh`) for each harness of the repinned image is still
-  open.
+| Variant | Published index |
+| --- | --- |
+| Combined (`worker_base_image`) | `ghcr.io/stevie1704/sw-factory-base@sha256:748984887a051149daff189411f7bb6a41d76b401b77da6567df7ed436a5e2b6` |
+| Codex | `ghcr.io/stevie1704/sw-factory-base-codex@sha256:762dcba0d80eee6568065e1d05b8c80a68bbdba4e10f219c19e39df24a0702a4` |
+| Claude Code | `ghcr.io/stevie1704/sw-factory-base-claude@sha256:59b9f57f70f4fee1e387abcdaa7df22cf96d9c4d9a761cbd7da2e2e09221af88` |
+| Copilot | `ghcr.io/stevie1704/sw-factory-base-copilot@sha256:f22c15517fdc1c6d2ee41f2553fab669720d5eac99cfeb61d1ff622250f9a61e` |
+
+`factory.yaml` pins the Go worker on the combined base,
+`ghcr.io/stevie1704/sw-factory-worker@sha256:e69ce3cf2b7611d558f95bd9f4c3448a3e2c763dbeb861d87cc1010cbae98f2f`.
+It was rebuilt, scanned, published, and repinned with the procedure in [Build
+toolchain and vulnerability scanning](../supply-chain.md#rebuild-scan-publish-and-repin-the-worker):
+
+- The grype and govulncheck scans of the worker are clean.
+- `scripts/smoke-skills.sh` made real, paid Codex calls in that digest. Codex
+  loaded every mandatory skill, and `worker/skill-smoke.json` records the
+  result. Codex is the only harness that the roles of this repository can
+  select.
+- `factory doctor` is ready against that digest. The Codex executable, skill
+  contract, and authentication checks pass.
+
+The offline checks ran each real harness executable in each variant. Codex
+started and resumed a native thread. Claude Code loaded every curated skill
+and refused worktree hooks. The Copilot CLI behind `factory-copilot` used
+only the projected token, the managed settings, and the curated skills.

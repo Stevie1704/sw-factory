@@ -190,6 +190,18 @@
         "standards-review"
       ],
       "verified_at": "2026-10-05T12:58:32Z"
+    },
+    {
+      "image_digest": "sha256:e69ce3cf2b7611d558f95bd9f4c3448a3e2c763dbeb861d87cc1010cbae98f2f",
+      "harness": "codex",
+      "harness_version": "codex-cli 0.148.0",
+      "skills": [
+        "implement",
+        "pr",
+        "specification-review",
+        "standards-review"
+      ],
+      "verified_at": "2026-11-17T19:51:59Z"
     }
   ]
 }
