@@ -49,6 +49,10 @@ const (
 // errInjected is the failure every armed fault returns.
 var errInjected = errors.New("injected external failure")
 
+// failForever arms a fault for more calls than any contract makes, so the
+// external system keeps refusing the mutation.
+const failForever = 100
+
 // fault is one armed failure at one named external mutation.
 type fault struct {
 	operation string
@@ -376,7 +380,7 @@ func (w *effectWorld) Push(context.Context, gitadapter.PushRequest) error {
 // Start launches one worker, reuses a worker with the exact same identity,
 // and refuses a worker whose identity conflicts, like the Docker runtime.
 func (w *effectWorld) Start(_ context.Context, request worker.StartRequest) error {
-	key := request.RunID + "\x00" + request.WorkerID
+	key := workerIdentity(request)
 	if existing, exists := w.workers[key]; exists {
 		if !reflect.DeepEqual(existing, request) {
 			return fmt.Errorf("worker %q already runs another invocation", key)
@@ -384,6 +388,11 @@ func (w *effectWorld) Start(_ context.Context, request worker.StartRequest) erro
 		return nil
 	}
 	return w.mutate(opWorkerLaunch, func() { w.workers[key] = request })
+}
+
+// workerIdentity is the container identity of one worker launch.
+func workerIdentity(request worker.StartRequest) string {
+	return request.RunID + "\x00" + request.WorkerID
 }
 
 // StopWorker stops one worker; stopping is idempotent.
@@ -559,14 +568,14 @@ func effectContracts() []effectContract {
 				_, err := w.journal().PublishClarificationComment(ctx, w.store, contractRepository, w.run.IssueNumber, w.run, 2, body)
 				return err
 			},
-			makeUnsafe: func(w *effectWorld) { w.armWith(opCommentCreate, faultBefore, errInjected, 100) },
+			makeUnsafe: func(w *effectWorld) { w.armWith(opCommentCreate, faultBefore, errInjected, failForever) },
 		},
 		{
 			name: "label transition", kind: store.PendingEffectKindLabelTransition, operation: opLabels,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				return w.journal().ApplyLabels(ctx, w.store, w.run.ID, contractRepository, w.run.IssueNumber, []string{"ordinary", "agent-failed"})
 			},
-			makeUnsafe: func(w *effectWorld) { w.armWith(opLabels, faultBefore, errInjected, 100) },
+			makeUnsafe: func(w *effectWorld) { w.armWith(opLabels, faultBefore, errInjected, failForever) },
 		},
 		{
 			name: "commit status", kind: store.PendingEffectKindCommitStatus, operation: opCommitStatus,
@@ -624,7 +633,8 @@ func effectContracts() []effectContract {
 				return w.journal().StartWorker(ctx, w.store, contractWorkerRequest(w.run.ID, "/invocation"))
 			},
 			makeUnsafe: func(w *effectWorld) {
-				w.workers[w.run.ID+"\x00"] = contractWorkerRequest(w.run.ID, "/another-invocation")
+				conflicting := contractWorkerRequest(w.run.ID, "/another-invocation")
+				w.workers[workerIdentity(conflicting)] = conflicting
 			},
 		},
 		{
@@ -717,9 +727,7 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				if err := contract.apply(ctx, w); err != nil {
 					t.Fatalf("apply error = %v", err)
 				}
-				if left := w.pending(); left != nil {
-					t.Fatalf("journal after apply = %#v, want empty", left)
-				}
+				w.assertJournalEmpty()
 				w.assertApplied(contract.operation, 1)
 			})
 			t.Run("failure before the external call", func(t *testing.T) {
@@ -782,9 +790,7 @@ func (w *effectWorld) replay(ctx context.Context, pending store.PendingEffect) {
 	if _, err := w.journal().Replay(ctx, w.store, pending); err != nil {
 		w.t.Fatalf("Replay() error = %v", err)
 	}
-	if left := w.pending(); left != nil {
-		w.t.Fatalf("journal after replay = %#v, want empty", left)
-	}
+	w.assertJournalEmpty()
 	for operation, count := range w.applied {
 		if count > 1 {
 			w.t.Fatalf("%s applied %d times after replay, want at most once", operation, count)
@@ -797,6 +803,14 @@ func (w *effectWorld) assertApplied(operation string, want int) {
 	w.t.Helper()
 	if got := w.applied[operation]; got != want {
 		w.t.Fatalf("%s applied %d times, want %d (all mutations: %v)", operation, got, want, w.applied)
+	}
+}
+
+// assertJournalEmpty requires that no journal entry remains for the run.
+func (w *effectWorld) assertJournalEmpty() {
+	w.t.Helper()
+	if left := w.pending(); left != nil {
+		w.t.Fatalf("journal = %#v, want empty", left)
 	}
 }
 
@@ -867,6 +881,8 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 			t.Run("stop before the generation reservation", func(t *testing.T) {
 				w := newEffectWorld(t)
 				pending := w.interruptResume(ctx, mode.manual, faultBefore)
+				// Restore the unreserved invocation: the process stopped
+				// after the journal write and before the generation write.
 				w.saveInvocation(contractInvocation(w.run.ID))
 				w.replay(ctx, pending)
 				w.assertApplied(opResume, 1)
@@ -880,6 +896,8 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 			t.Run("failure during replay", func(t *testing.T) {
 				w := newEffectWorld(t)
 				pending := w.interruptResume(ctx, mode.manual, faultBefore)
+				// Restore the unreserved invocation so the replay must
+				// reserve the generation and resume itself.
 				w.saveInvocation(contractInvocation(w.run.ID))
 				w.arm(opResume, faultBefore)
 				if _, err := w.journal().Replay(ctx, w.store, pending); !errors.Is(err, errInjected) {
@@ -896,9 +914,7 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 				if err := w.resume(ctx, mode.manual); !harness.IsRateLimited(err) {
 					t.Fatalf("resume error = %v, want a typed rate limit", err)
 				}
-				if pending := w.pending(); pending != nil {
-					t.Fatalf("journal after the refusal = %#v, want empty", pending)
-				}
+				w.assertJournalEmpty()
 				if err := w.resume(ctx, mode.manual); err != nil {
 					t.Fatalf("retried resume error = %v", err)
 				}
@@ -913,9 +929,7 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 				if _, err := w.journal().Replay(ctx, w.store, pending); !harness.IsRateLimited(err) {
 					t.Fatalf("Replay() error = %v, want a typed rate limit", err)
 				}
-				if left := w.pending(); left != nil {
-					t.Fatalf("journal after the refusal = %#v, want empty", left)
-				}
+				w.assertJournalEmpty()
 				got := w.invocation(original.ID)
 				if got.RecoveryResumeCount != 0 || got.ManualResumeCount != 0 {
 					t.Fatalf("invocation after the refusal = %#v, want the generation rolled back", got)
