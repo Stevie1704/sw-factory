@@ -73,6 +73,7 @@ var commandTable = []commandDefinition{
 	{name: "evaluation-disposition", handler: runEvaluationDisposition},
 	{name: "cleanup", handler: runCleanup},
 	{name: "reset", handler: runReset},
+	{name: "upgrade", handler: runUpgrade},
 }
 
 // Run dispatches the requested CLI command and returns its exit status.

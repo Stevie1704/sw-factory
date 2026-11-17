@@ -386,17 +386,17 @@ func (e evaluator) own(status *StepStatus) {
 	case StepPrepare:
 		e.prepare(status)
 	case StepConfiguration:
-		applyCheck(status, e.observation.Configuration, "write factory.yaml as Step 4 of the procedure describes, then check it with "+e.command()+" config validate --file "+quote(e.plan.Repository+"/factory.yaml")+" --json")
+		applyCheck(status, e.observation.Configuration, "write factory.yaml as Step 4 of the procedure describes, then check it with "+e.command()+" config validate --file "+Quote(e.plan.Repository+"/factory.yaml")+" --json")
 	case StepImage:
 		e.image(status)
 	case StepGateProof:
-		e.recorded(status, "run "+e.command()+" onboard record --plan "+quote(e.observation.PlanPath)+" gate-proof --json")
+		e.recorded(status, "run "+e.command()+" onboard record --plan "+Quote(e.observation.PlanPath)+" gate-proof --json")
 	case StepRegistration:
 		applyCheck(status, e.observation.Registration, "register as Step 6 of the procedure describes, then run onboard plan again with the same --config"+sessionAuthorizationGuidance)
 	case StepSkillSmoke:
 		e.smoke(status)
 	case StepDoctor:
-		e.recorded(status, "run "+e.command()+" onboard record --plan "+quote(e.observation.PlanPath)+" doctor --json")
+		e.recorded(status, "run "+e.command()+" onboard record --plan "+Quote(e.observation.PlanPath)+" doctor --json")
 	case StepLiveProof:
 		e.liveProof(status)
 	}
@@ -407,11 +407,11 @@ func (e evaluator) command() string {
 	if e.observation.FactoryCommand == "" {
 		return "factory"
 	}
-	return quote(e.observation.FactoryCommand)
+	return Quote(e.observation.FactoryCommand)
 }
 
-// quote returns a value that a POSIX shell reads as one word.
-func quote(value string) string {
+// Quote returns a value that a POSIX shell reads as one word.
+func Quote(value string) string {
 	if value != "" && strings.IndexFunc(value, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-@:=+", r))
 	}) < 0 {
@@ -539,13 +539,13 @@ func (e evaluator) smokeCommand(smoke HarnessSmoke) string {
 	image, digest, _ := strings.Cut(e.observation.Inputs[InputWorkerImage], "@")
 	repository := e.plan.Repository
 	return fmt.Sprintf("cd %s && EVIDENCE_FILE=%s WORKER_IMAGE=%s WORKER_DIGEST=%s HARNESSES=%s MANDATORY_SKILLS=%s %s",
-		quote(repository), quote(repository+"/worker/skill-smoke.json"), quote(image), quote(digest), quote(smoke.Harness),
-		quote(strings.Join(smoke.Missing, " ")), quote(e.plan.Resources+"/scripts/smoke-skills.sh"))
+		Quote(repository), Quote(repository+"/worker/skill-smoke.json"), Quote(image), Quote(digest), Quote(smoke.Harness),
+		Quote(strings.Join(smoke.Missing, " ")), Quote(e.plan.Resources+"/scripts/smoke-skills.sh"))
 }
 
 // liveProof evaluates the disposable-issue proof.
 func (e evaluator) liveProof(status *StepStatus) {
-	record := "run " + e.command() + " onboard record --plan " + quote(e.observation.PlanPath) + " live-proof"
+	record := "run " + e.command() + " onboard record --plan " + Quote(e.observation.PlanPath) + " live-proof"
 	proof := e.plan.LiveProof
 	if proof == nil {
 		status.State = StatePending
