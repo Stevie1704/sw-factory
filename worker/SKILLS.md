@@ -140,7 +140,9 @@ middle one costs a model call.
    that selects only that harness.
 
 The smoke exits non-zero when any harness it was asked to prove produced no
-record, so a skipped harness never reads as a pass.
+record, so a skipped harness never reads as a pass. A harness whose version
+probe prints nothing, and a Copilot CLI other than the proved release, are
+skipped before any paid call.
 
 When a harness call exits non-zero, for example with an expired credential,
 the smoke does not report a skill that did not load. It prints the last lines
@@ -153,11 +155,14 @@ the startup diagnosis.
 
 ### Currently recorded
 
-`worker/skill-smoke.json` holds a `codex` record and a `claude` record for the
-pinned digest, so the startup diagnosis passes both `worker skill contract`
-checks.
+`worker/skill-smoke.json` holds a `codex` record for the pinned digest. Codex
+is the only harness that the roles of this repository can select, so the
+startup diagnosis checks only its `worker skill contract`.
 
-There is no `copilot` record, and none may be written without a live run. The
+There is no `copilot` record, and none may be written without a live run.
+`make check` refuses a committed `copilot` record unless
+[the Copilot results](../docs/acceptance/copilot-results.json) record a passed
+live run. The
 smoke can drive Copilot, but no dedicated Copilot credential was available,
 so no live call has happened (release blocker RB-7 in
 [Copilot CLI release evidence](../docs/acceptance/copilot.md)). A repository
