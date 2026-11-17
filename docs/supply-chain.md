@@ -20,8 +20,8 @@ Every build path selects the approved release, or it stops with a diagnosis:
 | --- | --- | --- |
 | `make build`, `make install`, `make test`, `make test-race`, `make release` | The Makefile exports `GOTOOLCHAIN` as the go.mod toolchain line. Go downloads that release when the Go on `PATH` is different. This also applies when you set `GO=/path/to/go`. | `make toolchain-check` compares `go env GOVERSION` with go.mod and stops. Each of these targets runs it first. |
 | CI | `actions/setup-go` reads `go-version-file: go.mod`. The Make targets then select and check the release again. | `make toolchain-check` |
-| Worker base image (`factory-report`, `factory-worker-headless`) | `scripts/build-worker.sh` reads the release from go.mod and passes it as `GO_VERSION`. | The build script refuses a `GO_VERSION` variable that differs from go.mod. After the build, it compares the build metadata of each helper with go.mod. |
-| Worker toolchain (`/usr/local/go`) | The same `GO_VERSION` build argument | The same in-image check runs `go env GOVERSION` and `go version /usr/local/go/bin/go`. |
+| Worker base image variants (`factory-report`, `factory-worker-headless`) | `scripts/build-worker.sh` reads the release from go.mod and passes it as `GO_VERSION`. All four variants copy the helpers from one build stage. | The build script refuses a `GO_VERSION` variable that differs from go.mod. After the build, it compares the build metadata of each helper with go.mod in the Go worker image. |
+| Go project image toolchain (`/usr/local/go`, only in `worker/Dockerfile`) | The same `GO_VERSION` build argument | The same in-image check runs `go env GOVERSION` and `go version /usr/local/go/bin/go`. The base variants carry no Go toolchain. |
 | Plain `docker build` | The `GO_VERSION` defaults in both Dockerfiles | `worker/toolchain_contract_test.go` fails when a default differs from go.mod. |
 
 To approve a new release, change the toolchain line with
@@ -40,7 +40,7 @@ All scanners are pinned to exact versions:
 | Scanner | Pin | Scans |
 | --- | --- | --- |
 | govulncheck | `golang.org/x/vuln/cmd/govulncheck@v1.8.0`, verified by the Go checksum database | Module source, and the build metadata and symbols of each Go binary |
-| grype | `anchore/grype:v0.120.0` by its image index digest | OS packages, npm packages (including both harnesses and npm), and Go modules and toolchains in the final Worker image |
+| grype | `anchore/grype:v0.120.0` by its image index digest | OS packages, the harness npm package manifests that each image keeps beside the native executables, and Go modules and toolchains in a final Worker or base image |
 
 The pins are in `scripts/scan-go-artifacts.sh` and
 `scripts/scan-worker-image.sh`. Change them in a reviewed commit only.
@@ -51,8 +51,9 @@ The pins are in `scripts/scan-go-artifacts.sh` and
 | `make worker-scan` | The pinned `factory.yaml` Worker image. Set `WORKER_REFERENCE=image@digest` to scan a different local image. |
 
 `make worker-scan` never pulls. It scans the image that is already available
-locally. It copies `factory-report`, `factory-worker-headless`, and
-`/usr/local/go/bin/go` out of the image and scans them with govulncheck. Then
+locally. It copies `factory-report`, `factory-worker-headless`, and, when the
+image has one, `/usr/local/go/bin/go` out of the image and scans them with
+govulncheck. A base variant has no Go toolchain; a Go project image has. Then
 it scans the complete image with grype.
 
 The binary scans read the Go release from the build metadata of each artifact.
@@ -121,11 +122,12 @@ scan against the same artifact and database.
 
 ## Rebuild, scan, publish, and repin the Worker
 
-1. `make worker-build`. This builds the base and the Worker with the approved
-   release, and pulls fresh base images. Then it checks the toolchain build
-   metadata in the image. It runs the repository gates inside the image, and
-   it runs the offline headless lifecycle check for both harness adapters and
-   the `factory-report` and `factory-worker-headless` protocol.
+1. `make worker-build`. This builds the four base variants and the Worker
+   with the approved release, and pulls fresh base images. It checks the
+   contents of each variant and the toolchain build metadata in the Worker.
+   It runs the repository gates inside the Worker, and it runs the offline
+   headless lifecycle check for every harness that each image includes and the
+   `factory-report` and `factory-worker-headless` protocol.
 2. `make worker-publish`. This scans the local `v1` tag and stops on any
    status other than `0`. Then it pushes the tag, reads the registry manifest
    digest, pulls `image@digest`, and makes sure that it is the same image. It
@@ -152,29 +154,33 @@ A pushed `vX.Y.Z` tag starts the [release workflow](../.github/workflows/release
 and the support matrix. The workflow keeps every gate of this document:
 
 1. For each worker platform, on a native runner: `scripts/build-worker.sh`
-   builds the base image with `FACTORY_RELEASE=vX.Y.Z` and the approved Go
-   release. Then it builds Software Factory's own worker on that base, checks
-   the toolchain build metadata, runs the repository gates in the image, and
-   runs the headless lifecycle check, including the Go real-worker checks.
-2. `scripts/scan-worker-image.sh` scans that worker image. The worker image
-   contains every layer of the base image. Only a clean scan lets the job push
-   the base image.
-3. The release job joins the two pushed platform manifests into the index
-   `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z`. It reads the index digest and
-   makes sure that the index lists exactly `linux/amd64` and `linux/arm64`.
-4. `make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@<index digest>`
+   builds the four base variants with `FACTORY_RELEASE=vX.Y.Z` and the
+   approved Go release, and checks the contents of each. Then it builds
+   Software Factory's own worker on the combined variant, checks the toolchain
+   build metadata, runs the repository gates in the image, and runs the
+   headless lifecycle check on the worker and on each single-harness variant,
+   including the Go real-worker checks.
+2. `scripts/scan-worker-image.sh` scans that worker image and each of the four
+   base variants. Only clean scans let the job push the variants.
+3. The release job joins the two pushed platform manifests of each variant
+   into its index, for example `ghcr.io/stevie1704/sw-factory-base:vX.Y.Z` and
+   `ghcr.io/stevie1704/sw-factory-base-codex:vX.Y.Z`. It reads each index
+   digest and makes sure that the index lists exactly `linux/amd64` and
+   `linux/arm64`.
+4. `make release VERSION=vX.Y.Z WORKER_BASE_IMAGE=<image>@<index digest>
+   WORKER_BASE_IMAGES=claude=<image>@<digest>,codex=...,copilot=...`
    cross-compiles `factory` for each host platform with the approved Go
-   release, and links the version and the digest. It writes the archives,
+   release, and links the version and the digests. It writes the archives,
    `release.json`, and `checksums.txt`. Then it scans the module source and
    each packaged binary with `scripts/scan-go-artifacts.sh`. A status other
    than `0` stops the release.
 5. `gh release create` publishes the archives, `release.json`, and
    `checksums.txt`.
 
-A release refers to the base image only by its index digest. The tag exists
-for people who browse the registry; no setup step uses it.
+A release refers to each base variant only by its index digest. The tags
+exist for people who browse the registry; no setup step uses them.
 
-The base image carries the label `io.github.stevie1704.sw-factory.release`.
+Every base variant carries the label `io.github.stevie1704.sw-factory.release`.
 A local build sets it to `development`. The startup diagnosis of a release
 coordinator refuses a worker image whose label names another release
 (`worker.release.mismatch`). The new coordinator therefore never runs with

@@ -58,14 +58,17 @@ host registration or Factory checkout. It prints this manifest:
 | `schema_version` | Version of the manifest shape, now `1` |
 | `factory_version`, `factory_revision` | The release and source revision of the build that prepared the directory |
 | `factory_command` | Absolute path of that `factory` executable |
-| `worker_base_image` | Digest-pinned worker base image of the release |
+| `worker_base_image` | Digest-pinned combined worker base image of the release, with every harness |
+| `worker_base_images` | Digest-pinned single-harness worker base images of the release, keyed by `claude`, `codex`, and `copilot`; empty when the build names none |
 | `resources` | Absolute path of the prepared directory |
 | `procedure` | Absolute path of this document in that directory |
 | `resource_identity` | `sha256:` digest of the paths, modes, and contents of all resources |
 
 The agent then reads the file at `procedure` and follows it. In the steps
-below, `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>`
-mean `factory_command`, `resources`, and `worker_base_image`.
+below, `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, `<FACTORY_BASE_IMAGE>`, and
+`<FACTORY_BASE_IMAGE_VARIANTS>` mean `factory_command`, `resources`,
+`worker_base_image`, and `worker_base_images`. `<WORKER_BASE_IMAGE>` means the
+base image that Step 2 selects from them.
 `<TARGET_REPO_PATH>` means the top level of the target checkout.
 
 The directory must be missing or empty. Prepare accepts a directory again only
@@ -117,14 +120,15 @@ factory onboard
 The command prepares the resources as `factory onboard prepare` does, in a new
 directory below the user cache directory. The first message of the session
 names the target repository, that resource directory, the procedure file, and
-the worker base image of the release. It also names `<FACTORY_COMMAND>`, the
+the worker base images of the release. It also names `<FACTORY_COMMAND>`, the
 absolute path of the `factory` executable that started the session. The
 placeholders below mean those values. The command removes the directory when
 the session ends.
 
 ### Rules for both ways
 
-`<FACTORY_BASE_IMAGE>` is always pinned as `image@sha256:digest`.
+`<FACTORY_BASE_IMAGE>` and every image of `<FACTORY_BASE_IMAGE_VARIANTS>` are
+always pinned as `image@sha256:digest`.
 
 Run every `factory` command of this procedure as `<FACTORY_COMMAND>`. The
 agent shell can load a login profile that puts another `factory` build first
@@ -135,9 +139,12 @@ copies skills and runs scripts from it. Docker and network commands can need
 access outside the harness sandbox. The harness then asks you to approve them.
 
 A development build from source names no released worker base image. Pass the
-base image that `make worker-build` built, pinned by digest, with
-`--worker-base-image` to `factory onboard prepare` or `factory onboard`; see [Build from
-source](installation.md#build-from-source).
+combined base image that `make worker-build` built, pinned by digest, with
+`--worker-base-image` to `factory onboard prepare` or `factory onboard`, and
+the single-harness variants with
+`--worker-base-images claude=IMAGE@sha256:DIGEST,codex=...,copilot=...`; see [Build from
+source](installation.md#build-from-source). Without the variants, Step 2 uses
+the combined image.
 
 The agent runs the ordered steps itself. Read and apply `factory guide
 authorization` before acting; it owns the operator-agent authorization contract.
@@ -313,8 +320,10 @@ command -v git jq
 ~~~
 
 `<FACTORY_COMMAND> version --json` must report a `worker_base_image` that
-equals `<FACTORY_BASE_IMAGE>`. Only when the operator passed
-`--worker-base-image` to a development build can it be empty. In all other
+equals `<FACTORY_BASE_IMAGE>` and `worker_base_images` that equal
+`<FACTORY_BASE_IMAGE_VARIANTS>`. Only when the operator passed
+`--worker-base-image` and `--worker-base-images` to a development build can
+they be empty. In all other
 cases, an empty or different value means that the command is not the build
 that prepared the resources: stop and tell the operator. The Docker server platform must be `linux/arm64` or
 `linux/amd64`. The release publishes no worker base image for another
@@ -341,10 +350,31 @@ Collect, from the checkout itself:
 - the dependency manifests and lockfiles, which become `setup_files`;
 - the command that installs dependencies offline from those lockfiles, which
   becomes `setup`;
-- the verification commands the repository already uses, which become `gates`.
+- the verification commands the repository already uses, which become `gates`;
+- every toolchain that `setup` and the gates call, with its version: the
+  language runtime, its package manager, and any compiler or build tool. The
+  pinned version comes from the repository, for example a `.nvmrc`, a
+  `.tool-versions`, a `go.mod` `toolchain` line, or the CI definition.
 
-An existing CI definition is the best source for the gate list, because those
-commands are already known to run without a developer workstation.
+An existing CI definition is the best source for the gate list and the
+toolchain versions, because those commands are already known to run without a
+developer workstation.
+
+The worker base images carry no language toolchain: no Node, npm, Python, Go,
+or Java. Step 2 adds each toolchain of this list to the worker image. A
+command that the gates call and that the list does not name fails in the
+worker.
+
+Then decide the role harnesses with the operator, because Step 2 selects the
+base image from them. Use the operator's existing choices; ask for the choices
+that are still missing, and do not invent them:
+
+- the harness of each role that the repository declares (see
+  [Roles](#roles) for the base and optional roles);
+- whether the repository allows harness overrides, and their targets.
+
+Step 4 records these choices in `role_harness_defaults`, `allowed_overrides`,
+and `override_harnesses`.
 
 ## Step 2: write the worker image definition
 
@@ -360,15 +390,37 @@ A toolchain installed anywhere else is invisible to a gate, whatever a login
 shell would resolve. Expose each required command at a stable `PATH` location
 instead of relying on a profile.
 
-The factory base image `<FACTORY_BASE_IMAGE>` is the base image of the
-installed release, pinned by digest. The release built it from
-`worker/base.Dockerfile` of the same source revision, for `linux/arm64` and
-`linux/amd64`. It carries the pinned Codex, Claude Code, and GitHub Copilot CLI
-releases, the Copilot launcher `factory-copilot`, `factory-report`, `factory-worker-headless`, Git, the `factory` user with uid
-`10001`, and the stable worker paths. It is built on `node:22-bookworm-slim`,
-so `node` and `npm` are already on the fixed `PATH`; no other language runtime
-is. Its label `io.github.stevie1704.sw-factory.release` names the release, and
-the repository worker image inherits it.
+The installed release publishes four worker base images, built from
+`worker/base.Dockerfile` of the same source revision for `linux/arm64` and
+`linux/amd64` and pinned by digest:
+
+| Base image | Harnesses |
+| --- | --- |
+| `<FACTORY_BASE_IMAGE>` | Codex, Claude Code, and GitHub Copilot CLI |
+| `codex` of `<FACTORY_BASE_IMAGE_VARIANTS>` | Codex only |
+| `claude` of `<FACTORY_BASE_IMAGE_VARIANTS>` | Claude Code only |
+| `copilot` of `<FACTORY_BASE_IMAGE_VARIANTS>` | GitHub Copilot CLI only |
+
+Select `<WORKER_BASE_IMAGE>` from the role harnesses that Step 1 decided:
+
+- When every role selects the same harness and the repository does not allow
+  harness overrides, use that harness's variant.
+- Otherwise, use `<FACTORY_BASE_IMAGE>`. A repository that mixes harnesses
+  across roles, or that allows harness overrides, needs every harness it can
+  select. `factory doctor` refuses a selected harness that the image does not
+  include. When the harness choices change later, select the base image
+  again and rebuild.
+- When `<FACTORY_BASE_IMAGE_VARIANTS>` is empty, use `<FACTORY_BASE_IMAGE>`.
+
+Every base image carries its harnesses, the Copilot launcher `factory-copilot`
+when it includes Copilot, `factory-report`, `factory-worker-headless`, Git,
+`bash`, `curl`, `jq`, `less`, `procps`, `ripgrep`, the `factory` user with uid
+`10001`, and the stable worker paths. It is built on `debian:bookworm-slim`
+and carries no language runtime: no Node, npm, Yarn, Python packages, or Go.
+The harnesses are native executables. Its label
+`io.github.stevie1704.sw-factory.release` names the release, its label
+`io.github.stevie1704.sw-factory.harnesses` names its harnesses, and the
+repository worker image inherits both.
 
 The base image does not carry the worker skills. Each repository worker image
 bakes them, so they are pinned by the digest the repository records. Vendor them
@@ -393,17 +445,18 @@ upgrade. The smoke script reads its expected skill text from
 from another release produce a smoke result that proves nothing.
 `<FACTORY_RESOURCES>/worker/SKILLS.md` records the provenance of each skill.
 
-A repository whose toolchain is already in the base image needs only the skill
-layer:
+A repository whose gates need no toolchain beyond the base image needs only
+the skill layer:
 
 ~~~dockerfile
-# worker/Dockerfile — Node repository.
-ARG FACTORY_BASE_IMAGE=<FACTORY_BASE_IMAGE>
+# worker/Dockerfile — repository without a language toolchain.
+ARG FACTORY_BASE_IMAGE=<WORKER_BASE_IMAGE>
 
 FROM ${FACTORY_BASE_IMAGE}
 
 # Each harness reads a skill set from its own role home. Baking the set pins
-# the agent-visible instructions to this image digest.
+# the agent-visible instructions to this image digest. Every base image has
+# all three homes; a home without its harness stays unused.
 COPY --chown=factory:factory skills /home/factory/.codex/skills
 COPY --chown=factory:factory skills /home/factory/.claude/skills
 COPY --chown=factory:factory skills /home/factory/.copilot/skills
@@ -411,28 +464,58 @@ COPY --chown=factory:factory skills /home/factory/.copilot/skills
 USER factory
 ~~~
 
-A repository that needs another toolchain copies it from an official image in a
-second build stage and links the commands its gates call into `/usr/local/bin`.
+A repository that needs a toolchain, which is almost every repository, copies
+each toolchain of the Step 1 list from an official image in a second build
+stage, at the version that Step 1 found, and links the commands its gates call
+into `/usr/local/bin`.
+Select the official image variant that is built on Debian bookworm, so the
+toolchain finds the C library it was built against. For a Node repository:
+
+~~~dockerfile
+# worker/Dockerfile — Node repository.
+ARG FACTORY_BASE_IMAGE=<WORKER_BASE_IMAGE>
+
+FROM node:22-bookworm-slim AS node-toolchain
+
+FROM ${FACTORY_BASE_IMAGE}
+
+COPY --chown=factory:factory skills /home/factory/.codex/skills
+COPY --chown=factory:factory skills /home/factory/.claude/skills
+COPY --chown=factory:factory skills /home/factory/.copilot/skills
+
+USER root
+# The package manager is a script that the node executable loads from
+# /usr/local/lib/node_modules, so copy both and link every command the gates
+# call into the fixed PATH.
+COPY --from=node-toolchain /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-toolchain /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+USER factory
+~~~
+
 Copy everything that toolchain loads at runtime, not only its entry binary: a
 shared-library interpreter and its package manager are easy to leave behind, and
 the image contract check in Step 3 is where that shows up.
 
-Write the `<FACTORY_BASE_IMAGE>` value, with its digest, as the `ARG` default.
+Write the `<WORKER_BASE_IMAGE>` value, with its digest, as the `ARG` default.
 Never use a mutable tag such as `:v1` or `:latest`: the repository image must
-build from the base image of the installed release.
+build from a base image of the installed release.
 
 `<FACTORY_RESOURCES>/worker/Dockerfile` is the worked example for a compiled
-toolchain. It is Software Factory's own worker definition, and its `ARG`
-default is the development base tag; do not copy that default. Keep the build
-context at the `worker` directory, so the `skills` source path stays stable.
+toolchain. It is Software Factory's own Go project image on the combined base
+image, and its `ARG` default is the development base tag; do not copy that
+default. Keep the build context at the `worker` directory, so the `skills`
+source path stays stable.
 
 ## Step 3: build and verify the image
 
-Pull the base image of the release by its digest. The pull needs network
-access to `ghcr.io`. Docker selects the manifest of the daemon's platform:
+Pull the selected base image of the release by its digest. The pull needs
+network access to `ghcr.io`. Docker selects the manifest of the daemon's
+platform:
 
 ~~~sh
-docker pull <FACTORY_BASE_IMAGE>
+docker pull <WORKER_BASE_IMAGE>
 ~~~
 
 A development base image that `make worker-build` built is already local;
@@ -444,7 +527,7 @@ pulling that base again:
 ~~~sh
 cd "<TARGET_REPO_PATH>"
 docker build --pull=false \
-  --build-arg FACTORY_BASE_IMAGE=<FACTORY_BASE_IMAGE> \
+  --build-arg FACTORY_BASE_IMAGE=<WORKER_BASE_IMAGE> \
   --file worker/Dockerfile \
   --tag <IMAGE_NAME>:v1 \
   worker
@@ -475,23 +558,24 @@ docker run --rm --pull=never \
   test -d /work && test -d /git && test -d /cache && test -d /invocation && test -d /results
   test -x /usr/local/bin/factory-report
   test -x /usr/local/bin/factory-worker-headless
-  command -v codex >/dev/null
-  command -v claude >/dev/null
   command -v git >/dev/null
   test "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 '
 ~~~
 
-Extend the command list with every toolchain command the gates call. Then
+Extend the command list with `command -v <harness>` for every harness the
+repository can select, and with every toolchain command the gates call. Then
 verify the headless lifecycle of the new image with the release's script:
 
 ~~~sh
 "<FACTORY_RESOURCES>/scripts/verify-headless-worker.sh" <IMAGE_NAME>@<DIGEST>
 ~~~
 
-The script runs offline fake harnesses through the real worker helpers. Its
-Go command lifetime and resource limit checks need the Factory source, so it
-skips them here; the release ran them against the same base image.
+The script reads the harnesses label and verifies only the harnesses the image
+includes. It runs offline fake harnesses through the real worker helpers, and
+then each real pinned harness executable offline. Its Go command lifetime and
+resource limit checks need the Factory source, so it skips them here; the
+release ran them against the same base image.
 
 ## Step 4: write factory.yaml
 
@@ -582,7 +666,9 @@ writer](configuration.md#optional-pr-writer).
 
 Before writing the role policy in `factory.yaml`, use the operator's existing
 choices of optional roles, harnesses, models, and reasoning effort. Ask for
-choices still missing; do not invent them. A declared `pr_writer` adds the
+choices still missing; do not invent them. Write the role harnesses that Step 1
+decided: a different harness can be missing from the base image that Step 2
+selected. A declared `pr_writer` adds the
 `pr` skill to the smoke in Step 7 for the harness that runs it.
 
 `reasoning_effort_options` values are harness-specific and are validated against
@@ -881,36 +967,41 @@ and the Step 8 proof uses a local issue (see below).
 ## Step 7: record the skill smoke
 
 The skill smoke runs once per worker digest, with the release's script,
-writing its evidence into the target repository:
+writing its evidence into the target repository. `<HARNESSES>` is the
+space-separated list of the harnesses the repository can select: every harness
+in `role_harness_defaults` and, when `allowed_overrides` contains `harness`,
+every override target. For a repository on a single-harness base image it is
+that one harness, for example `codex`:
 
 ~~~sh
 cd "<TARGET_REPO_PATH>"
+HARNESSES="<HARNESSES>" \
 EVIDENCE_FILE="<TARGET_REPO_PATH>/worker/skill-smoke.json" \
 WORKER_IMAGE=<IMAGE_NAME> \
 WORKER_DIGEST=<DIGEST> \
   "<FACTORY_RESOURCES>/scripts/smoke-skills.sh"
 ~~~
 
-Always set `WORKER_IMAGE` and `WORKER_DIGEST`. The script reads the expected
-skill text from `<FACTORY_RESOURCES>`, the resources of the release that built
-the base image.
+Always set `HARNESSES`, `WORKER_IMAGE`, and `WORKER_DIGEST`. Without
+`HARNESSES`, the script smokes Codex and Claude Code, and it fails for a
+harness that the image does not include. The script reads the expected skill
+text from `<FACTORY_RESOURCES>`, the resources of the release that built the
+base image.
 
-It reads the operator's Codex and Claude Code credential files, invokes each
+It reads the operator's credential file of each named harness, invokes each
 harness in the image once per mandated skill, and records the result keyed by
 the digest and the harness version. Startup diagnosis reads that record instead
 of repeating the paid call, and a new digest invalidates it.
 
-The diagnosis checks the Codex and Claude Code skill contracts whatever the
-repository declares in `role_harness_defaults`, because the worker image must
-keep both valid. It checks Copilot only when the repository can select it.
-Recorded smoke evidence is blocking only for harnesses named by
-`role_harness_defaults`, or for each override target when `allowed_overrides`
-contains `harness`; an unselected harness with no record is reported as an
-advisory finding. A single-harness repository can therefore
-smoke only its selected harness by setting `HARNESSES` before running the
-script. When only one credential exists, the smoke reports any harness it was
-asked to prove without a credential and exits nonzero, while startup blocks
-only if that harness is eligible under the repository policy.
+The diagnosis checks the skill contract and the smoke evidence only for the
+harnesses the repository can select, the same list as `<HARNESSES>`. A harness
+the repository cannot select is not checked, so a single-harness base image
+passes for a repository that selects only that harness. A selectable harness
+without a usable executable in the image, without a valid skill contract, or
+without a smoke record blocks startup. When a credential is missing, the smoke
+reports the harness it was asked to prove and exits nonzero; smoke only the
+harnesses whose credentials the operator approved, and startup then blocks
+until every selectable harness has a record.
 
 The smoke looks for `~/.codex/auth.json` and `~/.claude/.credentials.json`, and
 `CODEX_AUTH_PATH` and `CLAUDE_AUTH_PATH` override those defaults. On macOS,
@@ -1049,6 +1140,9 @@ session scope covers it.
 
 - A changed skill, harness version, or toolchain needs a rebuild, a new digest
   in `factory.yaml`, and a new skill smoke record.
+- A role that selects a harness the image does not include, or a newly allowed
+  harness override, needs a rebuild from a base image that includes every
+  selectable harness: usually the combined `<FACTORY_BASE_IMAGE>`.
 - A new Factory release needs the same rebuild from its own base image, with
   freshly vendored skills. A release coordinator refuses a worker image of
   another release: `factory doctor` reports `worker.release.mismatch` until the

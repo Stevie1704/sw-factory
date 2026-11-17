@@ -1,11 +1,15 @@
 #!/bin/sh
 
 # Package one Factory release: a factory binary per supported host platform,
-# each linked with the release version and the digest-pinned worker base image,
-# in its own archive, plus release.json and checksums.txt. The binary embeds
-# every onboarding resource, so the archive needs no Factory checkout or Go.
+# each linked with the release version and the digest-pinned worker base
+# images, in its own archive, plus release.json and checksums.txt. The binary
+# embeds every onboarding resource, so the archive needs no Factory checkout or
+# Go.
 #
-# Usage: VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:DIGEST package-release.sh
+# Usage: VERSION=vX.Y.Z WORKER_BASE_IMAGE=image@sha256:DIGEST \
+#   WORKER_BASE_IMAGES=claude=image@sha256:DIGEST,codex=...,copilot=... package-release.sh
+# WORKER_BASE_IMAGE names the combined base image with every harness;
+# WORKER_BASE_IMAGES names each single-harness variant.
 # REVISION names the source revision for release.json; it defaults to the
 # checkout's HEAD. PLATFORMS narrows the host platforms, for example to the
 # build host in tests. DIST_DIR (default dist) receives the archives; the
@@ -22,15 +26,34 @@ PLATFORMS="${PLATFORMS:-$SUPPORTED_HOST_PLATFORMS}"
 DIST_DIR="${DIST_DIR:-$REPOSITORY_ROOT/dist}"
 VERSION="${VERSION:-}"
 WORKER_BASE_IMAGE="${WORKER_BASE_IMAGE:-}"
+WORKER_BASE_IMAGES="${WORKER_BASE_IMAGES:-}"
+# Every release publishes one single-harness worker base image per harness.
+SUPPORTED_HARNESSES="claude codex copilot"
+PINNED_IMAGE='^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$'
 
 if ! printf '%s\n' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
   echo "VERSION must be a release version such as v1.2.3, got '$VERSION'" >&2
   exit 2
 fi
-if ! printf '%s\n' "$WORKER_BASE_IMAGE" | grep -Eq '^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$'; then
+if ! printf '%s\n' "$WORKER_BASE_IMAGE" | grep -Eq "$PINNED_IMAGE"; then
   echo "WORKER_BASE_IMAGE must be pinned as image@sha256:DIGEST, got '$WORKER_BASE_IMAGE'" >&2
   exit 2
 fi
+# variant_image prints the image WORKER_BASE_IMAGES names for one harness.
+variant_image() {
+  printf '%s\n' "$WORKER_BASE_IMAGES" | tr ',' '\n' | sed -n "s/^$1=//p"
+}
+pairs="$(printf '%s\n' "$WORKER_BASE_IMAGES" | tr ',' '\n' | grep -c . || true)"
+if [ "$pairs" -ne "$(echo $SUPPORTED_HARNESSES | wc -w)" ]; then
+  echo "WORKER_BASE_IMAGES must name exactly one image for each of $SUPPORTED_HARNESSES, got '$WORKER_BASE_IMAGES'" >&2
+  exit 2
+fi
+for harness in $SUPPORTED_HARNESSES; do
+  if ! variant_image "$harness" | grep -Eq "$PINNED_IMAGE"; then
+    echo "WORKER_BASE_IMAGES must name $harness=image@sha256:DIGEST, got '$WORKER_BASE_IMAGES'" >&2
+    exit 2
+  fi
+done
 for platform in $PLATFORMS; do
   case " $SUPPORTED_HOST_PLATFORMS " in
     *" $platform "*) ;;
@@ -48,7 +71,7 @@ if [ -z "$revision" ] && ! revision="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD 
   echo "REVISION must be set when $REPOSITORY_ROOT is not a Git checkout" >&2
   exit 2
 fi
-ldflags="-s -w -X 'github.com/Stevie1704/sw-factory/internal/version.release=$VERSION' -X 'github.com/Stevie1704/sw-factory/internal/version.workerBaseImage=$WORKER_BASE_IMAGE'"
+ldflags="-s -w -X 'github.com/Stevie1704/sw-factory/internal/version.release=$VERSION' -X 'github.com/Stevie1704/sw-factory/internal/version.workerBaseImage=$WORKER_BASE_IMAGE' -X 'github.com/Stevie1704/sw-factory/internal/version.workerBaseImages=$WORKER_BASE_IMAGES'"
 
 # sha256_line prints one checksums.txt line for a file in the current directory.
 sha256_line() {
@@ -88,6 +111,7 @@ cat > "$DIST_DIR/release.json" <<EOF
   "version": "$VERSION",
   "revision": "$revision",
   "worker_base_image": "$WORKER_BASE_IMAGE",
+  "worker_base_images": {"claude": "$(variant_image claude)", "codex": "$(variant_image codex)", "copilot": "$(variant_image copilot)"},
   "host_platforms": $(json_list "$SUPPORTED_HOST_PLATFORMS"),
   "worker_platforms": $(json_list "$SUPPORTED_WORKER_PLATFORMS")
 }

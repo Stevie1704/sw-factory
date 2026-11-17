@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -15,6 +17,17 @@ import (
 
 // testBaseImage is a well-formed digest-pinned worker base image.
 var testBaseImage = "ghcr.io/stevie1704/sw-factory-base@sha256:" + strings.Repeat("cd", 32)
+
+// testBaseImages are well-formed digest-pinned single-harness worker base
+// image variants, and testBaseImagesFlag is their --worker-base-images value.
+var (
+	testBaseImages = map[string]string{
+		"claude":  "ghcr.io/stevie1704/sw-factory-base-claude@sha256:" + strings.Repeat("c1", 32),
+		"codex":   "ghcr.io/stevie1704/sw-factory-base-codex@sha256:" + strings.Repeat("c2", 32),
+		"copilot": "ghcr.io/stevie1704/sw-factory-base-copilot@sha256:" + strings.Repeat("c3", 32),
+	}
+	testBaseImagesFlag = "claude=" + testBaseImages["claude"] + ",codex=" + testBaseImages["codex"] + ",copilot=" + testBaseImages["copilot"]
+)
 
 // onboardFixture creates a target Git checkout, a home directory whose path
 // contains spaces, and a fake harness on PATH. The harness records its working
@@ -56,7 +69,7 @@ func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 	target, record := onboardFixture(t, "codex")
 	var output, errorsOutput bytes.Buffer
 
-	status := cli.Run(context.Background(), []string{"onboard", "--harness", "codex", "--worker-base-image", testBaseImage}, &output, &errorsOutput)
+	status := cli.Run(context.Background(), []string{"onboard", "--harness", "codex", "--worker-base-image", testBaseImage, "--worker-base-images", testBaseImagesFlag}, &output, &errorsOutput)
 
 	if status != 0 {
 		t.Fatalf("status = %d, stderr = %s", status, errorsOutput.String())
@@ -100,6 +113,8 @@ func TestOnboardGivesTheHarnessTheReleaseResources(t *testing.T) {
 		"<FACTORY_COMMAND>",
 		resources + "/docs/repository-initialization.md",
 		"The worker base image is " + testBaseImage,
+		"<FACTORY_BASE_IMAGE_VARIANTS>",
+		"codex=" + testBaseImages["codex"],
 		"guide authorization",
 		"docs/configuration.md decides",
 		"never invent a",
@@ -165,14 +180,15 @@ func TestOnboardRejectsInvalidInput(t *testing.T) {
 
 // onboardingManifest is the documented shape of the prepare manifest.
 type onboardingManifest struct {
-	SchemaVersion    int    `json:"schema_version"`
-	FactoryVersion   string `json:"factory_version"`
-	FactoryRevision  string `json:"factory_revision"`
-	FactoryCommand   string `json:"factory_command"`
-	WorkerBaseImage  string `json:"worker_base_image"`
-	Procedure        string `json:"procedure"`
-	Resources        string `json:"resources"`
-	ResourceIdentity string `json:"resource_identity"`
+	SchemaVersion    int               `json:"schema_version"`
+	FactoryVersion   string            `json:"factory_version"`
+	FactoryRevision  string            `json:"factory_revision"`
+	FactoryCommand   string            `json:"factory_command"`
+	WorkerBaseImage  string            `json:"worker_base_image"`
+	WorkerBaseImages map[string]string `json:"worker_base_images"`
+	Procedure        string            `json:"procedure"`
+	Resources        string            `json:"resources"`
+	ResourceIdentity string            `json:"resource_identity"`
 }
 
 // prepareFixture isolates a host without registration: an empty home whose
@@ -240,10 +256,13 @@ func TestOnboardPrepareExportsTheReleaseResources(t *testing.T) {
 	root, otherFactory := prepareFixture(t)
 	destination := filepath.Join(root, "agent resources", "factory onboarding")
 
-	manifest, status, stderr := runPrepare(t, "--output", destination, "--worker-base-image", testBaseImage)
+	manifest, status, stderr := runPrepare(t, "--output", destination, "--worker-base-image", testBaseImage, "--worker-base-images", testBaseImagesFlag)
 
 	if status != 0 {
 		t.Fatalf("status = %d, stderr = %s", status, stderr)
+	}
+	if !maps.Equal(manifest.WorkerBaseImages, testBaseImages) {
+		t.Errorf("worker_base_images = %v, want %v", manifest.WorkerBaseImages, testBaseImages)
 	}
 	if manifest.SchemaVersion != 1 || manifest.FactoryVersion != "development" || manifest.FactoryRevision == "" {
 		t.Errorf("manifest identity = %+v, want schema 1 of a development build with a revision", manifest)
@@ -289,7 +308,7 @@ func TestOnboardPrepareAcceptsItsOwnEarlierPreparation(t *testing.T) {
 
 	second, status, stderr := runPrepare(t, "--output", destination, "--worker-base-image", testBaseImage)
 
-	if status != 0 || second != first {
+	if status != 0 || !reflect.DeepEqual(second, first) {
 		t.Errorf("second prepare: status = %d, stderr = %s, manifest = %+v; want the first manifest %+v", status, stderr, second, first)
 	}
 }
@@ -354,8 +373,8 @@ func TestOnboardPrepareReportsAnUnavailableDirectory(t *testing.T) {
 }
 
 // TestOnboardPrepareRejectsInvalidInput proves that prepare refuses a missing
-// output, a positional argument, and a missing or mutable worker base image
-// before it writes anything.
+// output, a positional argument, a missing or mutable worker base image, and a
+// mutable or unknown base image variant before it writes anything.
 func TestOnboardPrepareRejectsInvalidInput(t *testing.T) {
 	root, _ := prepareFixture(t)
 	destination := filepath.Join(root, "resources")
@@ -369,6 +388,8 @@ func TestOnboardPrepareRejectsInvalidInput(t *testing.T) {
 		{"positional argument", []string{"--output", destination, "--worker-base-image", testBaseImage, "extra"}, 2, "does not accept positional arguments"},
 		{"development build without base image", []string{"--output", destination}, 1, "pass --worker-base-image"},
 		{"mutable tag", []string{"--output", destination, "--worker-base-image", "ghcr.io/stevie1704/sw-factory-base:v1"}, 2, "must be pinned as IMAGE@sha256:"},
+		{"mutable variant", []string{"--output", destination, "--worker-base-image", testBaseImage, "--worker-base-images", "codex=ghcr.io/stevie1704/sw-factory-base-codex:v1"}, 2, "--worker-base-images"},
+		{"unknown variant harness", []string{"--output", destination, "--worker-base-image", testBaseImage, "--worker-base-images", "cursor=" + testBaseImages["codex"]}, 2, "--worker-base-images"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

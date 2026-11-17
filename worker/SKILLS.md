@@ -129,15 +129,15 @@ middle one costs a model call.
    factory doctor
    ```
 
-   For every shipped harness it probes the pinned image for the installed,
-   unduplicated, model-visible skill set, and then reads the recorded smoke
-   result for that exact digest and harness version. It never makes a model
-   call of its own. The image contract is checked for every shipped harness,
-   while missing smoke evidence blocks only for harnesses selected by
-   `role_harness_defaults`, or for each override target when
-   `allowed_overrides` contains `harness`. Copilot is checked only when the
-   repository can select it. An unselected harness is reported
-   as advisory until the repository can select it.
+   For every harness the repository can select, it probes the pinned image
+   for the installed, unduplicated, model-visible skill set, and then reads
+   the recorded smoke result for that exact digest and harness version. It
+   never makes a model call of its own. A harness is selectable when
+   `role_harness_defaults` names it, or when it is an override target and
+   `allowed_overrides` contains `harness`. Missing smoke evidence for a
+   selectable harness blocks startup. A harness the repository cannot select
+   is not checked, so a single-harness base image passes for a repository
+   that selects only that harness.
 
 The smoke exits non-zero when any harness it was asked to prove produced no
 record, so a skipped harness never reads as a pass.

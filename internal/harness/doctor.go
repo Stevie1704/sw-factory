@@ -115,7 +115,10 @@ type StartupRequest struct {
 }
 
 // StartupChecks returns independent capability, executable, and authentication
-// checks. Every selected harness contributes a check before the run begins.
+// checks. Every harness the policy can select contributes a check before the
+// run begins. A harness the policy cannot select is never probed, so a worker
+// image built from a single-harness base variant passes for a repository that
+// selects only that harness.
 func StartupChecks(request StartupRequest) []doctor.Check {
 	checks := []doctor.Check{nativeResumeCheck(request)}
 	selected := selectedHarnesses(request.Policy)
@@ -124,27 +127,29 @@ func StartupChecks(request StartupRequest) []doctor.Check {
 		checks = append(checks, executableCheck(request, harnessName))
 		checks = append(checks, skillContractCheck(request, harnessName))
 	}
-	checks = append(checks,
-		credentialCheck(request, NameCodex, request.Authentication.CodexAuthPath),
-		credentialCheck(request, NameClaude, request.Authentication.ClaudeAuthPath),
-	)
+	for _, credential := range []struct{ name, path string }{
+		{NameCodex, request.Authentication.CodexAuthPath},
+		{NameClaude, request.Authentication.ClaudeAuthPath},
+	} {
+		if slices.Contains(selected, credential.name) {
+			checks = append(checks, credentialCheck(request, credential.name, credential.path))
+		}
+	}
 	if canSelect(request.Policy, NameCopilot) {
 		checks = append(checks, copilotCredentialCheck(request))
 	}
 	return checks
 }
 
-// selectedHarnesses returns Codex and Claude plus every other harness the
-// policy can select through a role default or an override target, in
-// deterministic order. The worker image is checked for Codex and Claude even
-// when a repository selects only one. A harness added later is probed only
-// when the repository can select it, so an image built before it keeps
-// passing for a repository that does not use it.
+// selectedHarnesses returns every harness the policy can select through a
+// role default or an override target, in deterministic order. An unavailable
+// policy stays fail-closed: the worker image is then checked for Codex and
+// Claude, the harnesses every Factory release has shipped.
 func selectedHarnesses(policy *config.RepositoryConfig) []string {
-	seen := map[string]struct{}{NameClaude: {}, NameCodex: {}}
 	if policy == nil {
 		return []string{NameClaude, NameCodex}
 	}
+	seen := map[string]struct{}{}
 	for _, selected := range policy.RoleHarnessDefaults {
 		name := strings.TrimSpace(string(selected))
 		if name != "" {
@@ -256,10 +261,21 @@ func executableCheck(request StartupRequest, name string) doctor.Check {
 			return doctor.Skipped("harness.executable.not_checked", name+" worker executable", worker.ImageUnavailableReason).WithFacts(harnessFact(name))
 		}
 		if err := checker.CheckHarness(ctx, worker.HarnessCheckRequest{Image: image, Name: name}); err != nil {
-			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", "rebuild or load the pinned worker image with the configured "+name+" harness; an image built before the factory supported "+name+" does not contain it, so rebuild it with the current scripts/build-worker.sh and pin the new digest in worker_build.digest").WithFacts(harnessFact(name))
+			return worker.ProbeFailure(executableUnusable, name+" worker executable", err, "the configured "+name+" executable is not usable in the worker image", missingHarnessAction(name)).WithFacts(harnessFact(name))
 		}
 		return doctor.Success("harness.executable.ready", name+" worker executable").WithFacts(harnessFact(name))
 	}
+}
+
+// missingHarnessAction is the operator action when the pinned worker image
+// has no usable executable for a selected harness. A single-harness base
+// variant contains only its own harness, and an image built before the
+// factory supported the harness contains none of it.
+func missingHarnessAction(name string) string {
+	return "build the repository worker image from a worker base image that includes " + name +
+		": the sw-factory-base-" + name + " variant when every role selects " + name +
+		" and harness overrides are not allowed, otherwise the combined sw-factory-base; an image built before the factory supported " + name +
+		" does not contain it either, so rebuild it with the current scripts/build-worker.sh and pin the new digest in worker_build.digest"
 }
 
 // credentialCheck validates an optional source and, when configured, asks the

@@ -67,20 +67,24 @@ func TestWorkerBuildRefusesAnUnprovedCopilotRelease(t *testing.T) {
 	}
 }
 
-// TestBaseImageInstallsTheCopilotLauncherAndManagedSettings verifies the base
-// image ships the in-worker launcher the adapter calls and the image-owned
-// settings it restores, and never ships the gh CLI, whose login would become
-// a fallback Copilot credential.
+// TestBaseImageInstallsTheCopilotLauncherAndManagedSettings verifies the
+// Copilot harness layer ships the in-worker launcher the adapter calls and the
+// image-owned settings it restores beside the CLI, so every variant with
+// Copilot has them, and that no image ships the gh CLI, whose login would
+// become a fallback Copilot credential.
 func TestBaseImageInstallsTheCopilotLauncherAndManagedSettings(t *testing.T) {
 	base := readRepositoryFile(t, "worker/base.Dockerfile")
+	copilot := stageNamed(t, baseStages(t), "copilot-package").body
 	for _, want := range []string{
-		"COPY worker/factory-copilot /usr/local/bin/factory-copilot",
-		"COPY worker/copilot-settings.json /usr/local/share/factory-copilot/settings.json",
-		"/home/factory/.copilot",
+		"COPY worker/factory-copilot /harness/usr/local/bin/factory-copilot",
+		"COPY worker/copilot-settings.json /harness/usr/local/share/factory-copilot/settings.json",
 	} {
-		if !strings.Contains(base, want) {
-			t.Errorf("base.Dockerfile is missing %q", want)
+		if !strings.Contains(copilot, want) {
+			t.Errorf("the copilot-package stage is missing %q", want)
 		}
+	}
+	if !strings.Contains(base, "/home/factory/.copilot") {
+		t.Error("base.Dockerfile does not create the private Copilot home")
 	}
 	if regexp.MustCompile(`(?m)^\s+gh\s*\\?$`).MatchString(base) {
 		t.Error("base.Dockerfile installs the gh CLI")

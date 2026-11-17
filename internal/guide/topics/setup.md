@@ -46,10 +46,14 @@ directory, and put its `bin` directory on `PATH`. No Go toolchain and no
 Software Factory checkout are needed. Windows and other platforms are not
 supported.
 
-`factory version --json` names the release in `version` and the worker base
-image in `worker_base_image`. That image is pinned by digest and published for
-`linux/arm64` and `linux/amd64`. A development build reports
-`"build": "development"` and an empty `worker_base_image`.
+`factory version --json` names the release in `version` and its four worker
+base images: `worker_base_image` is the combined image with every harness, and
+`worker_base_images` maps `claude`, `codex`, and `copilot` to the image that
+contains only that harness. Each image is pinned by digest and published for
+`linux/arm64` and `linux/amd64`. No base image carries a language toolchain;
+the repository's worker image definition adds the toolchain that its setup and
+gates need. A development build reports `"build": "development"`, an empty
+`worker_base_image`, and empty `worker_base_images`.
 
 ## Where each setting lives
 
@@ -82,12 +86,13 @@ registration. Take every value from the manifest:
   another build.
 - `procedure` is the complete repository initialization procedure. Read it
   in full and follow it from the first step to the last. It names
-  `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, and `<FACTORY_BASE_IMAGE>`;
-  they are `factory_command`, `resources`, and `worker_base_image`.
+  `<FACTORY_COMMAND>`, `<FACTORY_RESOURCES>`, `<FACTORY_BASE_IMAGE>`, and
+  `<FACTORY_BASE_IMAGE_VARIANTS>`; they are `factory_command`, `resources`,
+  `worker_base_image`, and `worker_base_images`.
 - `resource_identity` identifies the exact resources.
 
 The procedure covers the field rules of `factory.yaml`, the worker image
-definition, the worker skills, the image build and digest, the gate proof, the
+definition with its base image and project toolchain, the worker skills, the image build and digest, the gate proof, the
 host registration, and the skill smoke. Two commands work before host
 registration: `factory config validate --file factory.yaml --json` checks the
 policy offline, and `factory onboard verify --repository <checkout> --json`

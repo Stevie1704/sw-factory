@@ -273,15 +273,31 @@ _Avoid_: Host-side agent, coordinator-owned PID, attached process
 **Factory release**:
 A versioned, published build of Software Factory: one archive with the
 `factory` binary per supported host platform, `checksums.txt`, `release.json`,
-and one worker base image. The coordinator of a release accepts only a worker
-image built from the worker base image of the same Factory release.
+and four worker base image variants. The coordinator of a release accepts only
+a worker image built from a worker base image of the same Factory release.
 _Avoid_: Queue release, version (alone)
 
 **Worker base image**:
 The digest-pinned image that a Factory release names and that every repository
-worker image builds on. It carries both harnesses and the worker-only helpers,
-and its label names its Factory release.
+worker image builds on. It carries the worker-only helpers and native harness
+executables, but no language toolchain, and its labels name its Factory
+release and its harnesses. A release publishes four variants: the combined
+image with every harness, and one single-harness variant per harness.
 _Avoid_: Factory image, base tag
+
+**Base image variant**:
+One of the four worker base images of a release: the combined image
+(`worker_base_image`) or the Codex-only, Claude Code-only, or Copilot-only
+image (`worker_base_images`). A repository whose roles select only one harness
+can build on that harness's variant; every other repository builds on the
+combined image.
+_Avoid_: Flavor, edition
+
+**Project image**:
+The repository worker image built on a base image variant, with the curated
+worker skills and the project toolchain its setup and gates need, such as Go
+for Software Factory itself. Its digest is `worker_build.digest`.
+_Avoid_: Toolchain image, Go image
 
 **Release resources**:
 The onboarding procedure, its reference documents, the operator onboarding

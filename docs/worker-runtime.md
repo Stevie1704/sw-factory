@@ -86,13 +86,15 @@ harness never touches another harness's file.
 
 ### GitHub Copilot CLI
 
-The base image installs the Copilot CLI release that
-`docs/spikes/0003-copilot-cli-protocol.md` proved (`COPILOT_VERSION` in
+The combined and Copilot base image variants install the Copilot CLI release
+that `docs/spikes/0003-copilot-cli-protocol.md` proved (`COPILOT_VERSION` in
 `worker/base.Dockerfile`; `scripts/build-worker.sh` reads it from the proof's
-manifest and refuses a different override). The worker image never
-contains the `gh` CLI, because a `gh` login is a fallback Copilot credential.
-An image built before Copilot support has no Copilot files; Codex and Claude
-workers from that image are unchanged.
+manifest and refuses a different override). They carry the native executable
+of its platform package; its npm loader, which needs Node, is not in the
+image. The worker image never contains the `gh` CLI, because a `gh` login is a
+fallback Copilot credential. An image built before Copilot support, and a
+Codex or Claude Code base variant, has no Copilot files; Codex and Claude
+workers from such an image are unchanged.
 
 The Copilot credential is a dedicated token file, never the host `gh` login,
 `GH_TOKEN`, `GITHUB_TOKEN`, Keychain, or `~/.copilot`. Its registered host path

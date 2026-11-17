@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	swfactory "github.com/Stevie1704/sw-factory"
@@ -41,7 +42,9 @@ release. The installed release's resources are at %[2]s. Read
 %[3]s in full and follow its ordered procedure from
 the first step to the last. In the procedure, <FACTORY_RESOURCES> means
 %[2]s. The worker base image is %[4]s; the procedure calls it
-<FACTORY_BASE_IMAGE>. Run every step yourself; do not hand steps back to me.
+<FACTORY_BASE_IMAGE>. The single-harness worker base images are
+%[6]s; the procedure calls them <FACTORY_BASE_IMAGE_VARIANTS>. Run every step
+yourself; do not hand steps back to me.
 
 The resource directory is removed when this session ends. Copy what the
 target repository keeps, and never reference the directory from a committed
@@ -64,14 +67,15 @@ const onboardingManifestSchema = 1
 // Factory build that prepared it. An agent takes every onboarding value from
 // it, so a stale skill or another factory on PATH cannot supply them.
 type onboardingManifest struct {
-	SchemaVersion    int    `json:"schema_version"`
-	FactoryVersion   string `json:"factory_version"`
-	FactoryRevision  string `json:"factory_revision"`
-	FactoryCommand   string `json:"factory_command"`
-	WorkerBaseImage  string `json:"worker_base_image"`
-	Procedure        string `json:"procedure"`
-	Resources        string `json:"resources"`
-	ResourceIdentity string `json:"resource_identity"`
+	SchemaVersion    int               `json:"schema_version"`
+	FactoryVersion   string            `json:"factory_version"`
+	FactoryRevision  string            `json:"factory_revision"`
+	FactoryCommand   string            `json:"factory_command"`
+	WorkerBaseImage  string            `json:"worker_base_image"`
+	WorkerBaseImages map[string]string `json:"worker_base_images"`
+	Procedure        string            `json:"procedure"`
+	Resources        string            `json:"resources"`
+	ResourceIdentity string            `json:"resource_identity"`
 }
 
 // runOnboard prepares the release resources for an agent that already runs,
@@ -103,6 +107,7 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 	flags := newFlagSet("onboard prepare", errorsOutput)
 	destination := flags.String("output", "", "directory that receives the release resources; must be missing, empty, or an earlier preparation of this release")
 	baseImage := baseImageFlag(flags)
+	variants := baseImageVariantsFlag(flags)
 	asJSON := flags.Bool("json", false, "write the manifest as JSON; required")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -119,7 +124,12 @@ func runOnboardPrepare(args []string, output, errorsOutput io.Writer) int {
 		writeError(errorsOutput, err)
 		return status
 	}
-	manifest, err := prepareOnboarding(*destination, *baseImage)
+	variantImages, err := parseBaseImageVariants(*variants)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 2
+	}
+	manifest, err := prepareOnboarding(*destination, *baseImage, variantImages)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -143,6 +153,7 @@ func runOnboardSession(ctx context.Context, args []string, output, errorsOutput 
 	flags := newFlagSet("onboard", errorsOutput)
 	harness := flags.String("harness", string(config.HarnessClaude), "interactive host harness that runs the onboarding: claude or codex (Copilot runs only inside the worker)")
 	baseImage := baseImageFlag(flags)
+	variants := baseImageVariantsFlag(flags)
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -159,6 +170,11 @@ func runOnboardSession(ctx context.Context, args []string, output, errorsOutput 
 		writeError(errorsOutput, err)
 		return status
 	}
+	variantImages, err := parseBaseImageVariants(*variants)
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 2
+	}
 	targetPath, err := gitTopLevel(ctx)
 	if err != nil {
 		writeError(errorsOutput, err)
@@ -170,7 +186,7 @@ func runOnboardSession(ctx context.Context, args []string, output, errorsOutput 
 		return 1
 	}
 	defer func() { _ = os.RemoveAll(sessionDirectory) }()
-	manifest, err := prepareOnboarding(sessionDirectory, *baseImage)
+	manifest, err := prepareOnboarding(sessionDirectory, *baseImage, variantImages)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -188,6 +204,41 @@ func baseImageFlag(flags *flag.FlagSet) *string {
 	return flags.String("worker-base-image", version.Current().WorkerBaseImage, "worker base image as IMAGE@sha256:DIGEST; defaults to the image the release names")
 }
 
+// baseImageVariantsFlag defines the single-harness worker base image flag,
+// which defaults to the variants the release names.
+func baseImageVariantsFlag(flags *flag.FlagSet) *string {
+	return flags.String("worker-base-images", formatBaseImageVariants(version.Current().WorkerBaseImages), "single-harness worker base images as HARNESS=IMAGE@sha256:DIGEST pairs separated by commas; defaults to the variants the release names")
+}
+
+// formatBaseImageVariants writes variant images as sorted HARNESS=IMAGE pairs
+// separated by commas, the form the flag and the prompt use.
+func formatBaseImageVariants(images map[string]string) string {
+	pairs := make([]string, 0, len(images))
+	for harness, image := range images {
+		pairs = append(pairs, harness+"="+image)
+	}
+	slices.Sort(pairs)
+	return strings.Join(pairs, ",")
+}
+
+// parseBaseImageVariants reads the --worker-base-images value. Every pair
+// must name a supported harness once and an image pinned by digest. An empty
+// value names no variant, as in a development build.
+func parseBaseImageVariants(value string) (map[string]string, error) {
+	images := map[string]string{}
+	if value == "" {
+		return images, nil
+	}
+	for _, pair := range strings.Split(value, ",") {
+		harness, image, _ := strings.Cut(pair, "=")
+		if !config.IsKnownHarness(config.Harness(harness)) || !pinnedImage.MatchString(image) || images[harness] != "" {
+			return nil, fmt.Errorf("--worker-base-images must list claude, codex, or copilot at most once each as HARNESS=IMAGE@sha256:DIGEST, got %q", pair)
+		}
+		images[harness] = image
+	}
+	return images, nil
+}
+
 // validateBaseImage refuses a missing or mutable worker base image and returns
 // the exit status for the refusal.
 func validateBaseImage(baseImage string) (int, error) {
@@ -203,7 +254,7 @@ func validateBaseImage(baseImage string) (int, error) {
 // prepareOnboarding exports the release resources into destination and
 // returns their manifest. It is the one preparation path of both onboard
 // prepare and the interactive launcher.
-func prepareOnboarding(destination, baseImage string) (onboardingManifest, error) {
+func prepareOnboarding(destination, baseImage string, variants map[string]string) (onboardingManifest, error) {
 	resources, err := filepath.Abs(destination)
 	if err != nil {
 		return onboardingManifest{}, fmt.Errorf("resolve the onboarding resource directory: %w", err)
@@ -223,10 +274,21 @@ func prepareOnboarding(destination, baseImage string) (onboardingManifest, error
 		FactoryRevision:  build.Revision,
 		FactoryCommand:   command,
 		WorkerBaseImage:  baseImage,
+		WorkerBaseImages: variants,
 		Procedure:        filepath.Join(resources, filepath.FromSlash(onboardingProcedure)),
 		Resources:        resources,
 		ResourceIdentity: identity,
 	}, nil
+}
+
+// promptBaseImageVariants names the variant images in the onboarding prompt,
+// or says that the build names none, so the procedure falls back to the
+// combined image.
+func promptBaseImageVariants(images map[string]string) string {
+	if len(images) == 0 {
+		return "not named by this build (use <FACTORY_BASE_IMAGE>)"
+	}
+	return formatBaseImageVariants(images)
 }
 
 // factoryCommand returns the absolute path of the running factory executable.
@@ -268,7 +330,7 @@ func newSessionResourceDirectory() (string, error) {
 // second working directory, because the procedure copies skills and runs
 // scripts from it.
 func startOnboardingSession(ctx context.Context, harness config.Harness, targetPath string, manifest onboardingManifest, output, errorsOutput io.Writer) error {
-	prompt := fmt.Sprintf(onboardingPrompt, targetPath, manifest.Resources, manifest.Procedure, manifest.WorkerBaseImage, manifest.FactoryCommand)
+	prompt := fmt.Sprintf(onboardingPrompt, targetPath, manifest.Resources, manifest.Procedure, manifest.WorkerBaseImage, manifest.FactoryCommand, promptBaseImageVariants(manifest.WorkerBaseImages))
 	// The prompt comes first: Claude Code's --add-dir accepts several values and
 	// would take a later positional prompt as a directory.
 	session := exec.CommandContext(ctx, string(harness), prompt, "--add-dir", manifest.Resources)

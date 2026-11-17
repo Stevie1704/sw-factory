@@ -81,7 +81,7 @@ The command starts no agent, works offline, and needs no host registration. It
 writes the full [Repository
 initialization](docs/repository-initialization.md) procedure, together with the
 release's own worker skills and scripts, to that directory. Its JSON manifest
-names the exact `factory` executable, the digest-pinned worker base image, and
+names the exact `factory` executable, the digest-pinned worker base images, and
 the procedure file. The agent checks the prerequisites, makes the worker image,
 the pinned digest, and the checked-in `factory.yaml`, registers the host, and
 proves the setup with a disposable issue when authorized under that contract.
@@ -184,6 +184,8 @@ Each operational contract has one owner:
 | GitHub Copilot CLI operator setup, credentials, smoke evidence, and failure actions | [GitHub Copilot CLI](docs/configuration.md#github-copilot-cli) |
 | Release evidence and open live blockers of the Copilot CLI harness | [Copilot CLI release evidence](docs/acceptance/copilot.md) |
 | Worker operations, stable paths, mounts, process state, and isolation | [Worker runtime](docs/worker-runtime.md) |
+| Worker base image variants, harness selection, and the project image | [Worker base image variants](docs/configuration.md#worker-base-image-variants) |
+| Measured worker image sizes before and after the base image variants | [Worker image size record](docs/acceptance/worker-image-variants.md) |
 | Approved Go toolchain, vulnerability scans, suppressions, and the Worker rebuild, publish, and repin procedure | [Build toolchain and vulnerability scanning](docs/supply-chain.md) |
 | Terms, invariants, ownership, and lifecycle model | [Domain glossary](GLOSSARY.md) |
 | Component relationships and architecture overview | [Architecture visualization](docs/architecture.html) |
