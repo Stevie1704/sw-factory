@@ -51,6 +51,12 @@ func stalePayload(extra map[string]any) func(store.Run) any {
 // undecodablePayload returns a payload that no effect kind can decode.
 func undecodablePayload(store.Run) any { return []string{} }
 
+// withPayload replaces the journal payload of one unsafe replay.
+func withPayload(replay unsafeReplay, payload func(store.Run) any) unsafeReplay {
+	replay.payload = payload
+	return replay
+}
+
 // unsafeReplays lists one unsafe journal entry for every durable effect kind.
 func unsafeReplays() []unsafeReplay {
 	workflow := func(name string, kind store.PendingEffectKind, extra map[string]any) unsafeReplay {
@@ -73,8 +79,15 @@ func unsafeReplays() []unsafeReplay {
 		workflow("stale result acceptance", store.PendingEffectKindResultAcceptance, nil),
 		infrastructure("undecodable clarification comment", store.PendingEffectKindClarificationComment),
 		infrastructure("undecodable label transition", store.PendingEffectKindLabelTransition),
-		infrastructure("undecodable commit status", store.PendingEffectKindCommitStatus),
-		infrastructure("undecodable push", store.PendingEffectKindPush),
+		withPayload(infrastructure("commit status without a status publisher", store.PendingEffectKindCommitStatus), func(run store.Run) any {
+			return map[string]any{"Status": map[string]any{"SHA": run.CheckpointSHA, "Context": "factory/test", "State": "success"}}
+		}),
+		withPayload(infrastructure("push of a checkpoint the worktree no longer holds", store.PendingEffectKindPush), func(run store.Run) any {
+			return map[string]any{
+				"Request":     map[string]any{"WorktreePath": run.Worktree, "Branch": run.Branch},
+				"ExpectedSHA": "0000000000000000000000000000000000000abc",
+			}
+		}),
 		infrastructure("undecodable worker launch", store.PendingEffectKindWorkerLaunch),
 		{
 			name: "consumed harness resume generation", kind: store.PendingEffectKindHarnessResume,
@@ -127,7 +140,7 @@ func TestReconcilePausesWithATypedDiscrepancyWhenAnEffectCannotBeReplayed(t *tes
 			run := recoveryRun(worktreePath)
 			run.RepositoryPath = root
 			run.Revision = 5
-			effect := seedUnsafeReplay(ctx, t, databasePath, run, test)
+			seeded := seedUnsafeReplay(ctx, t, databasePath, run, test)
 
 			githubAdapter := &fakeGitHub{
 				issueValue:    tracker.Issue{Number: run.IssueNumber, State: "open", Labels: []string{tracker.LabelAgentRunning}},
@@ -157,7 +170,7 @@ func TestReconcilePausesWithATypedDiscrepancyWhenAnEffectCannotBeReplayed(t *tes
 				t.Fatalf("refused replay crossed Git or code-host effects: checkpoints=%d pushes=%d created=%d updated=%d",
 					len(workspace.checkpoints), len(workspace.pushes), len(pullRequests.createdRequests), len(pullRequests.updatedRequests))
 			}
-			assertPausedJournal(ctx, t, databasePath, effect, test.retained)
+			assertPausedJournal(ctx, t, databasePath, seeded, test.retained)
 		})
 	}
 }
