@@ -604,6 +604,14 @@ checkout, installed binaries, worker images, repository caches, host credential
 sources, GitHub history and label definitions, and remote branches.
 _Avoid_: Cleanup, uninstall, deregistration, factory reinstall
 
+**Upgrade plan**:
+The read-only, versioned document that the target release's binary derives
+from one installation: its blockers, quiescence conditions, ordered
+operations, expected effects, and final verification, with each component
+marked old, new, or incomplete. It describes work and reuses onboarding
+evidence only on an identity match; it is not a workflow controller.
+_Avoid_: Upgrade script, migration plan
+
 **Quiescent installation**:
 An installation in which no coordinator holds the lock, no run is
 non-terminal, no effect is pending, and no invocation, worker, publication, or

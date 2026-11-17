@@ -119,8 +119,9 @@ has no agent session yet. It prepares the same resources in a temporary
 directory and starts an interactive Claude Code session (`--harness codex`
 selects Codex) that follows the same procedure.
 
-Prepare a new directory to rebuild the worker image after an upgrade, or when
-the toolchain or a harness version changes.
+Prepare a new directory to rebuild the worker image when the toolchain or a
+harness version changes. For an upgrade to a new release, follow `factory guide
+maintenance`.
 
 An onboarding can stop at any step. `factory onboard plan --repository
 <checkout> --output <file> --json` keeps an onboarding plan outside the

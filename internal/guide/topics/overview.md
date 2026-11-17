@@ -21,6 +21,7 @@ without host configuration.
 | `factory guide debug` | Diagnose a failure and select a supported recovery action. |
 | `factory guide reporting` | Report a suspected Factory defect. |
 | `factory guide ideation` | Configure ideation sessions, approve a plan publication, and recover a session. |
+| `factory guide maintenance` | Plan, continue, and verify an upgrade to a new release. |
 | `factory guide acceptance` | Measure a release with agent-journey scenarios and write its evidence report. |
 
 ## Discover the installed release
@@ -35,6 +36,7 @@ factory config validate --file factory.yaml --json   # policy check, offline
 factory onboard verify --repository . --json         # gate proof in the worker
 factory onboard status --plan <file> --json          # persisted onboarding progress
 factory status --json       # status as one JSON document
+factory upgrade plan --json # read-only upgrade plan of a target release
 factory <command> -h        # flags of one command
 ```
 
