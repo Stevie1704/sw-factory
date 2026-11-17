@@ -350,10 +350,31 @@ Collect, from the checkout itself:
 - the dependency manifests and lockfiles, which become `setup_files`;
 - the command that installs dependencies offline from those lockfiles, which
   becomes `setup`;
-- the verification commands the repository already uses, which become `gates`.
+- the verification commands the repository already uses, which become `gates`;
+- every toolchain that `setup` and the gates call, with its version: the
+  language runtime, its package manager, and any compiler or build tool. The
+  pinned version comes from the repository, for example a `.nvmrc`, a
+  `.tool-versions`, a `go.mod` `toolchain` line, or the CI definition.
 
-An existing CI definition is the best source for the gate list, because those
-commands are already known to run without a developer workstation.
+An existing CI definition is the best source for the gate list and the
+toolchain versions, because those commands are already known to run without a
+developer workstation.
+
+The worker base images carry no language toolchain: no Node, npm, Python, Go,
+or Java. Step 2 adds each toolchain of this list to the worker image. A
+command that the gates call and that the list does not name fails in the
+worker.
+
+Then decide the role harnesses with the operator, because Step 2 selects the
+base image from them. Use the operator's existing choices; ask for the choices
+that are still missing, and do not invent them:
+
+- the harness of each role that the repository declares (see
+  [Roles](#roles) for the base and optional roles);
+- whether the repository allows harness overrides, and their targets.
+
+Step 4 records these choices in `role_harness_defaults`, `allowed_overrides`,
+and `override_harnesses`.
 
 ## Step 2: write the worker image definition
 
@@ -380,15 +401,15 @@ The installed release publishes four worker base images, built from
 | `claude` of `<FACTORY_BASE_IMAGE_VARIANTS>` | Claude Code only |
 | `copilot` of `<FACTORY_BASE_IMAGE_VARIANTS>` | GitHub Copilot CLI only |
 
-Select `<WORKER_BASE_IMAGE>` from the harnesses that Step 4 records. Decide
-them now with the operator:
+Select `<WORKER_BASE_IMAGE>` from the role harnesses that Step 1 decided:
 
 - When every role selects the same harness and the repository does not allow
   harness overrides, use that harness's variant.
 - Otherwise, use `<FACTORY_BASE_IMAGE>`. A repository that mixes harnesses
   across roles, or that allows harness overrides, needs every harness it can
   select. `factory doctor` refuses a selected harness that the image does not
-  include.
+  include. When the harness choices change later, select the base image
+  again and rebuild.
 - When `<FACTORY_BASE_IMAGE_VARIANTS>` is empty, use `<FACTORY_BASE_IMAGE>`.
 
 Every base image carries its harnesses, the Copilot launcher `factory-copilot`
@@ -443,8 +464,10 @@ COPY --chown=factory:factory skills /home/factory/.copilot/skills
 USER factory
 ~~~
 
-A repository that needs a toolchain copies it from an official image in a
-second build stage and links the commands its gates call into `/usr/local/bin`.
+A repository that needs a toolchain, which is almost every repository, copies
+each toolchain of the Step 1 list from an official image in a second build
+stage, at the version that Step 1 found, and links the commands its gates call
+into `/usr/local/bin`.
 Select the official image variant that is built on Debian bookworm, so the
 toolchain finds the C library it was built against. For a Node repository:
 
@@ -643,7 +666,9 @@ writer](configuration.md#optional-pr-writer).
 
 Before writing the role policy in `factory.yaml`, use the operator's existing
 choices of optional roles, harnesses, models, and reasoning effort. Ask for
-choices still missing; do not invent them. A declared `pr_writer` adds the
+choices still missing; do not invent them. Write the role harnesses that Step 1
+decided: a different harness can be missing from the base image that Step 2
+selected. A declared `pr_writer` adds the
 `pr` skill to the smoke in Step 7 for the harness that runs it.
 
 `reasoning_effort_options` values are harness-specific and are validated against
