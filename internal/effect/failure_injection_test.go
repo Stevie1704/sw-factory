@@ -1061,7 +1061,7 @@ func (w *effectWorld) interruptResume(ctx context.Context, manual bool, phase fa
 		w.t.Fatalf("resume error = %v, want the injected failure", err)
 	}
 	pending := w.pending()
-	if pending == nil || pending.Kind != store.PendingEffectKindHarnessResume {
+	if pending == nil || pending.Kind != harnessResumeContractKind {
 		w.t.Fatalf("journal after the failure = %#v, want one harness_resume entry", pending)
 	}
 	return *pending
