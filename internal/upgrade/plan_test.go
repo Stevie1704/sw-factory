@@ -204,7 +204,6 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 		"previous coordinator": {func(o *upgrade.Observation) {
 			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
 		}, "coordinator.worker_mismatch"},
-		"coordinator without identity": {func(o *upgrade.Observation) { o.Lock = upgrade.LockObservation{Held: true} }, "coordinator.worker_mismatch"},
 		"target coordinator too early": {func(o *upgrade.Observation) { o.Lock = targetCoordinator() }, "coordinator.running"},
 		"store migration holds the lock": {func(o *upgrade.Observation) {
 			o.Lock = upgrade.LockObservation{Held: true, Holder: "store_migration", Version: targetRelease, Revision: "abc123"}

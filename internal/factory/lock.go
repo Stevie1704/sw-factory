@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 
@@ -30,20 +29,24 @@ const (
 	LockHolderReset LockHolder = "reset"
 )
 
-// lockIdentity is the second line of the lock record: what holds the lock
-// and the build that runs it. A previous release writes only the PID line.
-type lockIdentity struct {
+// lockRecord is the content of the lock file: one JSON record with the
+// owner PID, what holds the lock, and the build that runs it.
+type lockRecord struct {
+	PID      int        `json:"pid"`
 	Holder   LockHolder `json:"holder"`
 	Version  string     `json:"version"`
 	Revision string     `json:"revision"`
 }
 
+// errInvalidLockRecord reports a lock file whose content is not a complete
+// lock record.
+var errInvalidLockRecord = errors.New("coordinator lock record is not valid: it needs pid, holder, version, and revision")
+
 // CoordinatorLockRecord is the observed state of one coordinator lock.
 type CoordinatorLockRecord struct {
 	// Held reports that a live process holds the lock.
 	Held bool
-	// Holder, Version, and Revision identify the holder; they are empty for
-	// a record of a previous release.
+	// Holder, Version, and Revision identify the holder of a held lock.
 	Holder   LockHolder
 	Version  string
 	Revision string
@@ -116,7 +119,7 @@ func acquireCoordinatorLock(path string, holder LockHolder) (*coordinatorLock, e
 		_ = releaseCoordinatorFile(file)
 		return nil, fmt.Errorf("seek coordinator lock owner: %w", err)
 	}
-	if _, err := io.WriteString(file, lockRecord(holder)); err != nil {
+	if _, err := io.WriteString(file, newLockRecord(holder)); err != nil {
 		_ = releaseCoordinatorFile(file)
 		return nil, fmt.Errorf("write coordinator lock owner: %w", err)
 	}
@@ -127,63 +130,46 @@ func acquireCoordinatorLock(path string, holder LockHolder) (*coordinatorLock, e
 	return &coordinatorLock{file: file}, nil
 }
 
-// lockRecord returns the lock file content: the owner PID on the first line
-// and the holder identity as JSON on the second.
-func lockRecord(holder LockHolder) string {
+// newLockRecord returns the encoded lock record of this process.
+func newLockRecord(holder LockHolder) string {
 	build := version.Current()
-	identity, _ := json.Marshal(lockIdentity{Holder: holder, Version: build.Version, Revision: build.Revision})
-	return strconv.Itoa(os.Getpid()) + "\n" + string(identity) + "\n"
+	encoded, _ := json.Marshal(lockRecord{PID: os.Getpid(), Holder: holder, Version: build.Version, Revision: build.Revision})
+	return string(encoded) + "\n"
 }
 
 // ObserveCoordinatorLock reports, without taking or changing the lock,
 // whether a live process holds the coordinator lock of one registration and
-// what that process is.
+// what that process is. A held lock with an invalid record is an error.
 func ObserveCoordinatorLock(registration config.RepositoryRegistration) (CoordinatorLockRecord, error) {
 	path := coordinatorLockPath(registration)
 	held, err := coordinatorLockHeld(path)
 	if err != nil || !held {
 		return CoordinatorLockRecord{}, err
 	}
-	content, err := readLockRecord(path)
+	record, err := readLockRecord(path)
 	if err != nil {
 		return CoordinatorLockRecord{}, err
 	}
-	record := CoordinatorLockRecord{Held: true}
-	_, second, _ := strings.Cut(content, "\n")
-	var identity lockIdentity
-	if json.Unmarshal([]byte(strings.TrimSpace(second)), &identity) == nil {
-		record.Holder, record.Version, record.Revision = identity.Holder, identity.Version, identity.Revision
-	}
-	return record, nil
+	return CoordinatorLockRecord{Held: true, Holder: record.Holder, Version: record.Version, Revision: record.Revision}, nil
 }
 
-// readLockRecord reads the content of an existing lock file without taking
-// the lock.
-func readLockRecord(path string) (string, error) {
+// readLockRecord reads and validates the record of an existing lock file
+// without taking the lock.
+func readLockRecord(path string) (lockRecord, error) {
 	file, err := openPrivateLockFile(path, false)
 	if err != nil {
-		return "", err
+		return lockRecord{}, err
 	}
 	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return "", fmt.Errorf("read coordinator lock owner: %w", err)
+		return lockRecord{}, fmt.Errorf("read coordinator lock owner: %w", err)
 	}
-	return string(data), nil
-}
-
-// lockOwnerPID reads the owner PID from the first line of a lock record.
-func lockOwnerPID(path string) (int, error) {
-	content, err := readLockRecord(path)
-	if err != nil {
-		return 0, err
+	var record lockRecord
+	if json.Unmarshal(data, &record) != nil || record.PID <= 0 || record.Holder == "" || record.Version == "" || record.Revision == "" {
+		return lockRecord{}, errInvalidLockRecord
 	}
-	first, _, _ := strings.Cut(content, "\n")
-	pid, err := strconv.Atoi(strings.TrimSpace(first))
-	if err != nil || pid <= 0 {
-		return 0, errors.New("coordinator lock has no valid owner PID")
-	}
-	return pid, nil
+	return record, nil
 }
 
 // release unlocks and closes one coordinator lock, retaining its path as a
@@ -217,10 +203,11 @@ func requestCoordinatorStop(path string) (StopResult, error) {
 	} else if !lockWouldBlock(err) {
 		return StopResult{}, fmt.Errorf("inspect coordinator lock: %w", err)
 	}
-	pid, err := lockOwnerPID(path)
+	record, err := readLockRecord(path)
 	if err != nil {
 		return StopResult{}, err
 	}
+	pid := record.PID
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return StopResult{}, fmt.Errorf("find coordinator process: %w", err)

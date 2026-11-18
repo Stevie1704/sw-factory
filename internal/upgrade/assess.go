@@ -197,18 +197,17 @@ func (p planner) activityBlockers() []Blocker {
 // coordinatorBlocker returns the blocker of the process that holds the
 // coordinator lock, or nil. It uses the identity that the holder recorded:
 // a store migration or a reset is maintenance, a coordinator of another
-// release (or of a previous release that records no identity) mismatches
-// the target worker and store, and a target coordinator is a blocker only
-// before the upgrade is done.
+// release mismatches the target worker and store, and a target coordinator
+// is a blocker only before the upgrade is done.
 func (p planner) coordinatorBlocker() *Blocker {
 	lock := p.observation.Lock
-	stop := "stop it with Ctrl-C in its terminal, or run factory stop " + p.configFlag() + " with the binary that started it"
+	stop := "stop it with Ctrl-C in its terminal, or run factory stop " + p.configFlag()
 	switch {
 	case lock.Problem != "":
 		return &Blocker{Code: "coordinator.unobserved", Detail: lock.Problem, Action: "repair the access to the coordinator lock directory, then plan again"}
 	case !lock.Held:
 		return nil
-	case lock.Holder != "" && lock.Holder != LockHolderCoordinator:
+	case lock.Holder != LockHolderCoordinator:
 		return &Blocker{Code: "maintenance.running", Detail: "the repository lock is held by " + lock.Holder + " of release " + lock.Version,
 			Action: "wait until that command ends, then plan again"}
 	case !p.targetCoordinator():

@@ -190,15 +190,14 @@ func TestCoordinatorLockRecordsItsHolderIdentity(t *testing.T) {
 	if err != nil || !record.Held || record.Holder != LockHolderStoreMigration || record.Version != identity.Version || record.Revision != identity.Revision {
 		t.Fatalf("record = %+v, %v; want the store migration of this build", record, err)
 	}
-	if pid, err := lockOwnerPID(coordinatorLockPath(registration)); err != nil || pid != os.Getpid() {
-		t.Fatalf("lock owner PID = %d, %v; want %d", pid, err, os.Getpid())
+	if stored, err := readLockRecord(coordinatorLockPath(registration)); err != nil || stored.PID != os.Getpid() {
+		t.Fatalf("lock record = %+v, %v; want PID %d", stored, err, os.Getpid())
 	}
 }
 
-// TestCoordinatorLockReportsAPreviousReleaseRecord verifies that a held lock
-// whose record has only a PID, as a previous release writes it, has no
-// holder identity.
-func TestCoordinatorLockReportsAPreviousReleaseRecord(t *testing.T) {
+// TestCoordinatorLockRefusesARecordWithoutIdentity verifies that a held
+// lock whose record has no holder identity is an error, not a coordinator.
+func TestCoordinatorLockRefusesARecordWithoutIdentity(t *testing.T) {
 	t.Parallel()
 	registration := config.RepositoryRegistration{Path: filepath.Join(t.TempDir(), "repository")}
 	owner, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderCoordinator)
@@ -213,8 +212,10 @@ func TestCoordinatorLockReportsAPreviousReleaseRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	record, err := ObserveCoordinatorLock(registration)
-	if err != nil || !record.Held || record.Holder != "" || record.Version != "" {
-		t.Fatalf("record = %+v, %v; want a held lock without identity", record, err)
+	if record, err := ObserveCoordinatorLock(registration); !errors.Is(err, errInvalidLockRecord) {
+		t.Fatalf("ObserveCoordinatorLock() = %+v, %v; want errInvalidLockRecord", record, err)
+	}
+	if _, err := requestCoordinatorStop(coordinatorLockPath(registration)); !errors.Is(err, errInvalidLockRecord) {
+		t.Fatalf("requestCoordinatorStop() error = %v, want errInvalidLockRecord", err)
 	}
 }

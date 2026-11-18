@@ -16,9 +16,9 @@ procedure with the target binary, unless a step names the old binary.
   future maintenance checkpoint needs.
 - The coordinator runs in the foreground. A supervised service is not
   supported yet. Stop the coordinator with Ctrl-C in its terminal, or with
-  `factory stop --config <path>` and the binary that started it. A
-  coordinator, a store migration, and a reset record their kind and release
-  in the coordinator lock, and the plan reads that record.
+  `factory stop --config <path>`. A coordinator, a store migration, and a
+  reset write one lock record with their PID, kind, and release, and the plan
+  reads that record. A lock record without that identity is invalid.
 - There is no automatic update, no live-run migration, and no restore
   command.
 
@@ -72,7 +72,8 @@ store, a lock file, or the onboarding plan to remove a blocker.
 | Code | Meaning |
 | --- | --- |
 | `run.active`, `invocation.active`, `effect.pending`, `session_invocation.active`, `session_command.queued` | Active work fails the migration gate. Finish or cancel it with the binary that reads the store schema. |
-| `coordinator.worker_mismatch` | The lock record names a coordinator of another release, or of a previous release that records no identity. Stop it. Start the target coordinator only at `start_coordinator`. |
+| `coordinator.worker_mismatch` | The lock record names a coordinator of another release. Stop it. Start the target coordinator only at `start_coordinator`. |
+| `coordinator.unobserved` | The lock or its record cannot be read, for example because the record is invalid. Do not edit the lock; follow `factory guide debug`. |
 | `coordinator.running` | A coordinator of the target runs before the upgrade is done. Stop it. |
 | `maintenance.running` | A store migration or a reset holds the repository lock. Wait until it ends. |
 | `worker.release_unreadable` | The release label of the pinned worker image cannot be read. Check that this account can inspect the image. |

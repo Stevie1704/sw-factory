@@ -131,12 +131,11 @@ const LockHolderCoordinator = "coordinator"
 // holder recorded it.
 type LockObservation struct {
 	Held bool
-	// Holder is coordinator, store_migration, or reset; it is empty for a
-	// holder of a previous release that records no identity.
+	// Holder is coordinator, store_migration, or reset.
 	Holder   string
 	Version  string
 	Revision string
-	// Problem tells why the lock could not be observed.
+	// Problem tells why the lock or its record could not be read.
 	Problem string
 }
 
