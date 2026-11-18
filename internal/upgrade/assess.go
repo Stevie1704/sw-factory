@@ -107,8 +107,10 @@ func (p planner) store() ComponentStatus {
 		status.State, status.Detail = StateUnknown, finding.Detail
 	case finding != nil:
 		status.State, status.Detail = StateUnsupported, finding.Detail
-	default:
+	case s.SchemaVersion == store.CurrentSchemaVersion:
 		status.State = StateNew
+	default:
+		status.State, status.Detail = StateOld, fmt.Sprintf("schema %d; the target uses %d", s.SchemaVersion, store.CurrentSchemaVersion)
 	}
 	return status
 }

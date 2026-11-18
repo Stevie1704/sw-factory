@@ -104,6 +104,15 @@ func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 	}
 }
 
+// TestMinimumUpgradeSchemaIsNotNewerThanCurrent fails when the oldest
+// accepted schema is newer than the schema of this build, which would make
+// every store unsupported.
+func TestMinimumUpgradeSchemaIsNotNewerThanCurrent(t *testing.T) {
+	if store.MinimumUpgradeSchemaVersion > store.CurrentSchemaVersion {
+		t.Fatalf("MinimumUpgradeSchemaVersion = %d, newer than CurrentSchemaVersion %d", store.MinimumUpgradeSchemaVersion, store.CurrentSchemaVersion)
+	}
+}
+
 // TestInspectForUpgradeReportsSchemaLimits verifies that a newer and an
 // older schema are reported as unsupported without reading run tables, and
 // that a missing store is not an error.
@@ -113,7 +122,7 @@ func TestInspectForUpgradeReportsSchemaLimits(t *testing.T) {
 	if err != nil || newer.Supported() || newer.SchemaVersion != store.CurrentSchemaVersion+1 {
 		t.Fatalf("newer inspection = %+v, %v; want an unsupported newer schema", newer, err)
 	}
-	older, err := store.InspectForUpgrade(context.Background(), storeFixture(t, store.CurrentSchemaVersion-1))
+	older, err := store.InspectForUpgrade(context.Background(), storeFixture(t, store.MinimumUpgradeSchemaVersion-1))
 	if err != nil || older.Supported() || older.SchemaFinding() == nil || older.SchemaFinding().Code != "store.schema_unsupported" {
 		t.Fatalf("older inspection = %+v, %v; want store.schema_unsupported", older, err)
 	}

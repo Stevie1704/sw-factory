@@ -11,6 +11,12 @@ import (
 	"strings"
 )
 
+// MinimumUpgradeSchemaVersion is the oldest operational-store schema that an
+// upgrade accepts. It is a literal on purpose: it moves only by a deliberate
+// decision, never as a side effect of a new CurrentSchemaVersion, so the next
+// release still accepts the store of this one.
+const MinimumUpgradeSchemaVersion = 52
+
 // UpgradeInspection is the read-only view of an operational store that an
 // upgrade plan needs. Its run facts are set only when Supported is true.
 type UpgradeInspection struct {
@@ -39,10 +45,10 @@ type UpgradeInspection struct {
 	Backups []string
 }
 
-// Supported reports whether this build can inspect the store: only the
-// current schema is supported.
+// Supported reports whether this build can inspect and migrate the store:
+// its schema lies from MinimumUpgradeSchemaVersion to CurrentSchemaVersion.
 func (i UpgradeInspection) Supported() bool {
-	return i.Exists && i.SchemaVersion == CurrentSchemaVersion
+	return i.Exists && i.SchemaVersion >= MinimumUpgradeSchemaVersion && i.SchemaVersion <= CurrentSchemaVersion
 }
 
 // UpgradeFinding is one stable reason why a store must not be migrated now.
@@ -52,8 +58,8 @@ type UpgradeFinding struct {
 	Detail string `json:"detail"`
 }
 
-// SchemaFinding returns the finding of a store that is missing, newer, or
-// older than the current schema, or nil.
+// SchemaFinding returns the finding of a store that is missing, newer than
+// the current schema, or older than the minimum upgrade schema, or nil.
 func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 	switch {
 	case !i.Exists:
@@ -61,7 +67,7 @@ func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 	case i.SchemaVersion > CurrentSchemaVersion:
 		return &UpgradeFinding{Code: "store.schema_newer", Detail: fmt.Sprintf("the store has schema %d; this build supports %d", i.SchemaVersion, CurrentSchemaVersion)}
 	case !i.Supported():
-		return &UpgradeFinding{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build supports only schema %d", i.SchemaVersion, CurrentSchemaVersion)}
+		return &UpgradeFinding{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build accepts %d to %d", i.SchemaVersion, MinimumUpgradeSchemaVersion, CurrentSchemaVersion)}
 	}
 	return nil
 }

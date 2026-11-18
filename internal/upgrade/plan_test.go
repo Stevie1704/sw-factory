@@ -204,7 +204,7 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 		code   string
 	}{
 		"newer schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion + 1 }, "store.schema_newer"},
-		"older schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion - 1 }, "store.schema_unsupported"},
+		"older schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.MinimumUpgradeSchemaVersion - 1 }, "store.schema_unsupported"},
 		"missing base image": {func(o *upgrade.Observation) { o.BaseImage.Present = false }, "worker.base_image_missing"},
 		"previous coordinator": {func(o *upgrade.Observation) {
 			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}

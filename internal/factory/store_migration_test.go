@@ -54,7 +54,7 @@ func TestMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {
 // newer schema are refused and stay unchanged.
 func TestMigrateStoreRefusesAnUnsupportedSchema(t *testing.T) {
 	t.Parallel()
-	for version, code := range map[int]string{store.CurrentSchemaVersion - 1: "store.schema_unsupported", store.CurrentSchemaVersion + 1: "store.schema_newer"} {
+	for version, code := range map[int]string{store.MinimumUpgradeSchemaVersion - 1: "store.schema_unsupported", store.CurrentSchemaVersion + 1: "store.schema_newer"} {
 		registration := migrationRegistration(t, store.StatusComplete)
 		if err := setSchemaVersion(registration.OperationalDataPath, version); err != nil {
 			t.Fatal(err)
