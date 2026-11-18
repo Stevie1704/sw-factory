@@ -143,8 +143,8 @@ rebuild, the digest pin, the skill smoke, and the doctor. It repeats a paid
 smoke only for a skill without a record for the new digest.
 
 Recovery limits: Factory has no supported restore. The automatic
-`<store>.bak-<timestamp>` copy that the migration writes is provenance, not a
-restore point; never copy it over the store. After the migration, the old
+`<store>.bak-<timestamp>` snapshot and its `.json` provenance file that the
+migration writes are provenance, not a restore point; never copy it over the store. After the migration, the old
 binary refuses the store, so it is not a rollback. A database copy does not
 rewind branches, pull requests, comments, labels, workers, or harness
 sessions. [ADR 0032](https://github.com/Stevie1704/sw-factory/blob/main/docs/adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)

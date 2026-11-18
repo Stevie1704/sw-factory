@@ -57,7 +57,7 @@ pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
 | `operations` | The ordered steps with `state` (`done`, `pending`, `blocked`), `command`, `effect`, `paid`, `paid_calls`, `authorization`, and `expected_effects` |
 | `verification` | The checks of the final state and whether each holds |
 | `recovery_limits` | What the upgrade cannot undo |
-| `store_backups` | The existing pre-migration backups, as provenance |
+| `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it |
 
 `command` is always an executable shell command, or empty for a manual step
 that `description` explains. Show the plan to the operator. Apply `factory
@@ -115,10 +115,12 @@ A `done` operation has valid evidence; do not do it again.
 `migrate_store` holds the repository lock, rolls back an interrupted write,
 and refuses work that fails the migration gate, a lock that another process
 holds, and an unsupported schema.
-Then it copies the store to a private `<store>.bak-<timestamp>` file and
-migrates the schema in one transaction. Its document has `outcome`
-(`migrated`, `current`, `refused`, or `error`), `migration` with
-`from_version`, `to_version`, and `backup`, and `refusals`. A release
+Then it takes an online snapshot of the store to a private
+`<store>.bak-<timestamp>` file, writes `<store>.bak-<timestamp>.json` beside
+it with the source and target schema versions, the migrating release, and the
+SHA-256, and migrates the schema in one transaction. Its document has
+`outcome` (`migrated`, `current`, `refused`, or `error`), `migration` with
+`from_version`, `to_version`, `backup`, and `provenance`, and `refusals`. A release
 accepts the store schemas from its oldest accepted schema to its own. This
 release accepts only its own schema, so `migrate_store` reports `current` for
 it and refuses an older schema as `store.schema_unsupported`. No other command
@@ -173,6 +175,20 @@ attach it to a bug report.
 The document has `schema_version: 1`, `outcome` (`created`, `refused`, or
 `error`), `checkpoint` with `path` and `manifest`, and `refusals` with `code`
 and `detail`. A refusal writes nothing. It exits 0 only for `created`.
+
+To check a checkpoint without a configuration, run:
+
+```sh
+factory checkpoint inspect --path <checkpoint directory> --json
+```
+
+`inspect` verifies the manifest, every checksum, the exact file set, and the
+store snapshot (`PRAGMA integrity_check` on a temporary read-only copy). It
+changes no file. Its document has `schema_version: 1`, `outcome` (`verified`,
+`refused`, or `error`), `verified` (true only for `verified`), `checkpoint`
+with `path` and `manifest` when it verifies, and `refusals` with `code` and
+`detail`. It exits 0 only for `verified`. A damaged checkpoint refuses with
+`restore.checkpoint_corrupt` or `restore.checkpoint_incomplete`.
 
 | Code | Meaning |
 | --- | --- |

@@ -182,7 +182,7 @@ func TestMigrateLeavesACurrentStoreUnchanged(t *testing.T) {
 	path := quiescentStore(t, completedRun("run-1", 7))
 	before := fileState(t, path)
 
-	migration, err := store.Migrate(context.Background(), path)
+	migration, err := store.Migrate(context.Background(), path, store.ReleaseIdentity{Version: "test", Revision: "unknown"})
 	if err != nil || migration != (store.Migration{FromVersion: store.CurrentSchemaVersion, ToVersion: store.CurrentSchemaVersion}) {
 		t.Fatalf("Migrate() = %+v, %v; want a no-op at the current schema", migration, err)
 	}
@@ -256,7 +256,10 @@ func TestStoreRefusesPreBaselineSchemas(t *testing.T) {
 					}
 					return err
 				},
-				"migrate": func() error { _, err := store.Migrate(t.Context(), path); return err },
+				"migrate": func() error {
+					_, err := store.Migrate(t.Context(), path, store.ReleaseIdentity{Version: "test", Revision: "unknown"})
+					return err
+				},
 			} {
 				var required *store.MigrationRequiredError
 				if err := open(); !errors.As(err, &required) || required.Version != version {

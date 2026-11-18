@@ -638,6 +638,14 @@ It contains private issue and specification text and no credentials. It is
 not a whole-installation backup and cannot rewind remote state.
 _Avoid_: Backup (alone), pre-migration backup, snapshot (alone)
 
+**Pre-migration backup**:
+An online snapshot of the operational store, taken under the SQLite write lock
+before a schema migration, in `<store>.bak-<timestamp>`. Its provenance file
+`<store>.bak-<timestamp>.json` records the source and target schema versions,
+the migrating release, and the SHA-256. It is migration provenance, not a
+maintenance checkpoint and not a restore point.
+_Avoid_: Checkpoint, restore point, copy (of the store)
+
 
 **Local Markdown issue**:
 An accepted UTF-8 Markdown specification under `docs/issues/` with a schema,

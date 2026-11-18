@@ -463,7 +463,7 @@ func (p planner) operations() []Operation {
 		{ID: OperationMigrateStore, State: provedState(p.proved[OperationMigrateStore]), Effect: doctor.EffectLocalMutation,
 			Description:     "migrate the operational store with the explicit entry point; the old binary refuses the store afterwards",
 			Command:         p.command() + " upgrade migrate-store " + p.configFlag() + " --json",
-			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp>", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
+			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp> with its provenance file <store>.bak-<timestamp>.json", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
 		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectLocalMutation,
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
 			Command:         p.command() + " onboard record --plan " + p.planFile() + " doctor --json",

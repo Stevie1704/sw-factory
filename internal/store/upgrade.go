@@ -111,6 +111,17 @@ type Migration struct {
 	ToVersion   int `json:"to_version"`
 	// Backup is the pre-migration backup path, or empty when nothing migrated.
 	Backup string `json:"backup,omitempty"`
+	// Provenance is the provenance file beside Backup, or empty when nothing migrated.
+	Provenance string `json:"provenance,omitempty"`
+}
+
+// ReleaseIdentity names the Factory build that migrates a store. The
+// pre-migration backup records it in its provenance file.
+type ReleaseIdentity struct {
+	// Version is the release version, or "development" for a development build.
+	Version string `json:"version"`
+	// Revision is the source commit, or "unknown" when the build did not record it.
+	Revision string `json:"revision"`
 }
 
 // InspectForUpgrade reads the schema version and the active work of an
@@ -193,7 +204,8 @@ func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeIn
 }
 
 // migrationBackups lists the pre-migration backups whose name proves they
-// belong to the store at path.
+// belong to the store at path. A provenance file is not a backup, so it is not
+// listed.
 func migrationBackups(path string) ([]string, error) {
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {
@@ -202,7 +214,7 @@ func migrationBackups(path string) ([]string, error) {
 	prefix := filepath.Base(path) + ".bak-"
 	var backups []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) && entry.Type().IsRegular() {
+		if strings.HasPrefix(entry.Name(), prefix) && !strings.HasSuffix(entry.Name(), backupProvenanceSuffix) && entry.Type().IsRegular() {
 			backups = append(backups, filepath.Join(filepath.Dir(path), entry.Name()))
 		}
 	}
@@ -212,10 +224,11 @@ func migrationBackups(path string) ([]string, error) {
 
 // Migrate is the explicit store migration entry point. It opens the store
 // read-write, which rolls back an interrupted transaction, then backs up and
-// migrates an older supported schema in one transaction. A current store is
-// left unchanged. The caller must hold the coordinator lock.
-func Migrate(ctx context.Context, path string) (Migration, error) {
-	opened, migration, err := openMigrating(ctx, path, true)
+// migrates an older supported schema in one transaction. release names this
+// build in the provenance file of the backup. A current store is left
+// unchanged. The caller must hold the coordinator lock.
+func Migrate(ctx context.Context, path string, release ReleaseIdentity) (Migration, error) {
+	opened, migration, err := openMigrating(ctx, path, true, release)
 	if err != nil {
 		return Migration{}, err
 	}
