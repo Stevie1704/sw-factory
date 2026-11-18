@@ -27,8 +27,8 @@ and the operator decides RB-8.
 | Item | Value |
 | --- | --- |
 | Pinned CLI | `@github/copilot@1.0.98` (`GitHub Copilot CLI 1.0.98.`), npm integrity in the spike record |
-| Pinned worker image | `factory.yaml` still pins `sha256:9eed486a…`, which was built before Copilot support and has no `copilot` executable. A repository that selects Copilot needs a rebuilt image first. |
-| Skill smoke | `worker/skill-smoke.json` has no `copilot` record. No live smoke ran, so none was written. |
+| Pinned worker image | `factory.yaml` pins `sha256:e69ce3cf…`, the Go worker on the combined base `sw-factory-base` ([worker image size record](worker-image-variants.md)). The combined base contains the pinned CLI. This repository selects only Codex, so no Copilot run uses this image. |
+| Skill smoke | `worker/skill-smoke.json` has no `copilot` record. No live smoke ran, so none was written. `internal/acceptance:TestCommittedCopilotSmokeEvidenceRequiresARecordedLiveRun` refuses a committed `copilot` record unless [the results file](copilot-results.json) records a passed live run for the same worker digest, and it refuses a record for another CLI release. |
 | Deterministic suite | `make check` passes without network access and without a Copilot credential. |
 
 Consequence for operators: until an operator records a Copilot smoke for a
@@ -55,9 +55,19 @@ token, or an operator decision. A skipped probe is not a pass.
 | RB-7 | With a credential: no built-in GitHub MCP tools, no repository hook, MCP server, plugin, or instruction file, no session export, no update download, and activation of the curated skills. | Live probes and `HARNESSES=copilot scripts/smoke-skills.sh` on the pinned image. |
 | RB-8 | Built-in product telemetry. The CLI has no opt-out except `COPILOT_OFFLINE=true`, which needs BYOK (out of scope), and it writes a device ID. | **Open operator decision**: accept this boundary or keep Copilot disabled. This record does not decide it. |
 
-The live smoke, the live invocation, and the continuation after a process and
-worker restart (#287) are themselves release blockers. They depend on RB-1,
-RB-2, and RB-7.
+Issue #287 adds three live items. Each is a release blocker of its own, and
+each depends on RB-1, RB-2, and RB-7:
+
+| ID | Live evidence that is not recorded |
+| --- | --- |
+| LS-1 | The Copilot skill smoke for the pinned image digest and the proved CLI version: every role-mandated skill quoted in a real reply. |
+| LS-2 | A disposable live invocation that produces a valid `factory-report`. |
+| LS-3 | A continuation of that invocation after a process and worker restart that proves the same native session. |
+
+Spike 0003 observed the update check and the writes below `~/.cache` with the
+npm loader. The base image variants start the native executable directly
+([ADR 0031](../adr/0031-native-harness-base-image-variants.md)), so the RB-7
+run must check the update and cache behavior of that installation again.
 
 ## Traceability of #281
 
@@ -177,6 +187,10 @@ decision.
 
 - `.:TestCopilotLiveProbesRunThroughTheProductionLauncher` keeps the RB-7
   live probes on the production launcher and its managed settings.
+- `internal/harness:TestCopilotSkillSmokeUsesTheProductionIsolationOptions`
+  keeps the skill smoke on the launcher and every isolation option of a
+  production launch, so a recorded smoke describes the production
+  configuration.
 - `worker:TestCopilotManagedSettingsSuppressUnapprovedBehavior`
 - `worker:TestCopilotLauncherRestoresTheManagedConfigurationBeforeEveryLaunch`
 - `worker:TestBaseImageInstallsTheCopilotLauncherAndManagedSettings`
@@ -202,15 +216,19 @@ executables, a fake Docker, and fixtures. No test reads a host credential.
 
 ### 9. Live smoke evidence for the exact CLI and image, skills, report, and resume
 
-Offline status: the tooling is met. Live: **not run; release blocker**. It
-depends on RB-1, RB-2, and RB-7. A missing credential, a skipped harness, a
-failed call, and a reply without the skill text record nothing and exit
-non-zero:
+Offline status: the tooling is met. Live: **not run; release blockers LS-1
+to LS-3**. They depend on RB-1, RB-2, and RB-7. A missing credential, a
+skipped harness, a failed call, a reply without the skill text, an image
+without the proved CLI release, and an empty version record nothing and exit
+non-zero. The last two make no paid call:
 
 - `worker:TestSkillSmokeNeverRecordsCopilotWithoutADedicatedCredential`
 - `worker:TestSkillSmokeNeverRecordsAFailedCopilotCall`
+- `worker:TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall`
+- `worker:TestSkillSmokeNeverRecordsAHarnessWithoutAVersion`
 - `worker:TestSkillSmokeReportsHarnessFailureSeparately`
 - `internal/harness:TestStartupChecksBlockCopilotWithoutSmokeEvidence`
+- `internal/acceptance:TestCommittedCopilotSmokeEvidenceRequiresARecordedLiveRun`
 
 ### 10. Operator instructions and canonical documents, `make check`
 
@@ -222,10 +240,10 @@ in the README table describe Copilot. `make check` passes.
 
 | Criterion | Status |
 | --- | --- |
-| Smoke tooling selects Copilot, checks skill content, keys by digest and CLI version | Met offline (criterion 9 tests). No record exists, because no live run happened. |
-| Disposable live invocation with a valid report and a continuation after restart | **Blocked**: not run (RB-1, RB-2). |
-| Missing credentials, disabled access, unavailable models, and skipped probes never pass; live tests stay out of `make check` | Met offline. The smoke and the live probes run only on an explicit operator call. |
-| Production launch suppresses executable configuration and GitHub tools and keeps curated skills; passive discovery recorded | Configuration tested offline (criterion 7). That the CLI honors it is not proved: **blocked** by RB-7. The passive limitation is recorded above. |
+| Smoke tooling selects Copilot, checks skill content, keys by digest and CLI version | Met offline (criterion 9 tests). The smoke refuses a CLI other than the proved release. No record exists, because no live run happened: **blocked** (LS-1). |
+| Disposable live invocation with a valid report and a continuation after restart | **Blocked**: not run (LS-2, LS-3; RB-1, RB-2). |
+| Missing credentials, disabled access, unavailable models, and skipped probes never pass; live tests stay out of `make check` | Met offline. The smoke and the live probes run only on an explicit operator call. A committed `copilot` record needs a recorded live pass. |
+| Production launch suppresses executable configuration and GitHub tools and keeps curated skills; passive discovery recorded | Configuration tested offline (criterion 7), and the smoke shares it. That the CLI honors it is not proved: **blocked** by RB-7. The passive limitation is recorded above. |
 | Operator documentation | Met: [operator guide](../configuration.md#github-copilot-cli). |
 | Model, harness, and subscription distinction; out-of-scope items | Met: same guide. |
 | README and canonical documents; changed decisions | Met: README, configuration, installation, agent runtime, worker runtime, worker skills, repository initialization, guide topics, [ADR 0028](../adr/0028-copilot-cli-joins-the-headless-seam-behind-live-evidence.md). |
@@ -241,15 +259,28 @@ report` into `docs/acceptance/copilot/`. No report is kept yet, because no
 live result exists. Review raw output by hand before recording; never commit
 a token, a transcript, or a host path.
 
-1. Rebuild the worker image with `scripts/build-worker.sh`, record the new
-   digest in `factory.yaml`, and run `factory doctor`.
+1. Rebuild the worker image with `scripts/build-worker.sh` from the combined
+   `sw-factory-base`. Do not use `sw-factory-base-copilot` for this
+   procedure: the `copilot-mixed-harness-recovery` scenario runs Copilot
+   alone and mixed with Codex and Claude Code, and the results file records
+   one `worker_digest` for all of its parts. Record the new digest in
+   `factory.yaml`, and run `factory doctor`.
 2. Run the live probes on the pinned worker image. They launch Copilot only
    through `factory-copilot`, so they observe the managed settings and the
    curated skills of a real launch:
    `COPILOT_PROBE_LIVE=1 COPILOT_PROBE_TOKEN_FILE=<token file> COPILOT_PROBE_WORKER_IMAGE=<image@digest> scripts/probe-copilot-cli.sh <output directory>`.
    Update the spike record for RB-1 to RB-7.
-3. Run the skill smoke for the pinned image:
-   `HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh`.
+3. Run the skill smoke for the pinned image and for every harness that the
+   scenario selects. The Copilot record is LS-1:
+   `HARNESSES="codex claude copilot" COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh`.
+   The Codex and Claude Code credentials are the defaults that
+   [worker/SKILLS.md](../../worker/SKILLS.md) names. Continue only when the
+   smoke exits zero and `worker/skill-smoke.json` has a record of each of the
+   three harnesses for this digest.
 4. Run the live `copilot-mixed-harness-recovery` scenario
-   (`factory guide acceptance`).
+   (`factory guide acceptance`) on that digest. It covers LS-2 and LS-3.
+   Record the same digest as `worker_digest`, and all three harnesses with
+   their versions as `worker_harnesses`. Record its live result as `pass`
+   only after a valid report and a continuation of the same native session
+   after the restart.
 5. Record the RB-8 decision.

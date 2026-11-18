@@ -89,7 +89,9 @@ worker_credential() {
 # approval gates, exactly as a run does. Copilot runs through the
 # factory-copilot launcher with the isolation options of the production
 # adapter (internal/harness/headless_copilot.go), but answers in plain text so
-# the reply can be matched against the skill sentinel.
+# the reply can be matched against the skill sentinel. Keep each command on
+# one `name) echo "..." ;;` line: TestCopilotSkillSmokeUsesTheProductionIsolationOptions
+# reads the copilot line and compares it with the production launch.
 harness_invocation() {
   case "$1" in
     codex) echo "codex exec --skip-git-repo-check -s danger-full-access -c project_doc_max_bytes=0" ;;
@@ -97,6 +99,28 @@ harness_invocation() {
     copilot) echo "factory-copilot --silent --allow-all-tools --no-ask-user --no-auto-update --no-remote --no-remote-export --disable-builtin-mcps --no-custom-instructions --secret-env-vars=COPILOT_GITHUB_TOKEN --prompt" ;;
     *) echo "unsupported harness $1" >&2; exit 1 ;;
   esac
+}
+
+# COPILOT_PROVED_VERSION is the first `copilot --version` line of the release
+# that the compatibility record docs/spikes/copilot-cli-1.0.98 proved. It
+# equals worker.CopilotVersionLine, the line startup diagnosis requires.
+COPILOT_PROVED_VERSION="GitHub Copilot CLI 1.0.98."
+
+# refuse_unproved_version prints the refusal for a harness version that cannot
+# key a record, and fails. Its arguments are the harness, the raw first
+# version line, and the record key made from it. An empty key means the image
+# has no such harness. For Copilot, the raw line must equal the proved line
+# exactly, as startup diagnosis requires; another line is refused because
+# diagnosis rejects that image, so its smoke would be paid for nothing.
+refuse_unproved_version() {
+  if [ "$1" = copilot ] && [ "$2" != "$COPILOT_PROVED_VERSION" ]; then
+    echo "$WORKER_REFERENCE has Copilot CLI \"${3:-<none>}\", not exactly the proved \"$COPILOT_PROVED_VERSION\"; skipping the copilot smoke. Rebuild the worker image from sw-factory-base-copilot or the combined sw-factory-base with the current scripts/build-worker.sh, and record the new digest."
+    return 1
+  fi
+  if [ -z "$3" ]; then
+    echo "No $1 version in $WORKER_REFERENCE; skipping its smoke. Build the worker image from a base image variant that contains $1 (sw-factory-base-$1 or the combined sw-factory-base)."
+    return 1
+  fi
 }
 
 # skill_sentinel returns the first instruction line of one skill body. A reply
@@ -192,10 +216,19 @@ for harness_name in $HARNESSES; do
     continue
   fi
 
-  version="$("$DOCKER" run --rm --pull=never --user 10001:10001 \
+  # The raw first line is what startup diagnosis compares for Copilot
+  # (harnessExecutableProbe). The record key is that line reduced to bounded
+  # printable text, as the skill contract check reduces it (harnessVersionLine).
+  raw_version="$("$DOCKER" run --rm --pull=never --user 10001:10001 \
     --cap-drop ALL --security-opt no-new-privileges --network none \
-    --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version" \
-    | head -n 1 | tr -cd '\040-\176' | cut -c1-120)"
+    --entrypoint /bin/sh "$WORKER_REFERENCE" -c "$harness_name --version 2>/dev/null" \
+    | head -n 1)"
+  version="$(printf '%s' "$raw_version" | tr -cd '\040-\176' | cut -c1-120)"
+  if ! version_refusal="$(refuse_unproved_version "$harness_name" "$raw_version" "$version")"; then
+    echo "$version_refusal" >&2
+    unrecorded="$unrecorded $harness_name"
+    continue
+  fi
   echo "Smoking $harness_name $version in $WORKER_REFERENCE"
 
   verified='[]'

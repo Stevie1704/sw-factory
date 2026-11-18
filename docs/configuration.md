@@ -994,8 +994,10 @@ targets](#harness-override-targets)).
    the CLI version line. It records nothing and exits non-zero when
    `COPILOT_TOKEN_PATH` is unset, empty, or missing, when the call fails (for
    example a rejected token, a disabled CLI policy, or an unavailable model),
-   or when the reply does not quote the skill. It never reads a host GitHub
-   credential.
+   or when the reply does not quote the skill. Before any paid call, it
+   refuses an image without the proved CLI release (`GitHub Copilot CLI
+   1.0.98.`) and names the base image variant to rebuild from. It never
+   reads a host GitHub credential.
 3. Run `factory doctor` until it prints `doctor: ready`. The Copilot rows are
    in [Worker image build and digest pinning](#worker-image-build-and-digest-pinning).
 
@@ -1045,7 +1047,7 @@ Never paste the token or a raw transcript into an issue.
 | Run paused for authentication | The worker found no token, or the CLI could not validate it (expired, revoked, or no network) | Renew the token, then `factory auth refresh --harness copilot --run-id <run> --resume`. |
 | Run paused after an unexpected exit; the smoke reports a failed call | Organization policy disables the CLI, the model is not enabled, or a rate limit. The CLI does not yet give a typed signal for these (RB-5). | Check the CLI and model policy with the administrator and the account's request quota. Fix the cause, then take the action that `factory status` names for the paused run. Do not retry in a loop. |
 | `harness_selection_unsupported` | The role pairs Copilot with `auto` or an effort the CLI does not accept | Name an exact model and a supported effort. |
-| `harness.executable.unusable` | The pinned image has no `copilot` | Rebuild the worker image and record the new digest. |
+| `harness.executable.unusable` | The pinned image has no `copilot`, or a CLI release other than the proved 1.0.98 | Rebuild the worker image from `sw-factory-base-copilot` or the combined `sw-factory-base` with the current `scripts/build-worker.sh`, and record the new digest. |
 | `harness.skills.evidence_stale` or `evidence_missing` | No live smoke for the pinned digest and CLI version | Run the smoke above. |
 | Native session mismatch, or no identity after launch | The identity evidence is provisional (RB-1), or a session was changed outside the factory | Do not edit the role volume or the store. Report the run with `factory guide reporting`. |
 

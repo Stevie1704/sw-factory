@@ -8,7 +8,13 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
+
+// quoteEverySkill is a stub harness reply that quotes the first instruction
+// line of every worker skill, which the smoke accepts as skill evidence.
+const quoteEverySkill = `awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md`
 
 // TestSkillSmokeReportsHarnessFailureSeparately verifies that a harness which
 // fails before it answers, such as one with an expired credential, is
@@ -41,7 +47,7 @@ func TestSkillSmokeRecordsAHarnessThatQuotesEachSkill(t *testing.T) {
 	smoke := runSkillSmoke(t, `
 case "$*" in
   *--version*) echo "2.1.232 (Claude Code)" ;;
-  *) cat > /dev/null; echo "Smoke reply"; echo "harness warning" >&2; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; echo "Smoke reply"; echo "harness warning" >&2; `+quoteEverySkill+` ;;
 esac
 `)
 	if smoke.err != nil {
@@ -74,7 +80,7 @@ const answeringHarness = `
 case "$*" in
   *--version*) echo "2.1.232 (Claude Code)" ;;
   *"\` + "`" + `${FAILING_SKILL:-none}\` + "`" + `"*) cat > /dev/null; echo "I could not find a skill with that name." ;;
-  *) cat > /dev/null; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat > /dev/null; ` + quoteEverySkill + ` ;;
 esac
 `
 
@@ -262,7 +268,7 @@ const answeringCopilot = `
 printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
 case "$*" in
   *--version*) printf 'GitHub Copilot CLI 1.0.98.\nRun '"'"'copilot update'"'"' to check for updates.\n' ;;
-  *) cat >> "$SMOKE_STDIN_LOG"; awk 'FNR == 1 { markers = 0 } /^---$/ { markers++; next } markers >= 2 && NF { print; nextfile }' ../worker/skills/*/SKILL.md ;;
+  *) cat >> "$SMOKE_STDIN_LOG"; ` + quoteEverySkill + ` ;;
 esac
 `
 
@@ -440,5 +446,82 @@ esac
 				t.Errorf("the token reached the smoke output")
 			}
 		})
+	}
+}
+
+// TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall verifies
+// that the copilot smoke makes no prompt call and records nothing when the
+// pinned image has no copilot executable or a CLI release other than the one
+// the compatibility record proved, because startup diagnosis rejects both
+// images. The refusal names the proved release and the base image variant.
+func TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall(t *testing.T) {
+	tests := map[string]string{
+		"no copilot in the image": `echo "/bin/sh: 1: copilot: not found" >&2; exit 127`,
+		"another CLI release":     `echo "GitHub Copilot CLI 1.0.99."`,
+		// Startup diagnosis compares the raw first line exactly, so a
+		// character that a normalization would strip is not the proved line.
+		"proved line with a carriage return": `printf 'GitHub Copilot CLI 1.0.98.\r\n'`,
+	}
+	for name, version := range tests {
+		t.Run(name, func(t *testing.T) {
+			body := `
+printf '%s' "$*" | tr '\n' ' ' >> "$SMOKE_DOCKER_LOG"; echo >> "$SMOKE_DOCKER_LOG"
+case "$*" in
+  *--version*) ` + version + ` ;;
+  *) cat > /dev/null; ` + quoteEverySkill + ` ;;
+esac
+`
+			smoke := runCopilotSmoke(t, body)
+			if smoke.err == nil {
+				t.Fatalf("smoke passed with an unproved Copilot CLI:\n%s", smoke.stderr)
+			}
+			if records := recordsOf(t, smoke.evidence, "copilot"); len(records) != 0 {
+				t.Errorf("smoke recorded copilot evidence for an unproved CLI:\n%s", smoke.evidence)
+			}
+			for _, line := range strings.Split(strings.TrimSpace(smoke.dockerArguments), "\n") {
+				if !strings.Contains(line, "--version") {
+					t.Errorf("smoke made a prompt call for an unproved CLI: %s", line)
+				}
+			}
+			if !strings.Contains(smoke.stderr, worker.CopilotVersionLine) || !strings.Contains(smoke.stderr, "sw-factory-base-copilot") {
+				t.Errorf("refusal does not name the proved release and the base image variant:\n%s", smoke.stderr)
+			}
+		})
+	}
+}
+
+// TestSkillSmokeProvesTheVersionLineStartupDiagnosisRequires verifies that
+// the proved Copilot version line of the smoke script is the line that
+// startup diagnosis compares exactly, so the smoke and the doctor cannot
+// accept different CLI releases.
+func TestSkillSmokeProvesTheVersionLineStartupDiagnosisRequires(t *testing.T) {
+	script, err := os.ReadFile("../scripts/smoke-skills.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `COPILOT_PROVED_VERSION="` + worker.CopilotVersionLine + `"`
+	if !strings.Contains(string(script), "\n"+want+"\n") {
+		t.Errorf("scripts/smoke-skills.sh does not set %s", want)
+	}
+}
+
+// TestSkillSmokeNeverRecordsAHarnessWithoutAVersion verifies that a harness
+// whose version probe prints nothing, such as a harness the image does not
+// contain, gets no record keyed by an empty version.
+func TestSkillSmokeNeverRecordsAHarnessWithoutAVersion(t *testing.T) {
+	smoke := runSkillSmoke(t, `
+case "$*" in
+  *--version*) exit 127 ;;
+  *) cat > /dev/null; `+quoteEverySkill+` ;;
+esac
+`)
+	if smoke.err == nil {
+		t.Fatalf("smoke passed without a harness version:\n%s", smoke.stderr)
+	}
+	if strings.Contains(smoke.evidence, `"harness": "claude"`) {
+		t.Errorf("smoke recorded evidence without a harness version:\n%s", smoke.evidence)
+	}
+	if !strings.Contains(smoke.stderr, "No claude version") {
+		t.Errorf("smoke does not name the missing version:\n%s", smoke.stderr)
 	}
 }
