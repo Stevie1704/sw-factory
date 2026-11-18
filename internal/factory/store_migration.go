@@ -7,6 +7,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/version"
 )
 
 // StoreMigrationResult is the outcome of the explicit store migration.
@@ -52,7 +53,9 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 	if result.Refusals = migrationRefusals(inspection); len(result.Refusals) != 0 {
 		return result, nil
 	}
-	if result.Migration, err = store.Migrate(ctx, path); err != nil {
+	identity := version.Current()
+	release := store.ReleaseIdentity{Version: identity.Version, Revision: identity.Revision}
+	if result.Migration, err = store.Migrate(ctx, path, release); err != nil {
 		return StoreMigrationResult{}, err
 	}
 	return result, nil
