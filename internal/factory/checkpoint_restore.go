@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -332,7 +331,7 @@ type liveFileIdentity struct {
 func planDigest(plan RestorePlan) (string, error) {
 	identities := make([]liveFileIdentity, 0, len(plan.files.LiveFiles))
 	for _, name := range plan.files.LiveFiles {
-		size, digest, err := fileIdentity(filepath.Join(filepath.Dir(plan.files.StorePath), name))
+		size, digest, err := store.FileDigest(filepath.Join(filepath.Dir(plan.files.StorePath), name))
 		if err != nil {
 			return "", err
 		}
@@ -348,21 +347,6 @@ func planDigest(plan RestorePlan) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
-}
-
-// fileIdentity returns the size and the hexadecimal SHA-256 of one file.
-func fileIdentity(path string) (int64, string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return 0, "", fmt.Errorf("open %s for its checksum: %w", path, err)
-	}
-	defer func() { _ = file.Close() }()
-	hash := sha256.New()
-	size, err := io.Copy(hash, file)
-	if err != nil {
-		return 0, "", fmt.Errorf("read %s for its checksum: %w", path, err)
-	}
-	return size, hex.EncodeToString(hash.Sum(nil)), nil
 }
 
 // applyRestore creates a missing store directory and runs the journaled
