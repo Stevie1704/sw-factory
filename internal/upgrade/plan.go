@@ -169,6 +169,9 @@ type Observation struct {
 	// read.
 	OnboardingPlanPath    string
 	OnboardingPlanProblem string
+	// OnboardingPlanForeign tells why the named plan belongs to another
+	// registration; its evidence and commands are then not used.
+	OnboardingPlanForeign string
 	Onboarding            []onboarding.StepStatus
 }
 
@@ -371,7 +374,8 @@ func (p planner) resourcesDirectory() string {
 
 // planFile returns the onboarding plan path for commands.
 func (p planner) planFile() string {
-	if p.observation.OnboardingPlanPath == "" {
+	o := p.observation
+	if o.OnboardingPlanPath == "" || o.OnboardingPlanProblem != "" || o.OnboardingPlanForeign != "" {
 		return "<onboarding plan file>"
 	}
 	return onboarding.Quote(p.observation.OnboardingPlanPath)
@@ -412,7 +416,7 @@ func (p planner) operations() []Operation {
 		{ID: OperationGateProof, State: provedState(p.proved[OperationGateProof]), Effect: doctor.EffectLocalMutation,
 			Description:     "prove setup and every gate in the new worker; valid evidence is reused",
 			Command:         p.onboardingAction(onboarding.StepGateProof, p.command()+" onboard record --plan "+p.planFile()+" gate-proof --json"),
-			ExpectedEffects: []string{"gate proof evidence in the onboarding plan"}},
+			ExpectedEffects: []string{"a gate proof record written to the onboarding plan file under its lock", "a disposable proof workspace"}},
 		{ID: OperationSkillSmoke, State: provedState(p.proved[OperationSkillSmoke]), Effect: doctor.EffectExternalMutation, Paid: true,
 			Description:     "record the skill smoke of every selectable harness for the new worker digest; only missing skills are called again",
 			Command:         p.onboardingAction(onboarding.StepSkillSmoke, ""),
@@ -421,10 +425,10 @@ func (p planner) operations() []Operation {
 			Description:     "migrate the operational store with the explicit entry point; the old binary refuses the store afterwards",
 			Command:         p.command() + " upgrade migrate-store " + p.configFlag() + " --json",
 			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp>", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
-		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectInspection,
+		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectLocalMutation,
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
 			Command:         p.onboardingAction(onboarding.StepDoctor, p.command()+" onboard record --plan "+p.planFile()+" doctor --json"),
-			ExpectedEffects: []string{"doctor evidence in the onboarding plan"}},
+			ExpectedEffects: []string{"a doctor record written to the onboarding plan file under its lock"}},
 		{ID: OperationStartCoordinator, State: provedState(o.CoordinatorRunning && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
 			Description:     "start the coordinator of the target in the foreground and keep its terminal open; a supervised service is not supported yet",
 			Command:         p.command() + " start " + p.configFlag(),

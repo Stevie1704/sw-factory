@@ -371,3 +371,32 @@ func TestBuildAdvancesOnPreparedResourcesAlone(t *testing.T) {
 		t.Fatalf("onboarding_plan = %+v, want pending with the prepared directory", next)
 	}
 }
+
+// TestBuildRefusesAnOnboardingPlanOfAnotherRegistration verifies that the
+// evidence of an onboarding plan for another host configuration is neither
+// reused nor named in a command.
+func TestBuildRefusesAnOnboardingPlanOfAnotherRegistration(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.CoordinatorRunning = false
+	observation.Onboarding = nil
+	observation.OnboardingPlanForeign = "the onboarding plan uses the host configuration /other/config.yaml"
+	plan := upgrade.Build(observation)
+
+	blocker(t, plan, "onboarding.plan_registration_mismatch")
+	for _, step := range plan.Operations {
+		if strings.Contains(step.Command, planPath) {
+			t.Fatalf("operation %s names the foreign plan: %s", step.ID, step.Command)
+		}
+	}
+}
+
+// TestBuildMarksPlanWritesAsLocalMutations verifies that every operation
+// that writes the onboarding plan declares a local mutation.
+func TestBuildMarksPlanWritesAsLocalMutations(t *testing.T) {
+	plan := upgrade.Build(idleBeforeUpgrade())
+	for _, id := range []upgrade.OperationID{upgrade.OperationOnboardingPlan, upgrade.OperationGateProof, upgrade.OperationDoctor} {
+		if step := operation(t, plan, id); step.Effect != "local_mutation" {
+			t.Fatalf("%s effect = %s, want local_mutation", id, step.Effect)
+		}
+	}
+}

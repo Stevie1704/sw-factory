@@ -304,6 +304,8 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 			observation.OnboardingPlanProblem = err.Error()
 		case !samePlanRepository(loaded.Repository, registration.Path):
 			observation.OnboardingPlanProblem = "the onboarding plan belongs to another repository, " + loaded.Repository
+		case !samePlanRepository(loaded.HostConfig, observation.ConfigPath):
+			observation.OnboardingPlanForeign = "the onboarding plan uses the host configuration " + loaded.HostConfig + ", not " + observation.ConfigPath
 		default:
 			plan = loaded
 		}
@@ -316,7 +318,7 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 	current := observer.Observe(ctx, plan)
 	observation.Smoke = current.Smoke
 	observation.Resources = upgrade.ResourcesObservation{Directory: plan.Resources, Verified: current.Resources.Done, Problem: current.Resources.Problem}
-	if observation.OnboardingPlanPath == "" || observation.OnboardingPlanProblem != "" {
+	if observation.OnboardingPlanPath == "" || observation.OnboardingPlanProblem != "" || observation.OnboardingPlanForeign != "" {
 		return nil
 	}
 	current.PlanPath, current.FactoryCommand = observation.OnboardingPlanPath, observation.FactoryCommand

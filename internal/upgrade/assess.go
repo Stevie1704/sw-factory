@@ -132,6 +132,10 @@ func (p planner) blockers() []Blocker {
 			Action: "repair factory.yaml, then check it with " + p.validateCommand()})
 	}
 	blockers = append(blockers, p.workerBlockers()...)
+	if o.OnboardingPlanForeign != "" {
+		blockers = append(blockers, Blocker{Code: "onboarding.plan_registration_mismatch", Detail: o.OnboardingPlanForeign,
+			Action: "name the onboarding plan of the registration that --config selects, or omit --onboarding-plan and create one with the onboarding_plan operation"})
+	}
 	if o.OnboardingPlanProblem != "" {
 		blockers = append(blockers, Blocker{Code: "onboarding.plan_unreadable", Detail: o.OnboardingPlanProblem,
 			Action: "name the onboarding plan of this repository with --onboarding-plan, or omit the flag and create one with the onboarding_plan operation"})

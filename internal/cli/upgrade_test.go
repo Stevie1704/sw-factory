@@ -289,3 +289,24 @@ func TestUpgradePlanAdvancesAfterPrepare(t *testing.T) {
 		t.Fatalf("operations = %v, want prepare_resources done", states)
 	}
 }
+
+// TestUpgradePlanRefusesAnOnboardingPlanOfAnotherConfiguration verifies that
+// a plan of the same checkout but another host configuration is a blocker.
+func TestUpgradePlanRefusesAnOnboardingPlanOfAnotherConfiguration(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	other := filepath.Join(t.TempDir(), "other-config.yaml")
+	if code, _, stderr := runPlanCommand("onboard", "plan", "--repository", fixture.repository, "--output", fixture.plan, "--config", other, "--resources", fixture.resources, "--json"); code != 0 {
+		t.Fatalf("onboard plan exit = %d: %s", code, stderr)
+	}
+
+	var document upgradeDocument
+	code := runUpgradeCommand(t, &document, "plan", "--config", fixture.hostConfig, "--onboarding-plan", fixture.plan, "--json")
+
+	found := false
+	for _, blocker := range document.Blockers {
+		found = found || blocker.Code == "onboarding.plan_registration_mismatch"
+	}
+	if code != 1 || !found {
+		t.Fatalf("plan = exit %d, %+v; want onboarding.plan_registration_mismatch", code, document.Blockers)
+	}
+}
