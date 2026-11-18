@@ -294,3 +294,65 @@ func TestRestoreContinuationRollsBackAReplacementThatNoLongerVerifies(t *testing
 	}
 	fixture.assertOriginal(t, "changed replacement")
 }
+
+// crashAt returns a crash point that stops at point and passes every other
+// point.
+func crashAt(point string) func(string) error {
+	return func(current string) error {
+		if current == point {
+			return errCrash
+		}
+		return nil
+	}
+}
+
+// interruptBeforeRollback crashes a restore of the fixture at point, so the
+// next continuation rolls back. For the verifying state it also changes the
+// replacement, so the repeated verification fails.
+func interruptBeforeRollback(t *testing.T, fixture restoreFixture, point string) {
+	t.Helper()
+	if err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, crashAt(point)); !errors.Is(err, errCrash) {
+		t.Fatalf("ApplyRestore() = %v, want the simulated crash at %s", err, point)
+	}
+	if point == "journal verifying" {
+		if err := os.WriteFile(fixture.storePath, []byte("changed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRestoreContinuationAfterACrashInsideTheRollback crashes the rollback
+// of a continuation at each of its points, including between two sidecar
+// renames, and continues again. The result is always the unchanged
+// original file set.
+func TestRestoreContinuationAfterACrashInsideTheRollback(t *testing.T) {
+	t.Parallel()
+	for _, interrupted := range []string{"after replace factory.db", "journal verifying"} {
+		var points []string
+		recorder := newRestoreFixture(t)
+		interruptBeforeRollback(t, recorder, interrupted)
+		if _, err := checkpoint.ContinueRestoreWithCrash(context.Background(), recorder.storePath, func(point string) error {
+			points = append(points, point)
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: ContinueRestore() error = %v", interrupted, err)
+		}
+		for _, required := range []string{"rollback removed replacement", "after rollback factory.db", "after rollback factory.db-journal", "before rollback factory.db-wal"} {
+			if !slices.Contains(points, required) {
+				t.Fatalf("%s: rollback crash points = %v, want %q", interrupted, points, required)
+			}
+		}
+		for _, point := range points {
+			fixture := newRestoreFixture(t)
+			interruptBeforeRollback(t, fixture, interrupted)
+			if _, err := checkpoint.ContinueRestoreWithCrash(context.Background(), fixture.storePath, crashAt(point)); !errors.Is(err, errCrash) {
+				t.Fatalf("%s, %s: ContinueRestore() = %v, want the simulated crash", interrupted, point, err)
+			}
+			continuation, err := checkpoint.ContinueRestore(context.Background(), fixture.storePath)
+			if err != nil || continuation.Result != checkpoint.ContinuationRolledBack {
+				t.Fatalf("%s, %s: second ContinueRestore() = %+v, %v; want rolled back", interrupted, point, continuation, err)
+			}
+			fixture.assertOriginal(t, interrupted+", "+point)
+		}
+	}
+}

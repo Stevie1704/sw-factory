@@ -254,7 +254,7 @@ and `original/`, also after the coordinator lock is released by a crash.
 | --- | --- | --- | --- |
 | `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
 | `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
-| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), rename every original back, then remove `new/` and the journal |
+| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), write the journal state `preserving`, then continue as for `preserving` |
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
 

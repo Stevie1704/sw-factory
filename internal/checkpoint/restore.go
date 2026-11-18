@@ -346,19 +346,18 @@ func continueRestore(ctx context.Context, storePath string, crash crashPoint) (R
 }
 
 // rollback puts the original live file set back and removes every restore
-// file. Before it removes a file at the live store path, it proves that the
-// complete original is in original/, so it never removes an original.
+// file. It can stop at any point and run again: in the replacing and
+// verifying states it removes the replacement, then records the preserving
+// state before it moves an original back, so a repeated rollback never
+// removes a file at the live store path that can be an original. In the
+// preserving state each listed file is at its live path or in original/,
+// and only the ones in original/ move back.
 func (r *restorer) rollback() error {
 	plan := r.journal.RestorePlan
 	original := filepath.Join(plan.WorkDirectory, "original")
 	if r.journal.State == StateReplacing || r.journal.State == StateVerifying {
-		for _, name := range plan.LiveFiles {
-			if _, err := os.Lstat(filepath.Join(original, name)); err != nil {
-				return fmt.Errorf("the original %s is not in %s; nothing was removed: %w", name, original, err)
-			}
-		}
-		if err := os.Remove(plan.StorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove the replacement at the live path: %w", err)
+		if err := r.removeReplacement(); err != nil {
+			return err
 		}
 	}
 	for _, name := range plan.LiveFiles {
@@ -366,7 +365,13 @@ func (r *restorer) rollback() error {
 		if _, err := os.Lstat(preserved); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		if err := r.at("before rollback " + name); err != nil {
+			return err
+		}
 		if err := renameDurably(preserved, filepath.Join(filepath.Dir(plan.StorePath), name)); err != nil {
+			return err
+		}
+		if err := r.at("after rollback " + name); err != nil {
 			return err
 		}
 	}
@@ -379,6 +384,34 @@ func (r *restorer) rollback() error {
 		}
 	}
 	return removeJournal(plan.StorePath)
+}
+
+// removeReplacement removes a replacement at the live store path once it
+// proves that the complete original is in original/, so it never removes an
+// original. Then it records the preserving state: from there on, the live
+// store path holds nothing or the original.
+func (r *restorer) removeReplacement() error {
+	plan := r.journal.RestorePlan
+	original := filepath.Join(plan.WorkDirectory, "original")
+	for _, name := range plan.LiveFiles {
+		if _, err := os.Lstat(filepath.Join(original, name)); err != nil {
+			return fmt.Errorf("the original %s is not in %s; nothing was removed: %w", name, original, err)
+		}
+	}
+	if err := os.Remove(plan.StorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove the replacement at the live path: %w", err)
+	}
+	if err := syncDirectories(filepath.Dir(plan.StorePath)); err != nil {
+		return err
+	}
+	if err := r.at("rollback removed replacement"); err != nil {
+		return err
+	}
+	r.journal.State = StatePreserving
+	if err := writeJournal(r.journal); err != nil {
+		return err
+	}
+	return r.at("rollback journal preserving")
 }
 
 // verifyReplacement runs the integrity check on path, reads its schema
