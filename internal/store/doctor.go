@@ -22,6 +22,9 @@ var (
 	// sqliteMigrationRequired means the store has an older supported schema
 	// that only the explicit migration entry point may migrate.
 	sqliteMigrationRequired = doctor.Condition{Code: "store.sqlite.migration_required", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "maintenance"}
+	// sqliteRestoreInProgress means a restore journal exists, so the store
+	// files can be split between the live path and the restore work directory.
+	sqliteRestoreInProgress = doctor.Condition{Code: "store.sqlite.restore_in_progress", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "maintenance"}
 	sqliteCloseFailed       = doctor.Condition{Code: "store.sqlite.close_failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug"}
 	supervisorUnobserved    = doctor.Condition{Code: "store.supervisor.unobserved", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 	// supervisorMissing means no heartbeat was ever recorded.
@@ -41,6 +44,10 @@ func StartupCheck(path string) doctor.Check {
 		}
 		opened, err := OpenReadOnly(ctx, path)
 		var migration *MigrationRequiredError
+		var restore *RestoreInProgressError
+		if errors.As(err, &restore) {
+			return doctor.Failure(sqliteRestoreInProgress, "SQLite", restore.Error(), "continue the interrupted restore with factory checkpoint restore --config <path> --path <checkpoint> --json; follow factory guide maintenance")
+		}
 		if errors.As(err, &migration) {
 			return doctor.Failure(sqliteMigrationRequired, "SQLite", migration.Error(), "follow factory guide maintenance; its migrate_store operation runs factory upgrade migrate-store")
 		}

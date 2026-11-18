@@ -855,6 +855,9 @@ func openMigrating(ctx context.Context, path string, migrateExisting bool, relea
 	if err != nil {
 		return nil, Migration{}, fmt.Errorf("resolve operational store path: %w", err)
 	}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return nil, Migration{}, err
+	}
 	storeDirectory := filepath.Dir(absolutePath)
 	if err := os.MkdirAll(storeDirectory, 0o700); err != nil {
 		return nil, Migration{}, fmt.Errorf("create operational store directory: %w", err)
