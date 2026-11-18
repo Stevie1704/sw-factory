@@ -169,6 +169,20 @@ The document has `schema_version: 1`, `outcome` (`created`, `refused`, or
 `error`), `checkpoint` with `path` and `manifest`, and `refusals` with `code`
 and `detail`. A refusal writes nothing. It exits 0 only for `created`.
 
+To check a checkpoint without a configuration, run:
+
+```sh
+factory checkpoint inspect --path <checkpoint directory> --json
+```
+
+`inspect` verifies the manifest, every checksum, the exact file set, and the
+store snapshot (`PRAGMA integrity_check` on a temporary read-only copy). It
+changes no file. Its document has `schema_version: 1`, `outcome` (`verified`,
+`refused`, or `error`), `verified` (true only for `verified`), `checkpoint`
+with `path` and `manifest` when it verifies, and `refusals` with `code` and
+`detail`. It exits 0 only for `verified`. A damaged checkpoint refuses with
+`restore.checkpoint_corrupt` or `restore.checkpoint_incomplete`.
+
 | Code | Meaning |
 | --- | --- |
 | `checkpoint.not_quiescent` | One full-quiescence condition fails; `detail` names it. Finish or cancel that work first. |
