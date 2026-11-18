@@ -40,7 +40,11 @@ plan exists; the plan then contains an operation that creates one. The plan
 must belong to the host configuration that `--config` selects; a plan of
 another configuration is a blocker, and its evidence is not used.
 `--resources` names the directory that `onboard prepare` of the target
-filled; it defaults to the onboarding plan's directory.
+filled; it defaults to the onboarding plan's directory. `--checkpoints`
+names a directory whose direct subdirectories may be maintenance
+checkpoints. The plan lists the newest one that verifies and matches this
+registration and the target release. It searches only one level deep and
+keeps no registry, so a checkpoint outside that directory is not listed.
 
 The command only reads. It does not migrate the store, replace a binary,
 pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
@@ -58,6 +62,7 @@ pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
 | `verification` | The checks of the final state and whether each holds |
 | `recovery_limits` | What the upgrade cannot undo |
 | `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it |
+| `checkpoint` | The newest matching maintenance checkpoint with `path` and `manifest`, or `null` when `--checkpoints` is not given or no checkpoint matches |
 
 `command` is always an executable shell command, or empty for a manual step
 that `description` explains. Show the plan to the operator. Apply `factory
@@ -112,6 +117,11 @@ A `done` operation has valid evidence; do not do it again.
 10. `start_coordinator`: start `factory start --config <path>` in the
     foreground and keep its terminal open.
 
+Optional, before `migrate_store`: a checkpoint before the store migration.
+Create it once the migration gate holds, as the Maintenance checkpoint
+section below describes. It adds no operation and no blocker, so the plan
+never requires it. Plan again with `--checkpoints <directory>` to list it.
+
 `migrate_store` holds the repository lock, rolls back an interrupted write,
 and refuses work that fails the migration gate, a lock that another process
 holds, and an unsupported schema.
@@ -153,8 +163,10 @@ record names the target release and revision. `factory status --config
 ## Maintenance checkpoint
 
 A maintenance checkpoint is a consistent snapshot of the operational store
-with a manifest. It needs full quiescence: the migration gate, and no
-ideation session that publishes or has an incomplete publication. Run:
+with a manifest. It needs full quiescence, which is stricter than the migration
+gate. Full quiescence is the migration gate plus one extra condition: no
+ideation session publishes or has an incomplete publication
+(`publication.in_progress`). Run:
 
 ```sh
 factory checkpoint create --config <host config> --output <new directory> --json
