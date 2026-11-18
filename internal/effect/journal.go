@@ -150,6 +150,7 @@ func New(adapters Adapters) *Journal {
 	register(journal.dispatcher, store.PendingEffectKindPullRequest, pullRequestHandler{now: clock, clients: adapters.PullRequests, labels: labels, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindWorkerLaunch, workerLaunchHandler{now: clock, worker: adapters.Worker, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindHarnessResume, harnessResumeHandler{now: clock, lifecycle: adapters.Lifecycle, projector: adapters.Projector})
+	register(journal.dispatcher, store.PendingEffectKindLaunchRollback, launchRollbackHandler{now: clock, lifecycle: adapters.Lifecycle, projector: adapters.Projector})
 	register(journal.dispatcher, store.PendingEffectKindResultAcceptance, resultAcceptanceHandler{
 		now: clock, issues: adapters.Issues, labels: labels,
 		projector: adapters.Projector, lifecycle: adapters.Lifecycle,

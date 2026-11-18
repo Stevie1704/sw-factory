@@ -145,6 +145,16 @@ type harnessResumeEffectPayload struct {
 	Manual bool
 }
 
+// launchRollbackEffectPayload is the durable intent for closing one failed
+// launch: stop its worker, then save its terminal invocation.
+type launchRollbackEffectPayload struct {
+	// Invocation is the terminal invocation saved after the worker stop.
+	Invocation store.Invocation
+	// WorkerID identifies the worker that may run the launched harness. It is
+	// empty when the launch did not start a worker.
+	WorkerID string
+}
+
 // resultAcceptanceEffectPayload is the complete durable intent for accepting
 // a validated structured report.
 type resultAcceptanceEffectPayload struct {

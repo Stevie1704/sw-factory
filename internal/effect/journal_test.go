@@ -34,6 +34,7 @@ var journalKinds = []store.PendingEffectKind{
 	store.PendingEffectKindHarnessResume,
 	store.PendingEffectKindResultAcceptance,
 	store.PendingEffectKindClarificationComment,
+	store.PendingEffectKindLaunchRollback,
 }
 
 // journalStoreForTest records every reservation while answering the run and

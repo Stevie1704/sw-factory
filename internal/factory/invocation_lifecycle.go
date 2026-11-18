@@ -1298,7 +1298,9 @@ func (l *invocationLifecycle) commitLaunchRun(ctx context.Context, request Invoc
 
 // rollbackLaunch closes a launch that failed before a native session or
 // structured report made it recoverable, while preserving any indeterminate
-// journal boundary for reconciliation.
+// journal boundary for reconciliation. The invocation becomes terminal only
+// after its worker stopped; a failed stop keeps it active and is named in the
+// returned error.
 func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunStore, invocation store.Invocation, workerID string, workerStarted bool, original error) error {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
@@ -1341,11 +1343,29 @@ func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunSt
 		invocation.Status = store.InvocationStatusCannotProceed
 	}
 	invocation.UpdatedAt = l.clock().UTC()
-	_ = invocationStore.SaveInvocation(rollbackContext, invocation)
-	if workerStarted && l.worker != nil {
-		_ = l.worker.Stop(rollbackContext, workerID)
+	if !workerStarted || l.worker == nil {
+		workerID = ""
+	}
+	if err := l.closeFailedLaunch(rollbackContext, runStore, invocationStore, invocation, workerID); err != nil {
+		return fmt.Errorf("%w; invocation %q kept active until its worker stops: %w", original, invocation.ID, err)
 	}
 	return original
+}
+
+// closeFailedLaunch stops the worker of a failed launch and only then saves
+// the terminal invocation. The journal keeps the rollback when the stop
+// fails, so reconciliation retries it. An empty workerID means that the
+// launch started no worker.
+func (l *invocationLifecycle) closeFailedLaunch(ctx context.Context, runStore RunStore, invocationStore InvocationStore, terminal store.Invocation, workerID string) error {
+	if journaled, ok := runStore.(effectkernel.InvocationStore); ok && l.journal != nil {
+		return l.journal.RollBackLaunch(ctx, journaled, terminal, workerID)
+	}
+	if workerID != "" {
+		if err := l.stopRunWorker(ctx, workerID); err != nil {
+			return err
+		}
+	}
+	return invocationStore.SaveInvocation(ctx, terminal)
 }
 
 // ensureCoordinatorHarnessRuntime resolves the selected detached adapter used
