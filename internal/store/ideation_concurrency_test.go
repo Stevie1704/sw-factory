@@ -1,12 +1,79 @@
 package store_test
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
+
+// TestCommandInboxAppendOutlastsOneBusyTimeout verifies that an append still
+// succeeds when another connection holds SQLite's write lock for longer than
+// one busy timeout. The first attempt fails with SQLITE_BUSY at the timeout;
+// the retry then waits for the release. The test does not run in parallel: it
+// changes the package busy timeout that OpenCommandInbox reads.
+func TestCommandInboxAppendOutlastsOneBusyTimeout(t *testing.T) {
+	const busyTimeout = 200 * time.Millisecond
+	const hold = busyTimeout + busyTimeout/2
+	previous := store.SetInboxBusyTimeoutForTest(busyTimeout)
+	t.Cleanup(func() { store.SetInboxBusyTimeoutForTest(previous) })
+
+	opened, path := openIdeationStoreForTest(t)
+	approvedSessionForTest(t, opened, "session-1")
+	inbox, err := store.OpenCommandInbox(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = inbox.Close() })
+	holdWriteLockForTest(t, path, hold)
+
+	start := time.Now()
+	if _, _, err := inbox.AcceptIdeationCommand(t.Context(), commandForTest("request-busy", "session-1", 1)); err != nil {
+		t.Fatalf("append while the store stays busy past one timeout: %v", err)
+	}
+	// A single attempt gives up at busyTimeout. Success only after the release
+	// at hold proves that a retry ran after the first attempt failed.
+	if elapsed := time.Since(start); elapsed <= busyTimeout {
+		t.Fatalf("append returned after %v, within one busy timeout of %v: no attempt met the held lock", elapsed, busyTimeout)
+	}
+}
+
+// holdWriteLockForTest takes SQLite's write lock on path from a second
+// connection and releases it after hold. The release runs in the background,
+// so the caller can use the store while the lock is held.
+func holdWriteLockForTest(t *testing.T, path string, hold time.Duration) {
+	t.Helper()
+	database, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	conn, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.ExecContext(t.Context(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatalf("take the write lock: %v", err)
+	}
+	released := make(chan error, 1)
+	timer := time.AfterFunc(hold, func() {
+		_, err := conn.ExecContext(context.Background(), "COMMIT")
+		released <- err
+	})
+	t.Cleanup(func() {
+		if timer.Stop() {
+			return
+		}
+		if err := <-released; err != nil {
+			t.Errorf("release the write lock: %v", err)
+		}
+	})
+}
 
 // TestCoordinatorWritesSucceedWhileTheUIAppendsCommands verifies that the
 // coordinator's ledger and invocation writes reserve SQLite's write lock
