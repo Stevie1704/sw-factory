@@ -113,6 +113,23 @@ func unsafeReplays() []unsafeReplay {
 			adapters.worker = &conflictingWorker{refusals: &adapters.refusals}
 		}),
 		{
+			name: "launch rollback of an invocation that completed later", kind: store.PendingEffectKindLaunchRollback,
+			payload: func(run store.Run) any {
+				terminal := launchRollbackInvocation(run.ID)
+				terminal.Status = store.InvocationStatusCannotProceed
+				return map[string]any{"Invocation": terminal, "WorkerID": run.ID}
+			},
+			seed: func(ctx context.Context, t *testing.T, opened *store.Store, run store.Run) {
+				completed := launchRollbackInvocation(run.ID)
+				completed.Status = store.InvocationStatusCompleted
+				if err := opened.SaveInvocation(ctx, completed); err != nil {
+					t.Fatal(err)
+				}
+			},
+			source: "pending effect", field: string(store.PendingEffectKindLaunchRollback),
+			discrepancyKind: factory.RecoveryDiscrepancyWorkflow, retained: true,
+		},
+		{
 			name: "consumed harness resume generation", kind: store.PendingEffectKindHarnessResume,
 			payload: func(run store.Run) any {
 				return map[string]any{

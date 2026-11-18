@@ -15,6 +15,11 @@ import (
 // journal extraction.
 const replacedServiceMethodCount = 30
 
+// addedJournalOperations counts the caller-facing journal operations added
+// after the extraction: RollBackLaunch, which closes a failed launch only
+// after its worker stopped (#325).
+const addedJournalOperations = 1
+
 // TestExportedSurfaceDoesNotExceedTheReplacedServiceMethods keeps the journal's
 // named caller-facing declarations no broader than the thirty Service methods
 // this module replaced. Named operation objects count here even when they
@@ -62,8 +67,8 @@ func TestExportedSurfaceDoesNotExceedTheReplacedServiceMethods(t *testing.T) {
 			}
 		}
 	}
-	if exported > replacedServiceMethodCount {
-		t.Fatalf("exported effect declarations = %d, want at most %d replaced Service methods", exported, replacedServiceMethodCount)
+	if exported > replacedServiceMethodCount+addedJournalOperations {
+		t.Fatalf("exported effect declarations = %d, want at most %d replaced Service methods plus %d added operations", exported, replacedServiceMethodCount, addedJournalOperations)
 	}
 }
 

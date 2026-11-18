@@ -144,6 +144,9 @@ const (
 	// PendingEffectKindClarificationComment identifies one clarification
 	// question comment and its persisted comment identity.
 	PendingEffectKindClarificationComment PendingEffectKind = "clarification_comment"
+	// PendingEffectKindLaunchRollback identifies the worker stop of a failed
+	// launch and the terminal invocation status saved only after that stop.
+	PendingEffectKindLaunchRollback PendingEffectKind = "launch_rollback"
 )
 
 // PendingEffect is the bounded intent record for one external mutation. A run

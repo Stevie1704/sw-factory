@@ -310,6 +310,7 @@ func TestJournalRegistersOneApplyAndReplayHandlerPerKind(t *testing.T) {
 		store.PendingEffectKindHarnessResume,
 		store.PendingEffectKindResultAcceptance,
 		store.PendingEffectKindClarificationComment,
+		store.PendingEffectKindLaunchRollback,
 	}
 	if len(journal.dispatcher.handlers) != len(kinds) {
 		t.Fatalf("registered kinds = %d, want %d", len(journal.dispatcher.handlers), len(kinds))
