@@ -442,3 +442,32 @@ func TestBuildVerifiesTheObservedCoordinatorIdentity(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildEmitsOnlyExecutableCommands verifies that every command field is
+// a shell command without prose, and that the paid calls and the
+// authorization text of the smoke are separate fields.
+func TestBuildEmitsOnlyExecutableCommands(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.Lock = upgrade.LockObservation{}
+	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd", "review"}, Verified: []string{"tdd"}, Missing: []string{"review"}}}
+	observation.Onboarding = withStep(withStep(verifiedOnboarding(), onboarding.StepSkillSmoke, onboarding.StatePending, "run these paid smoke calls: x; apply factory guide authorization"), onboarding.StepDoctor, onboarding.StateStale, "repair the findings, then run doctor")
+	plan := upgrade.Build(observation)
+
+	for _, step := range plan.Operations {
+		for _, prose := range []string{"run these", "apply factory guide", "repair the", "then run", "paid smoke calls"} {
+			if strings.Contains(step.Command, prose) {
+				t.Fatalf("operation %s command %q contains prose %q", step.ID, step.Command, prose)
+			}
+		}
+	}
+	smoke := operation(t, plan, upgrade.OperationSkillSmoke)
+	if !strings.HasPrefix(smoke.Command, "cd /work/service && ") || !strings.Contains(smoke.Command, "MANDATORY_SKILLS=review") || !strings.HasSuffix(smoke.Command, resourcesPath+"/scripts/smoke-skills.sh") {
+		t.Fatalf("skill_smoke command = %q, want the smoke script call", smoke.Command)
+	}
+	if len(smoke.PaidCalls) != 1 || smoke.PaidCalls[0] != "codex: review" || smoke.Authorization == "" {
+		t.Fatalf("skill_smoke = %+v, want one paid call and the authorization text", smoke)
+	}
+	if doctorStep := operation(t, plan, upgrade.OperationDoctor); doctorStep.Command != targetFactory+" onboard record --plan "+planPath+" doctor --json" {
+		t.Fatalf("doctor command = %q", doctorStep.Command)
+	}
+}

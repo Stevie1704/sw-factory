@@ -222,7 +222,11 @@ type Operation struct {
 	Command string        `json:"command,omitempty"`
 	Effect  doctor.Effect `json:"effect"`
 	// Paid reports that the operation makes paid model calls.
-	Paid            bool     `json:"paid,omitempty"`
+	Paid bool `json:"paid,omitempty"`
+	// PaidCalls lists each paid call as harness: skills.
+	PaidCalls []string `json:"paid_calls,omitempty"`
+	// Authorization names the contract to apply before the operation.
+	Authorization   string   `json:"authorization,omitempty"`
 	ExpectedEffects []string `json:"expected_effects"`
 	Reason          string   `json:"reason,omitempty"`
 }
@@ -372,13 +376,27 @@ func (p planner) onboardingVerified(name onboarding.Step) bool {
 	return step != nil && step.State == onboarding.StateVerified
 }
 
-// onboardingAction returns the onboarding action of a step, or fallback.
-func (p planner) onboardingAction(name onboarding.Step, fallback string) string {
-	if step := p.onboardingStep(name); step != nil && step.Action != "" {
-		return strings.TrimPrefix(step.Action, "run ")
+// smokeCalls returns the executable smoke command that records only the
+// missing skills, and one paid-call entry per harness. The command is empty
+// while the prepared resources are unknown.
+func (p planner) smokeCalls() (string, []string) {
+	o := p.observation
+	var commands, calls []string
+	for _, smoke := range o.Smoke {
+		if len(smoke.Missing) == 0 {
+			continue
+		}
+		commands = append(commands, onboarding.SmokeCommand(o.RepositoryPath, o.Resources.Directory, o.Worker.Image, smoke))
+		calls = append(calls, smoke.Harness+": "+strings.Join(smoke.Missing, " "))
 	}
-	return fallback
+	if !o.Resources.Verified {
+		return "", calls
+	}
+	return strings.Join(commands, " && "), calls
 }
+
+// smokeAuthorization is the contract an agent applies before the paid smoke.
+const smokeAuthorization = "apply factory guide authorization using existing session scope and decisions, including the supplied paid-call limits and the selected credential source"
 
 // resourcesDirectory returns the prepared resource directory for commands.
 func (p planner) resourcesDirectory() string {
@@ -410,6 +428,7 @@ func provedState(proved bool) OperationState {
 // evidence. sequence later decides which pending operation is next.
 func (p planner) operations() []Operation {
 	o := p.observation
+	smokeCommand, paidCalls := p.smokeCalls()
 	return []Operation{
 		{ID: OperationQuiesce, State: provedState(p.quiescent() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
 			Description:     "finish or cancel every active run with the binary that claimed it, then stop the foreground coordinator with Ctrl-C or factory stop " + p.configFlag(),
@@ -427,15 +446,14 @@ func (p planner) operations() []Operation {
 			ExpectedEffects: []string{"the onboarding plan file and its lock"}},
 		{ID: OperationRebuildWorker, State: provedState(p.proved[OperationRebuildWorker]), Effect: doctor.EffectLocalMutation,
 			Description:     "rebuild the worker image from the target worker base image " + o.Target.WorkerBaseImage + " and record its digest in factory.yaml, as Step 3 of the onboarding procedure describes",
-			Command:         p.onboardingAction(onboarding.StepImage, ""),
 			ExpectedEffects: []string{"a new local worker image", "a changed worker_build.digest in factory.yaml"}},
 		{ID: OperationGateProof, State: provedState(p.proved[OperationGateProof]), Effect: doctor.EffectLocalMutation,
 			Description:     "prove setup and every gate in the new worker; valid evidence is reused",
-			Command:         p.onboardingAction(onboarding.StepGateProof, p.command()+" onboard record --plan "+p.planFile()+" gate-proof --json"),
+			Command:         p.command() + " onboard record --plan " + p.planFile() + " gate-proof --json",
 			ExpectedEffects: []string{"a gate proof record written to the onboarding plan file under its lock", "a disposable proof workspace"}},
 		{ID: OperationSkillSmoke, State: provedState(p.proved[OperationSkillSmoke]), Effect: doctor.EffectExternalMutation, Paid: true,
-			Description:     "record the skill smoke of every selectable harness for the new worker digest; only missing skills are called again",
-			Command:         p.onboardingAction(onboarding.StepSkillSmoke, ""),
+			Description: "record the skill smoke of every selectable harness for the new worker digest; only missing skills are called again",
+			Command:     smokeCommand, PaidCalls: paidCalls, Authorization: smokeAuthorization,
 			ExpectedEffects: []string{"paid model calls", "new records in worker/skill-smoke.json"}},
 		{ID: OperationMigrateStore, State: provedState(p.proved[OperationMigrateStore]), Effect: doctor.EffectLocalMutation,
 			Description:     "migrate the operational store with the explicit entry point; the old binary refuses the store afterwards",
@@ -443,7 +461,7 @@ func (p planner) operations() []Operation {
 			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp>", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
 		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectLocalMutation,
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
-			Command:         p.onboardingAction(onboarding.StepDoctor, p.command()+" onboard record --plan "+p.planFile()+" doctor --json"),
+			Command:         p.command() + " onboard record --plan " + p.planFile() + " doctor --json",
 			ExpectedEffects: []string{"a doctor record written to the onboarding plan file under its lock"}},
 		{ID: OperationStartCoordinator, State: provedState(p.targetCoordinator() && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
 			Description:     "start the coordinator of the target in the foreground and keep its terminal open; a supervised service is not supported yet",

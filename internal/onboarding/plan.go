@@ -536,11 +536,17 @@ func (e evaluator) smoke(status *StepStatus) {
 // smokeCommand returns the smoke script call that repeats only the missing
 // skills of one harness.
 func (e evaluator) smokeCommand(smoke HarnessSmoke) string {
-	image, digest, _ := strings.Cut(e.observation.Inputs[InputWorkerImage], "@")
-	repository := e.plan.Repository
+	return SmokeCommand(e.plan.Repository, e.plan.Resources, e.observation.Inputs[InputWorkerImage], smoke)
+}
+
+// SmokeCommand returns the executable smoke script call that records only
+// the missing skills of one harness for the pinned worker image, given as
+// IMAGE@DIGEST, with the scripts of a prepared resource directory.
+func SmokeCommand(repository, resources, workerImage string, smoke HarnessSmoke) string {
+	image, digest, _ := strings.Cut(workerImage, "@")
 	return fmt.Sprintf("cd %s && EVIDENCE_FILE=%s WORKER_IMAGE=%s WORKER_DIGEST=%s HARNESSES=%s MANDATORY_SKILLS=%s %s",
 		Quote(repository), Quote(repository+"/worker/skill-smoke.json"), Quote(image), Quote(digest), Quote(smoke.Harness),
-		Quote(strings.Join(smoke.Missing, " ")), Quote(e.plan.Resources+"/scripts/smoke-skills.sh"))
+		Quote(strings.Join(smoke.Missing, " ")), Quote(resources+"/scripts/smoke-skills.sh"))
 }
 
 // liveProof evaluates the disposable-issue proof.
