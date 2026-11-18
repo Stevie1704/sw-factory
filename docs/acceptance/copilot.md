@@ -259,18 +259,28 @@ report` into `docs/acceptance/copilot/`. No report is kept yet, because no
 live result exists. Review raw output by hand before recording; never commit
 a token, a transcript, or a host path.
 
-1. Rebuild the worker image with `scripts/build-worker.sh` from
-   `sw-factory-base-copilot` or the combined `sw-factory-base`, record the
-   new digest in `factory.yaml`, and run `factory doctor`.
+1. Rebuild the worker image with `scripts/build-worker.sh` from the combined
+   `sw-factory-base`. Do not use `sw-factory-base-copilot` for this
+   procedure: the `copilot-mixed-harness-recovery` scenario runs Copilot
+   alone and mixed with Codex and Claude Code, and the results file records
+   one `worker_digest` for all of its parts. Record the new digest in
+   `factory.yaml`, and run `factory doctor`.
 2. Run the live probes on the pinned worker image. They launch Copilot only
    through `factory-copilot`, so they observe the managed settings and the
    curated skills of a real launch:
    `COPILOT_PROBE_LIVE=1 COPILOT_PROBE_TOKEN_FILE=<token file> COPILOT_PROBE_WORKER_IMAGE=<image@digest> scripts/probe-copilot-cli.sh <output directory>`.
    Update the spike record for RB-1 to RB-7.
-3. Run the skill smoke for the pinned image (LS-1):
-   `HARNESSES=copilot COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh`.
+3. Run the skill smoke for the pinned image and for every harness that the
+   scenario selects. The Copilot record is LS-1:
+   `HARNESSES="codex claude copilot" COPILOT_TOKEN_PATH=<token file> ./scripts/smoke-skills.sh`.
+   The Codex and Claude Code credentials are the defaults that
+   [worker/SKILLS.md](../../worker/SKILLS.md) names. Continue only when the
+   smoke exits zero and `worker/skill-smoke.json` has a record of each of the
+   three harnesses for this digest.
 4. Run the live `copilot-mixed-harness-recovery` scenario
-   (`factory guide acceptance`). It covers LS-2 and LS-3. Record its live
-   result as `pass` only after a valid report and a continuation of the same
-   native session after the restart.
+   (`factory guide acceptance`) on that digest. It covers LS-2 and LS-3.
+   Record the same digest as `worker_digest`, and all three harnesses with
+   their versions as `worker_harnesses`. Record its live result as `pass`
+   only after a valid report and a continuation of the same native session
+   after the restart.
 5. Record the RB-8 decision.
