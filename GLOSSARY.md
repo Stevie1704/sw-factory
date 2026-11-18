@@ -638,6 +638,22 @@ It contains private issue and specification text and no credentials. It is
 not a whole-installation backup and cannot rewind remote state.
 _Avoid_: Backup (alone), pre-migration backup, snapshot (alone)
 
+**Checkpoint restore**:
+The confirmed replacement of the operational store by the snapshot of a
+maintenance checkpoint of the same host, registration, and release. It
+refuses unless every precondition is proved, including that no known external
+object changed and no unknown factory-owned object exists. The confirm binds
+the digest of the previewed plan. The original store stays in the restore
+work directory until the operator removes it.
+_Avoid_: Rollback, recovery, copy back
+
+**Restore journal**:
+The file `<store>.restore.json` that a checkpoint restore writes before each
+rename. While it exists, every store opener refuses, and only the restore
+command of the same release continues it to the original file set or to the
+verified replacement.
+_Avoid_: Restore log, lock file
+
 **Pre-migration backup**:
 An online snapshot of the operational store, taken under the SQLite write lock
 before a schema migration, in `<store>.bak-<timestamp>`. Its provenance file
