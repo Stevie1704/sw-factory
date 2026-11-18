@@ -14,6 +14,9 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/factory"
+	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
+	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -264,6 +267,106 @@ func TestCheckpointInspectChangesNoFile(t *testing.T) {
 				t.Fatalf("inspect changed the checkpoint:\nbefore %v\nafter  %v", before, after)
 			}
 		})
+	}
+}
+
+// cliOwned lists no factory-owned object that the fixture checkpoint does
+// not know, or fails when unreachable is set.
+type cliOwned struct{ unreachable bool }
+
+// FactoryBranches lists no unknown branch.
+func (f cliOwned) FactoryBranches(context.Context) ([]string, error) {
+	if f.unreachable {
+		return nil, errors.New("remote unreachable")
+	}
+	return nil, nil
+}
+
+// FactoryPullRequests lists no unknown pull request.
+func (cliOwned) FactoryPullRequests(context.Context) ([]checkpoint.PullRequestState, error) {
+	return nil, nil
+}
+
+// FactoryLabeledIssues lists no unknown issue.
+func (cliOwned) FactoryLabeledIssues(context.Context) ([]checkpoint.IssueState, error) {
+	return nil, nil
+}
+
+// The production remote and the hosted adapters list factory-owned objects,
+// so a restore of a hosted installation can verify precondition 8.
+var (
+	_ factory.RemoteBranchLister    = (*gitadapter.LocalWorktreeManager)(nil)
+	_ factory.PullRequestHeadLister = (*github.CodeHostClient)(nil)
+	_ factory.LabeledIssueLister    = (*github.GhClient)(nil)
+)
+
+// useCheckpointOwned replaces the owned-object seam for one test.
+func useCheckpointOwned(t *testing.T, lister checkpoint.OwnedObjectLister) {
+	t.Helper()
+	previous := checkpointOwnedForCLI
+	t.Cleanup(func() { checkpointOwnedForCLI = previous })
+	checkpointOwnedForCLI = func(string, config.RepositoryRegistration, string) checkpoint.OwnedObjectLister { return lister }
+}
+
+// TestCheckpointRestorePreviewsThenRestores verifies the preview and the
+// restored outcome of a confirm with the previewed digest.
+func TestCheckpointRestorePreviewsThenRestores(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	useCheckpointExternal(t, cliExternal{})
+	useCheckpointOwned(t, cliOwned{})
+	output := checkpointOutput(t)
+	if code := runCheckpointCommand(t, nil, "create", "--config", fixture.hostConfig, "--output", output, "--json"); code != 0 {
+		t.Fatalf("checkpoint create exit = %d, want 0", code)
+	}
+
+	var preview checkpointRestoreDocument
+	code := runCheckpointCommand(t, &preview, "restore", "--config", fixture.hostConfig, "--path", output, "--json")
+	if code != 0 || preview.SchemaVersion != 1 || preview.Command != "checkpoint restore" || preview.Outcome != "preview" || preview.Plan == nil || preview.Plan.Digest == "" || len(preview.Plan.Steps) == 0 || len(preview.Refusals) != 0 {
+		t.Fatalf("checkpoint restore preview = exit %d, %+v; want a plan", code, preview)
+	}
+
+	var stale checkpointRestoreDocument
+	code = runCheckpointCommand(t, &stale, "restore", "--config", fixture.hostConfig, "--path", output, "--json", "--confirm", "sha256:stale")
+	if code != 1 || stale.Outcome != "refused" || len(stale.Refusals) != 1 || stale.Refusals[0].Code != "restore.plan_stale" {
+		t.Fatalf("checkpoint restore with a stale digest = exit %d, %+v; want restore.plan_stale", code, stale)
+	}
+
+	var restored checkpointRestoreDocument
+	code = runCheckpointCommand(t, &restored, "restore", "--config", fixture.hostConfig, "--path", output, "--json", "--confirm", preview.Plan.Digest)
+	if code != 0 || restored.Outcome != "restored" || restored.Plan == nil || len(restored.Plan.PreservedPaths) == 0 {
+		t.Fatalf("checkpoint restore confirm = exit %d, %+v; want restored", code, restored)
+	}
+	for _, path := range restored.Plan.PreservedPaths {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("the preserved original %s is missing: %v", path, err)
+		}
+	}
+}
+
+// TestCheckpointRestoreReportsAnUnverifiedSource verifies the refused
+// outcome of an unreadable divergence source.
+func TestCheckpointRestoreReportsAnUnverifiedSource(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	useCheckpointExternal(t, cliExternal{})
+	output := checkpointOutput(t)
+	if code := runCheckpointCommand(t, nil, "create", "--config", fixture.hostConfig, "--output", output, "--json"); code != 0 {
+		t.Fatalf("checkpoint create exit = %d, want 0", code)
+	}
+	useCheckpointOwned(t, cliOwned{unreachable: true})
+
+	var document checkpointRestoreDocument
+	code := runCheckpointCommand(t, &document, "restore", "--config", fixture.hostConfig, "--path", output, "--json")
+	if code != 1 || document.Outcome != "refused" || len(document.Refusals) != 1 || document.Refusals[0].Code != "restore.divergence_unverified" {
+		t.Fatalf("checkpoint restore = exit %d, %+v; want restore.divergence_unverified", code, document)
+	}
+}
+
+// TestCheckpointRestoreNeedsPathAndJSON verifies the argument errors.
+func TestCheckpointRestoreNeedsPathAndJSON(t *testing.T) {
+	for _, args := range [][]string{{"restore", "--path", "x"}, {"restore", "--json"}} {
+		if code := runCheckpointCommand(t, nil, args...); code != 2 {
+			t.Fatalf("checkpoint %v exit = %d, want 2", args, code)
+		}
 	}
 }
 
