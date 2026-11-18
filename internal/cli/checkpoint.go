@@ -37,6 +37,21 @@ type checkpointDocument struct {
 	Manifest checkpoint.Manifest `json:"manifest"`
 }
 
+// checkpointInspectSchema is the version of the checkpoint inspect document.
+const checkpointInspectSchema = 1
+
+// checkpointInspectDocument is the JSON result of checkpoint inspect.
+// Verified is true only for the verified outcome.
+type checkpointInspectDocument struct {
+	SchemaVersion int                    `json:"schema_version"`
+	Command       string                 `json:"command"`
+	Outcome       string                 `json:"outcome"`
+	Verified      bool                   `json:"verified"`
+	Checkpoint    *checkpointDocument    `json:"checkpoint,omitempty"`
+	Refusals      []store.UpgradeFinding `json:"refusals"`
+	Error         *errorDocument         `json:"error,omitempty"`
+}
+
 // checkpointExternalForCLI is the external state seam: it reads the work
 // tracker, the code host, and the Git remote of one registration. A test
 // replaces it so the CLI contract runs without network access.
@@ -59,8 +74,42 @@ func runCheckpoint(ctx context.Context, args []string, defaultConfigPath string,
 	if len(args) > 0 && args[0] == "create" {
 		return runCheckpointCreate(ctx, args[1:], defaultConfigPath, output, errorsOutput)
 	}
-	writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create; read factory guide maintenance"))
+	if len(args) > 0 && args[0] == "inspect" {
+		return runCheckpointInspect(ctx, args[1:], output, errorsOutput)
+	}
+	writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create or inspect; read factory guide maintenance"))
 	return 2
+}
+
+// runCheckpointInspect verifies one checkpoint directory and writes its
+// manifest. It needs no configuration and changes no file. It exits 0 when
+// the checkpoint verifies, and 1 for a refusal or an error.
+func runCheckpointInspect(ctx context.Context, args []string, output, errorsOutput io.Writer) int {
+	flags := newFlagSet("checkpoint inspect", errorsOutput)
+	path := flags.String("path", "", "checkpoint directory to verify; required")
+	asJSON := flags.Bool("json", false, operationJSONUsage+"; required")
+	if !parseOnboardFlags(flags, args, errorsOutput) {
+		return 2
+	}
+	if !*asJSON || *path == "" {
+		writeError(errorsOutput, errors.New("checkpoint inspect needs --path and --json"))
+		return 2
+	}
+	document := checkpointInspectDocument{SchemaVersion: checkpointInspectSchema, Command: "checkpoint inspect", Refusals: []store.UpgradeFinding{}}
+	manifest, err := checkpoint.Verify(ctx, *path)
+	var refusal *checkpoint.VerificationError
+	switch {
+	case errors.As(err, &refusal):
+		document.Outcome, document.Refusals = "refused", []store.UpgradeFinding{{Code: refusal.Code, Detail: refusal.Detail}}
+	case err != nil:
+		document.Outcome, document.Error = "error", newErrorDocument("checkpoint.inspect_failed", doctor.OriginUnknown, err)
+	default:
+		document.Outcome, document.Verified, document.Checkpoint = "verified", true, &checkpointDocument{Path: *path, Manifest: manifest}
+	}
+	if !writeJSONDocument(output, errorsOutput, document) || document.Outcome != "verified" {
+		return 1
+	}
+	return 0
 }
 
 // runCheckpointCreate creates one maintenance checkpoint and writes its
