@@ -128,8 +128,10 @@ put it on `PATH` yet. Its `factory` binary is the target. Run:
 ```
 
 The plan only reads. It names the blockers, the conditions of the migration
-gate, the ordered operations with their effects, and the final
-verification. Do the first pending operation, then plan again; after an
+gate, the ordered operations with their effects, the final verification, and
+the newest maintenance checkpoint of this installation and release when you
+pass `--checkpoints <directory>`. The checkpoint step is optional; the
+`factory guide maintenance` topic describes it. Do the first pending operation, then plan again; after an
 interruption, the plan tells which components are old, new, or incomplete.
 `factory upgrade migrate-store --config <path> --json` is the only supported
 store migration entry point. Every other command, `factory start` included,

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/factory"
@@ -88,6 +89,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 	configPath := flags.String("config", defaultConfigPath, "host configuration of the installation to upgrade")
 	onboardingPlan := flags.String("onboarding-plan", "", "onboarding plan of the repository, whose valid evidence the upgrade reuses")
 	resources := flags.String("resources", "", "directory that onboard prepare of the target filled; defaults to the onboarding plan's value")
+	checkpoints := flags.String("checkpoints", "", "directory whose direct subdirectories are maintenance checkpoints; the plan lists the newest one of this registration and release")
 	asJSON := flags.Bool("json", false, "write the plan as one schema-versioned JSON document; required")
 	if !parseOnboardFlags(flags, args, errorsOutput) {
 		return 2
@@ -96,7 +98,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 		writeError(errorsOutput, errors.New("upgrade plan needs --json"))
 		return 2
 	}
-	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan, *resources)
+	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan, *resources, *checkpoints)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -160,7 +162,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 
 // observeUpgrade reads every fact the plan needs. It only reads. An error is
 // returned only when the target binary itself cannot be located.
-func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources string) (upgrade.Observation, error) {
+func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources, checkpoints string) (upgrade.Observation, error) {
 	command, err := factoryCommand()
 	if err != nil {
 		return upgrade.Observation{}, err
@@ -185,6 +187,9 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources s
 	}
 	registration := host.Repositories[0]
 	observation.Registered, observation.RepositoryPath = true, registration.Path
+	if err := observeCheckpoints(ctx, checkpoints, registration, &observation); err != nil {
+		return observation, err
+	}
 	observation.Store, err = store.InspectForUpgrade(ctx, registration.OperationalDataPath)
 	if err != nil {
 		observation.StoreProblem = err.Error()
@@ -331,5 +336,31 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 	}
 	current.PlanPath, current.FactoryCommand = observation.OnboardingPlanPath, observation.FactoryCommand
 	observation.Onboarding = onboarding.Evaluate(plan, current).Steps
+	return nil
+}
+
+// observeCheckpoints lists the newest checkpoint of this registration and
+// target release in the named directory. Without a directory it observes
+// nothing, so the plan lists no checkpoint.
+func observeCheckpoints(ctx context.Context, directory string, registration config.RepositoryRegistration, observation *upgrade.Observation) error {
+	if directory == "" {
+		return nil
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", directory, err)
+	}
+	identity, err := onboarding.RegistrationIdentity(observation.ConfigPath, registration)
+	if err != nil {
+		return err
+	}
+	observation.Checkpoint, err = checkpoint.FindNewest(ctx, absolute, checkpoint.Match{
+		RegistrationIdentity: identity,
+		Version:              observation.Target.Version,
+		Revision:             observation.Target.Revision,
+	})
+	if err != nil {
+		return fmt.Errorf("list checkpoints: %w", err)
+	}
 	return nil
 }
