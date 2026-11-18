@@ -34,6 +34,7 @@ const (
 	opWorkerLaunch  = "launch worker"
 	opResume        = "resume native session"
 	opFinish        = "finish native session"
+	opStopWorker    = "stop worker"
 )
 
 // faultPhase places an injected failure relative to the external mutation.
@@ -76,15 +77,17 @@ type effectWorld struct {
 	applied map[string]int
 	faults  []fault
 
-	issue        tracker.Issue
-	comments     []tracker.Comment
-	pulls        []codehost.PullRequest
-	statuses     []codehost.CommitStatus
-	checkpoints  map[string]string
-	commits      int
-	localHead    string
-	remoteHead   string
-	workers      map[string]worker.StartRequest
+	issue       tracker.Issue
+	comments    []tracker.Comment
+	pulls       []codehost.PullRequest
+	statuses    []codehost.CommitStatus
+	checkpoints map[string]string
+	commits     int
+	localHead   string
+	remoteHead  string
+	workers     map[string]worker.StartRequest
+	// running holds the workers that still run, by the identity that stops them.
+	running      map[string]bool
 	hideStatuses bool
 }
 
@@ -112,6 +115,7 @@ func newEffectWorld(t *testing.T) *effectWorld {
 		checkpoints: map[string]string{},
 		localHead:   run.CheckpointSHA, remoteHead: run.CheckpointSHA,
 		workers: map[string]worker.StartRequest{},
+		running: map[string]bool{run.ID: true},
 	}
 }
 
@@ -395,12 +399,18 @@ func workerIdentity(request worker.StartRequest) string {
 	return request.RunID + "\x00" + request.WorkerID
 }
 
-// StopWorker stops one worker; stopping is idempotent.
-func (w *effectWorld) StopWorker(context.Context, string) error { return nil }
+// StopWorker stops one running worker. Stopping a stopped worker changes
+// nothing, like the Docker runtime.
+func (w *effectWorld) StopWorker(_ context.Context, workerID string) error {
+	if !w.running[workerID] {
+		return nil
+	}
+	return w.mutate(opStopWorker, func() { delete(w.running, workerID) })
+}
 
-// StopActiveWorkers stops the run's workers; stopping is idempotent.
-func (w *effectWorld) StopActiveWorkers(context.Context, effect.RunStore, store.Run) error {
-	return nil
+// StopActiveWorkers stops the run-scoped worker of run.
+func (w *effectWorld) StopActiveWorkers(ctx context.Context, _ effect.RunStore, run store.Run) error {
+	return w.StopWorker(ctx, run.ID)
 }
 
 // HarnessRuntime returns the world's native harness.
@@ -522,6 +532,24 @@ type effectContract struct {
 	// verify asserts the durable run and the external world that the
 	// completed effect leaves behind.
 	verify func(*effectWorld)
+	// boundaries lists the further external calls inside the effect that
+	// the contract also interrupts.
+	boundaries []boundary
+}
+
+// boundary is one further external call inside an effect.
+type boundary struct {
+	operation string
+	// replayed reports that a replay repeats the call. A replay never
+	// repeats native finalization after the invocation was marked terminal,
+	// because that call has no idempotency key; it happens at most once.
+	replayed bool
+}
+
+// allBoundaries returns the effect's own operation followed by its further
+// external calls.
+func (c effectContract) allBoundaries() []boundary {
+	return append([]boundary{{operation: c.operation, replayed: true}}, c.boundaries...)
 }
 
 // effectContracts lists every durable effect kind the journal applies. The
@@ -531,7 +559,8 @@ func effectContracts() []effectContract {
 	return []effectContract{
 		{
 			name: "state transition", kind: store.PendingEffectKindStateTransition, operation: opLabels,
-			verify: verifyStateTransition,
+			verify:     verifyStateTransition,
+			boundaries: []boundary{{operation: opStopWorker, replayed: true}},
 			apply: func(ctx context.Context, w *effectWorld) error {
 				next := advanced(w.run, store.StatusWaitingForHuman)
 				_, err := w.journal().ApplyStateTransition(ctx, w.store, effect.StateTransition{
@@ -653,8 +682,9 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "result acceptance", kind: store.PendingEffectKindResultAcceptance, operation: opLabels,
-			verify:  verifyResultAcceptance,
-			prepare: func(w *effectWorld) { w.saveInvocation(contractInvocation(w.run.ID)) },
+			verify:     verifyResultAcceptance,
+			boundaries: []boundary{{operation: opFinish}, {operation: opStopWorker, replayed: true}},
+			prepare:    func(w *effectWorld) { w.saveInvocation(contractInvocation(w.run.ID)) },
 			apply: func(ctx context.Context, w *effectWorld) error {
 				accepted := contractInvocation(w.run.ID)
 				accepted.Status = store.InvocationStatusCompleted
@@ -712,6 +742,7 @@ func (w *effectWorld) requireIssueProjection(run store.Run) {
 
 // verifyStateTransition requires the waiting run and its issue projection.
 func verifyStateTransition(w *effectWorld) {
+	w.require(!w.running[w.run.ID], "run worker still running", w.running)
 	w.requireIssueProjection(w.requireAdvancedRun(store.StatusWaitingForHuman))
 }
 
@@ -788,6 +819,7 @@ func verifyWorkerLaunch(w *effectWorld) {
 // verifyResultAcceptance requires the accepted invocation and the waiting
 // run with its issue projection.
 func verifyResultAcceptance(w *effectWorld) {
+	w.require(!w.running[w.run.ID], "run worker still running", w.running)
 	invocation := w.invocation("inv-contract")
 	w.require(invocation.Status == store.InvocationStatusCompleted, "accepted invocation status", invocation.Status)
 	w.requireIssueProjection(w.requireAdvancedRun(store.StatusWaitingForHuman))
@@ -830,14 +862,14 @@ func (w *effectWorld) invocation(id string) store.Invocation {
 	return *invocation
 }
 
-// interrupt applies the contract's effect with one armed failure and returns
-// the journal entry the failure left behind.
-func (c effectContract) interrupt(t *testing.T, w *effectWorld, phase faultPhase) store.PendingEffect {
+// interrupt applies the contract's effect with one armed failure at
+// operation and returns the journal entry the failure left behind.
+func (c effectContract) interrupt(t *testing.T, w *effectWorld, operation string, phase faultPhase) store.PendingEffect {
 	t.Helper()
 	if c.prepare != nil {
 		c.prepare(w)
 	}
-	w.arm(c.operation, phase)
+	w.arm(operation, phase)
 	if err := c.apply(context.Background(), w); !errors.Is(err, errInjected) {
 		t.Fatalf("apply error = %v, want the injected failure", err)
 	}
@@ -849,9 +881,9 @@ func (c effectContract) interrupt(t *testing.T, w *effectWorld, phase faultPhase
 }
 
 // TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure injects a failure
-// before the external call, after it, and during the first replay, then
-// verifies that recovery leaves exactly one external mutation and an empty
-// journal.
+// before each external call of an effect, after it, and during the first
+// replay. Recovery must leave the effect's mutation applied exactly once, no
+// mutation applied twice, an empty journal, and the effect's projection.
 func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 	ctx := context.Background()
 	for _, contract := range effectContracts() {
@@ -868,37 +900,56 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				w.assertApplied(contract.operation, 1)
 				contract.verify(w)
 			})
-			t.Run("failure before the external call", func(t *testing.T) {
-				w := newEffectWorld(t)
-				pending := contract.interrupt(t, w, faultBefore)
-				w.assertApplied(contract.operation, 0)
-				w.replay(ctx, pending)
-				w.assertApplied(contract.operation, 1)
-				contract.verify(w)
-			})
-			t.Run("failure after the external call", func(t *testing.T) {
-				w := newEffectWorld(t)
-				pending := contract.interrupt(t, w, faultAfter)
-				w.assertApplied(contract.operation, 1)
-				w.replay(ctx, pending)
-				w.assertApplied(contract.operation, 1)
-				contract.verify(w)
-			})
-			t.Run("failure during replay", func(t *testing.T) {
-				w := newEffectWorld(t)
-				pending := contract.interrupt(t, w, faultBefore)
-				w.arm(contract.operation, faultBefore)
-				if _, err := w.journal().Replay(ctx, w.store, pending); !errors.Is(err, errInjected) {
-					t.Fatalf("first Replay() error = %v, want the injected failure", err)
-				}
-				w.assertStillPending(pending)
-				w.assertApplied(contract.operation, 0)
-				w.replay(ctx, pending)
-				w.assertApplied(contract.operation, 1)
-				contract.verify(w)
-			})
+			for _, call := range contract.allBoundaries() {
+				t.Run(call.operation, func(t *testing.T) {
+					testInterruptedBoundary(t, contract, call)
+				})
+			}
 		})
 	}
+}
+
+// testInterruptedBoundary interrupts one external call of an effect in every
+// failure phase and verifies the recovered effect.
+func testInterruptedBoundary(t *testing.T, contract effectContract, call boundary) {
+	ctx := context.Background()
+	for _, phase := range []faultPhase{faultBefore, faultAfter} {
+		t.Run("failure "+string(phase)+" the external call", func(t *testing.T) {
+			w := newEffectWorld(t)
+			pending := contract.interrupt(t, w, call.operation, phase)
+			w.replay(ctx, pending)
+			w.assertRecovered(contract, call, phase)
+		})
+	}
+	if !call.replayed {
+		return
+	}
+	t.Run("failure during replay", func(t *testing.T) {
+		w := newEffectWorld(t)
+		pending := contract.interrupt(t, w, call.operation, faultBefore)
+		w.arm(call.operation, faultBefore)
+		if _, err := w.journal().Replay(ctx, w.store, pending); !errors.Is(err, errInjected) {
+			t.Fatalf("first Replay() error = %v, want the injected failure", err)
+		}
+		w.assertStillPending(pending)
+		w.assertApplied(call.operation, 0)
+		w.replay(ctx, pending)
+		w.assertRecovered(contract, call, faultBefore)
+	})
+}
+
+// assertRecovered requires the effect's mutation exactly once, the
+// interrupted call once (or never, for a call a replay must not repeat after
+// it failed before the call), and the effect's projection.
+func (w *effectWorld) assertRecovered(contract effectContract, call boundary, phase faultPhase) {
+	w.t.Helper()
+	w.assertApplied(contract.operation, 1)
+	if !call.replayed && phase == faultBefore {
+		w.assertApplied(call.operation, 0)
+	} else {
+		w.assertApplied(call.operation, 1)
+	}
+	contract.verify(w)
 }
 
 // TestEveryEffectRefusesAnUnsafeReplay verifies that a replay which can no
@@ -910,7 +961,7 @@ func TestEveryEffectRefusesAnUnsafeReplay(t *testing.T) {
 	for _, contract := range effectContracts() {
 		t.Run(contract.name, func(t *testing.T) {
 			w := newEffectWorld(t)
-			pending := contract.interrupt(t, w, faultBefore)
+			pending := contract.interrupt(t, w, contract.operation, faultBefore)
 			contract.makeUnsafe(w)
 			_, err := w.journal().Replay(ctx, w.store, pending)
 			if err == nil {
