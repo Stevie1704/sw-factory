@@ -143,14 +143,15 @@ func ReadRestoreJournal(storePath string) (RestoreJournal, error) {
 	return journal, nil
 }
 
-// crashPoint lets a test stop a restore at one named point, as a crash
-// does. A nil crashPoint never stops.
-type crashPoint func(point string) error
+// CrashPoint lets a test stop a restore at one named point, as a process
+// crash does: an error from it stops the restore at once, without cleanup.
+// Production passes nil, which never stops.
+type CrashPoint func(point string) error
 
 // restorer runs one restore with an optional crash point.
 type restorer struct {
 	journal RestoreJournal
-	crash   crashPoint
+	crash   CrashPoint
 }
 
 // ApplyRestore runs the restore plan of ADR 0032. It writes the journal
@@ -159,9 +160,9 @@ type restorer struct {
 // verifies it. On a failed step, such as a replacement that does not
 // verify, it rolls back, so the original live file set is back. A crash
 // leaves the journal for ContinueRestore. The caller holds the coordinator
-// lock.
-func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory) error {
-	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}}).apply(ctx)
+// lock. crash is nil outside tests.
+func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory, crash CrashPoint) error {
+	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}, crash: crash}).apply(ctx)
 }
 
 // apply runs each step of the restore after its journal write.

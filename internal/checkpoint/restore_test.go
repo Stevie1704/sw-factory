@@ -142,7 +142,7 @@ func TestApplyRestoreReplacesTheStoreAndPreservesTheOriginal(t *testing.T) {
 	if plan.LiveFiles[0] != "factory.db" || len(plan.LiveFiles) != 4 {
 		t.Fatalf("live files = %v, want the store first, then each sidecar", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	fixture.assertReplaced(t, "complete")
@@ -169,7 +169,7 @@ func TestApplyRestoreWithoutALiveStore(t *testing.T) {
 	if len(plan.LiveFiles) != 0 {
 		t.Fatalf("live files = %v, want none", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	if _, err := store.OpenReadOnly(context.Background(), fixture.storePath); err != nil {
@@ -184,7 +184,7 @@ func TestApplyRestoreRollsBackAReplacementThatDoesNotVerify(t *testing.T) {
 	fixture := newRestoreFixture(t)
 	plan := fixture.plan(t)
 	plan.Replacement.SHA256 = "0000"
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err == nil {
 		t.Fatal("ApplyRestore() of a replacement that does not verify succeeded")
 	}
 	fixture.assertOriginal(t, "failed verification")
@@ -205,7 +205,7 @@ func TestRestoreContinuationAfterACrashAtEachPoint(t *testing.T) {
 	t.Parallel()
 	var points []string
 	recorder := newRestoreFixture(t)
-	if err := checkpoint.ApplyRestoreWithCrashForTest(context.Background(), recorder.plan(t), func(point string) error {
+	if err := checkpoint.ApplyRestore(context.Background(), recorder.plan(t), checkpoint.Factory{}, func(point string) error {
 		points = append(points, point)
 		return nil
 	}); err != nil {
@@ -227,7 +227,7 @@ func TestRestoreContinuationAfterACrashAtEachPoint(t *testing.T) {
 	verifying := slices.Index(points, "journal verifying")
 	for index, point := range points {
 		fixture := newRestoreFixture(t)
-		err := checkpoint.ApplyRestoreWithCrashForTest(context.Background(), fixture.plan(t), func(current string) error {
+		err := checkpoint.ApplyRestore(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(current string) error {
 			if current == point {
 				return errCrash
 			}
@@ -276,7 +276,7 @@ func TestContinueRestoreWithoutAJournal(t *testing.T) {
 func TestRestoreContinuationRollsBackAReplacementThatNoLongerVerifies(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
-	err := checkpoint.ApplyRestoreWithCrashForTest(context.Background(), fixture.plan(t), func(point string) error {
+	err := checkpoint.ApplyRestore(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(point string) error {
 		if point == "journal verifying" {
 			return errCrash
 		}
