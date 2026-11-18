@@ -24,21 +24,25 @@ states that limit.
 1. The first supported version is a **maintenance checkpoint**: a consistent
    snapshot of the operational store with a manifest, taken on the same host,
    for the same registration, by the same Factory release, while the
-   installation is **quiescent**. Restore puts that snapshot back only on the
-   same host, registration, and release.
+   installation is in **full quiescence**. Restore puts that snapshot back
+   only on the same host, registration, and release.
 2. **Active-run recovery fails closed.** Checkpoint creation refuses an
    installation with active work, and restore refuses when it cannot prove
    that no external effect happened after the snapshot. There is no override
    flag in the first version.
-3. A checkpoint never copies a live database file. It takes a SQLite online
-   snapshot (`VACUUM INTO`) inside one read transaction while it holds the
-   coordinator lock.
+3. A checkpoint never copies a live database file. One connection holds the
+   SQLite write lock (`BEGIN IMMEDIATE`) and checks full quiescence; a second
+   connection takes the online snapshot (`VACUUM INTO`) while that lock is
+   held. The coordinator lock is held for the whole operation.
 4. A checkpoint contains no credential, credential path content, session
    volume, or harness transcript. It does contain private issue and
    specification text, so it is private data, never a shareable artifact.
-5. Restore preserves the original store until the replacement is verified,
-   and an interrupted restore is always diagnosable from a restore journal.
-6. The pre-migration `.bak-*` copy of the operational store stays migration
+5. Restore preserves the original store until the replacement is verified.
+   A restore journal is written before every rename, so each crash point
+   leaves a state that a continuation recovers without loss.
+6. The manifest records the observable state of every known external object.
+   Restore compares each one and refuses on any difference.
+7. The pre-migration `.bak-*` copy of the operational store stays migration
    provenance. It is not a checkpoint, and no procedure restores it.
 
 ## State and ownership inventory
@@ -76,47 +80,58 @@ Classes:
 
 ## Consistent snapshot
 
-A checkpoint must exclude coordinator, CLI, and worker writes:
+A checkpoint must exclude coordinator, CLI, and worker writes between the
+quiescence check and the snapshot:
 
 1. Acquire the coordinator lock without waiting. A held lock refuses with
    `checkpoint.coordinator_running`. The lock stays held until the manifest
    is written, so no coordinator can start during the checkpoint.
-2. Open the store through the normal read-write opener. This rolls back a hot
-   `-journal` from an interrupted writer. The opener migrates an older schema,
-   so the command first reads the schema version through the read-only path,
-   and refuses an older schema with `checkpoint.migration_required`. A
-   checkpoint never migrates.
-3. Begin one read transaction. Inside it, check quiescence (below) and run
-   `VACUUM INTO '<staging file>'`. A CLI or UI writer that is not under the
-   coordinator lock, such as a session command append, either committed
-   before the transaction or is not in the snapshot. The snapshot is
-   transactionally consistent either way.
-4. `VACUUM INTO` creates the file with the process umask. Set its mode to
+2. Read the schema version through the read-only path. An older schema
+   refuses with `checkpoint.migration_required`; a checkpoint never migrates.
+   Then open connection A read-write without migration. This rolls back a hot
+   `-journal` from an interrupted writer.
+3. On connection A, run `BEGIN IMMEDIATE`. A now holds the SQLite write lock,
+   so no other connection can commit a write. Check full quiescence (below)
+   on A.
+4. On a second connection B, run `VACUUM INTO '<staging file>'`. SQLite
+   refuses `VACUUM INTO` inside A's own transaction, so it must run on B. B
+   reads the committed state, which is the state that A checked, because no
+   write can commit while A holds the lock. A CLI or UI writer that is not
+   under the coordinator lock, such as a session command append, waits for
+   its busy timeout or fails.
+5. End A with `ROLLBACK`. A wrote nothing.
+6. `VACUUM INTO` creates the file with the process umask. Set its mode to
    `0600` at once; the staging directory is `0700`, so no other user can read
    it before that. Check the staging file with `PRAGMA integrity_check`, read
-   its schema version, and compute its SHA-256. Then write the manifest and rename the
-   staging directory into place.
+   its schema version, and compute its SHA-256. Then write the manifest and
+   rename the staging directory into place.
+
+The sequence works in the store's rollback-journal mode and in WAL mode; the
+feasibility test runs it in both. The store does not need to change its
+journal mode.
 
 Copying the database file is not supported, also not after closing the
 connection, because another process can write between the close and the copy.
 The current pre-migration backup copies the file; follow-up D moves it to the
 same online primitive.
 
-**Quiescent** means all of these are true inside the snapshot transaction:
+**Full quiescence** means all of these are true on connection A:
 
 - no run has a non-terminal status;
 - the pending-effect journal is empty;
 - no invocation or session-role invocation is active;
+- the command inbox has no session command that is not completed;
 - no ideation session is publishing or has an incomplete publication;
-- the command inbox has no unapplied command;
 - the coordinator lock was free when the command acquired it.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
-condition. The upgrade store migration (`factory upgrade migrate-store`)
-checks only the first three conditions and the lock, because it does not
-replace the store and keeps its pre-migration copy. A checkpoint needs the
-complete list, because restore replaces the store. The operator finishes or cancels the work with the current
-binary first.
+condition. The operator finishes or cancels the work with the current binary
+first.
+
+The upgrade store migration (`factory upgrade migrate-store`) uses the
+narrower **migration gate**: the first four conditions and the free
+coordinator lock. It does not check publications, because a migration keeps
+every row and its pre-migration copy, while restore replaces the store.
 
 ## Manifest, identity, and integrity
 
@@ -139,7 +154,8 @@ that is readable by group or other.
 | `registration_summary` | Repository path, tracker and code host providers, owner, project, and repository names, and the local installation ID; no credential path |
 | `worker_image` | The pinned `image@digest` |
 | `target_branch_head` | The commit of the target branch on the remote at checkpoint time |
-| `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities, and the factory-owned pull-request and branch names that the snapshot knows |
+| `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities that the snapshot knows |
+| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
 | `files` | For each file: relative path, size, mode, and SHA-256 |
 | `private_data` | Always `true`, with the reason: issue and specification text |
 
@@ -167,15 +183,21 @@ Restore refuses unless every precondition is proved:
    non-terminal run, and nothing newer than the watermarks: no run,
    invocation, ledger entry, or local issue identity that the snapshot does
    not have.
-7. The work tracker and code host show no factory-owned effect after the
-   snapshot: no `factory/*` branch or pull request that the snapshot does not
-   know, no issue with a factory state label whose run the snapshot does not
-   know, and no factory status comment that is newer than `created_at`.
+7. Every known external object in `external_state` has exactly its recorded
+   state: each known branch has the recorded remote head SHA, each known pull
+   request has the recorded head SHA, state, and draft flag, each known issue
+   has the recorded open state and factory labels, and each known status
+   comment has the recorded update time. A known branch that advanced without
+   a new name, pull request, or comment is therefore a divergence.
+8. The work tracker and code host show no unknown factory-owned object: no
+   `factory/*` branch or pull request that the snapshot does not know, and no
+   issue with a factory state label whose run the snapshot does not know.
 
 An older snapshot therefore cannot authorize a duplicate comment, pull
-request, push, worker launch, or harness resume. A source that restore cannot
-read (for example, the tracker is not reachable) refuses with
-`restore.divergence_unverified`. Unknown evidence is never success.
+request, push, worker launch, or harness resume. Any difference refuses with
+`restore.external_divergence` and names each object. An object or a source
+that restore cannot read (for example, the tracker is not reachable) refuses
+with `restore.divergence_unverified`. Unknown evidence is never success.
 
 ## Specified outcomes
 
@@ -190,8 +212,9 @@ read (for example, the tracker is not reachable) refuses with
 | Active worker or role session | Refused: `checkpoint.not_quiescent` | Refused: `restore.worker_active` |
 | Non-terminal run | Refused: `checkpoint.not_quiescent` | Refused: `restore.not_quiescent` |
 | Pending or ambiguous effect | Refused: `checkpoint.not_quiescent` | Refused: `restore.not_quiescent`; resolve it with `factory reconcile` or effect abandonment first |
-| External effect after the snapshot | Not applicable | Refused: `restore.external_divergence`, with each unexplained item |
-| Divergence source not readable | Not applicable | Refused: `restore.divergence_unverified` |
+| External effect after the snapshot, including a moved known branch or a changed known pull request | Not applicable | Refused: `restore.external_divergence`, with each object |
+| Restore journal of an earlier restore exists | Not applicable | The command continues that restore first (see below); every other store opener refuses |
+| Divergence source or known object not readable | Refused: `checkpoint.external_unverified` | Refused: `restore.divergence_unverified` |
 | Missing checkpoint file or manifest | Not applicable | Refused: `restore.checkpoint_incomplete` |
 | Checksum, integrity, or manifest-schema failure | Not applicable | Refused: `restore.checkpoint_corrupt`; nothing is written |
 | Missing store directory | Refused: `checkpoint.store_missing` | Proceeds only after the operator recreates the registration; the preview names it |
@@ -199,26 +222,34 @@ read (for example, the tracker is not reachable) refuses with
 
 ## Restore plan and interruption
 
-Restore writes a restore journal `<store>.restore.json` (mode `0600`) before
-each step and replaces it atomically. The steps are:
+All restore files live in one work directory `<store directory>/.restore-<checkpoint_id>/`
+(mode `0700`) on the same file system as the store, so every rename is atomic.
+It holds `new/` for the staged replacement and `original/` for the preserved
+live files. The restore journal `<store>.restore.json` (mode `0600`) is
+written to a temporary file, synced, and renamed into place, and the
+directory is synced, **before** each rename. The journal lists the live file
+set: the store and each of its `-journal`, `-wal`, and `-shm` files that
+existed when the restore started.
 
-1. `staged`: copy `store.db` to `<store>.restore-<checkpoint_id>`, then
-   verify its checksum and integrity.
-2. `original_preserved`: rename the live store and each existing sidecar to
-   `<store>.pre-restore-<checkpoint_id>[-suffix]`. Never delete it.
-3. `replaced`: rename the staging file to `<store>`, then sync the directory.
-4. `verified`: open the store read-only, compare the schema version and the
-   watermarks with the manifest, and run the store and supervisor doctor
-   checks.
-5. `complete`: release the coordinator lock.
+While a restore journal exists, every store opener, including the read-only
+diagnosis opener, refuses with a typed error that names the restore command.
+So no process can open a store whose files are split between the live path
+and `original/`, also after the coordinator lock is released by a crash.
 
-A later restore command or `factory doctor` reads the journal. Before
-`replaced`, continuation removes the staging file and leaves the original in
-place. At or after `replaced`, continuation repeats verification. A failed
-verification renames the preserved original back. The preserved original is
-removed only by the operator. Restore never starts the coordinator, resumes a
-harness, or replays a pending effect. The operator runs `factory doctor` and
-then `factory start`.
+| Journal state (written before the step) | Step | State after a crash in this step | Continuation |
+| --- | --- | --- | --- |
+| `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
+| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
+| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), rename every original back, then remove `new/` and the journal |
+| `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
+| `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
+
+Every continuation before `verified` ends with the original live file set
+back in place and unchanged, so it is lossless. After `verified`, the
+original stays in `original/` until the operator removes it. Continuation
+needs the coordinator lock and runs only from the same release. Restore never
+starts the coordinator, resumes a harness, or replays a pending effect. The
+operator runs `factory doctor` and then `factory start`.
 
 ## Unsupported scenarios
 
@@ -241,13 +272,16 @@ checkpoint. Each one is refused, not approximated.
 
 ## Feasibility evidence
 
-`internal/store/checkpoint_feasibility_test.go` is a test-only prototype. It
-shows that a `VACUUM INTO` snapshot taken while another connection holds an
-uncommitted write contains only committed state, has no sidecar, and passes
-the integrity check. It also shows that `VACUUM INTO` writes a file that the
-read-only store opener refuses until its mode is `0600`. It shows that a divergence check refuses a snapshot when a later run or
-factory-owned pull request exists, or when a pending effect is journaled. It
-adds no production code.
+`internal/store/checkpoint_feasibility_test.go` is a test-only prototype. In
+rollback-journal mode and in WAL mode, it runs the exact snapshot sequence:
+connection A holds `BEGIN IMMEDIATE` and checks quiescence; `VACUUM INTO`
+inside A fails; a third writer cannot change the store; connection B takes
+the snapshot; A ends. The snapshot holds the checked state, has no sidecar,
+passes the integrity check, and opens as a current store only after its mode
+is set to `0600`. The prototype also shows that a divergence check refuses a
+later run, a later pull request, a journaled pending effect, and a known
+branch that moved, and that an unreadable known object refuses as
+unverified. It adds no production code.
 
 ## Follow-up implementation specifications
 
@@ -262,8 +296,15 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 - Acceptance:
   - [ ] A quiescent installation produces a directory with `0700`,
         `store.db` and `manifest.json` with `0600`, and checksums that verify.
-  - [ ] Each quiescence condition refuses with `checkpoint.not_quiescent` and
-        names that condition; nothing is written.
+  - [ ] Each full-quiescence condition refuses with
+        `checkpoint.not_quiescent` and names that condition; nothing is
+        written.
+  - [ ] The snapshot runs on a second connection while the first holds
+        `BEGIN IMMEDIATE`; a test proves that a concurrent writer cannot
+        commit between the check and the snapshot.
+  - [ ] The manifest records `external_state` for every known branch, pull
+        request, issue, and status comment; an unreadable object refuses
+        with `checkpoint.external_unverified`.
   - [ ] A held coordinator lock refuses; the lock is held during the snapshot.
   - [ ] An older schema refuses with `checkpoint.migration_required`, and the
         store bytes do not change.
@@ -296,13 +337,20 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 - Acceptance:
   - [ ] Every row of "Specified outcomes" has a fixture test with the exact
         refusal code.
-  - [ ] The divergence check uses fake tracker and code-host adapters; an
-        unreadable source refuses with `restore.divergence_unverified`.
+  - [ ] The divergence check uses fake tracker and code-host adapters. A
+        moved known branch, a changed known pull request head or state, a
+        changed known issue label, and an unknown `factory/*` branch each
+        refuse with `restore.external_divergence`; an unreadable source or
+        object refuses with `restore.divergence_unverified`.
+  - [ ] While a restore journal exists, `store.Open`, `store.OpenReadOnly`,
+        and `factory doctor` refuse with a typed error.
   - [ ] A confirm with a stale plan digest is refused.
   - [ ] After success, the preserved original exists, and `factory doctor`
         reports the store ready.
-- Failure injection: interrupt after each journal step; continuation reaches
-  either the original store or a verified replacement, never a mix.
+- Failure injection: crash before and after every rename of the table in
+  "Restore plan and interruption", including between two sidecar renames.
+  Continuation reaches either the unchanged original file set (byte compare)
+  or a verified replacement, never a mix.
 
 ### D. Pre-migration backup provenance
 
@@ -310,8 +358,9 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
   primitive, and write `<store>.bak-<timestamp>.json` with the source and
   target schema versions, the release that migrated, and the SHA-256.
 - Acceptance:
-  - [ ] A migration while another connection holds an uncommitted write
-        produces a backup that passes the integrity check.
+  - [ ] The backup uses the snapshot sequence of this ADR, and a migration
+        while another connection holds an uncommitted write produces a
+        backup that passes the integrity check.
   - [ ] `factory reset` still removes these files as backups of that exact
         database.
   - [ ] `factory upgrade migrate-store --json` reports the provenance file.
@@ -320,5 +369,7 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 
 - When A to C ship, `factory guide maintenance` adds an optional
   "checkpoint before the store migration" step, and the upgrade plan lists
-  the newest matching checkpoint. Until then the guide states that no
+  the newest matching checkpoint. A checkpoint needs full quiescence, which
+  is stricter than the migration gate, so the guide names the extra
+  conditions. Until then the guide states that no
   supported restore exists.

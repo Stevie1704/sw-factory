@@ -1,16 +1,16 @@
 package store_test
 
 // This file is the feasibility evidence of ADR 0032. It is a test-only
-// prototype: it shows that an online SQLite snapshot is consistent while
-// another connection writes, and that a divergence check refuses a restore
-// when external state moved past the snapshot. It adds no production
+// prototype: it shows that an online SQLite snapshot taken while a second
+// connection holds the write lock is consistent with the quiescence check,
+// and that a divergence check refuses a restore when external state moved
+// past the snapshot. It adds no production
 // backup or restore behavior.
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -21,47 +21,80 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// TestCheckpointSnapshotExcludesAnUncommittedWrite shows that VACUUM INTO,
-// run in its own read transaction, captures only committed state while
-// another connection holds an open write transaction, and that the result is
-// one self-contained, current-schema file without sidecars.
-func TestCheckpointSnapshotExcludesAnUncommittedWrite(t *testing.T) {
+// TestCheckpointSnapshotUnderTheWriteLock runs the snapshot sequence of ADR
+// 0032 in the store's rollback-journal mode and in WAL mode. Connection A
+// takes the write lock with BEGIN IMMEDIATE and checks quiescence; a third
+// writer cannot change the store while A holds it; connection B takes the
+// snapshot with VACUUM INTO; then A ends. VACUUM INTO inside A's own
+// transaction fails, so the snapshot runs on B.
+func TestCheckpointSnapshotUnderTheWriteLock(t *testing.T) {
 	t.Parallel()
+	for _, mode := range []string{"delete", "wal"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			path := quiescentStore(t, completedRun("run-1", 7))
+			if _, err := openRaw(t, path).ExecContext(ctx, "PRAGMA journal_mode = "+mode); err != nil {
+				t.Fatal(err)
+			}
+
+			lock, err := openRaw(t, path).Conn(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = lock.Close() }()
+			if _, err := lock.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+				t.Fatalf("BEGIN IMMEDIATE: %v", err)
+			}
+			var active int
+			if err := lock.QueryRowContext(ctx, "SELECT COUNT(*) FROM operational_runs WHERE status NOT IN ('complete', 'cancelled', 'failed')").Scan(&active); err != nil || active != 0 {
+				t.Fatalf("quiescence check = %d active runs, %v; want 0", active, err)
+			}
+			snapshot := filepath.Join(privateDirectory(t), "store.db")
+			if _, err := lock.ExecContext(ctx, "VACUUM INTO ?", snapshot+".inside"); err == nil {
+				t.Fatal("VACUUM INTO inside the write transaction succeeded; ADR 0032 assumes it fails")
+			}
+
+			writer, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(100)")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = writer.Close() }()
+			if _, err := writer.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", store.StatusActive, "run-1"); err == nil {
+				t.Fatal("a concurrent writer changed the store while the checkpoint held the write lock")
+			}
+			if _, err := openRaw(t, path).ExecContext(ctx, "VACUUM INTO ?", snapshot); err != nil {
+				t.Fatalf("VACUUM INTO on a second connection: %v", err)
+			}
+			if _, err := lock.ExecContext(ctx, "ROLLBACK"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", store.StatusActive, "run-1"); err != nil {
+				t.Fatalf("writer after the lock ended: %v", err)
+			}
+			assertSnapshot(t, snapshot)
+		})
+	}
+}
+
+// assertSnapshot checks that a snapshot holds the state the quiescence check
+// saw, passes the integrity check, has no sidecar, and opens as a current
+// store once its mode is 0600.
+func assertSnapshot(t *testing.T, snapshot string) {
+	t.Helper()
 	ctx := context.Background()
-	path := quiescentStore(t, completedRun("run-1", 7))
-
-	writer := openRaw(t, path)
-	transaction, err := writer.BeginTx(ctx, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := transaction.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", store.StatusActive, "run-1"); err != nil {
-		t.Fatal(err)
-	}
-
-	snapshot := filepath.Join(privateDirectory(t), "store.db")
-	if _, err := openRaw(t, path).ExecContext(ctx, "VACUUM INTO ?", snapshot); err != nil {
-		t.Fatalf("VACUUM INTO during an open write transaction: %v", err)
-	}
-	if err := transaction.Commit(); err != nil {
-		t.Fatal(err)
-	}
 	// VACUUM INTO creates the file with the process umask, so a checkpoint
 	// must restrict it before anything reads it as a store.
 	if err := os.Chmod(snapshot, 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	captured := openRaw(t, snapshot)
 	var integrity string
 	if err := captured.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
 		t.Fatalf("snapshot integrity = %q, %v; want ok", integrity, err)
 	}
 	if got := runStatus(t, captured, "run-1"); got != string(store.StatusComplete) {
-		t.Fatalf("snapshot run status = %q, want the committed %q", got, store.StatusComplete)
-	}
-	if got := runStatus(t, openRaw(t, path), "run-1"); got != string(store.StatusActive) {
-		t.Fatalf("live run status = %q, want the later commit %q", got, store.StatusActive)
+		t.Fatalf("snapshot run status = %q, want the checked %q", got, store.StatusComplete)
 	}
 	for _, suffix := range []string{"-journal", "-wal", "-shm"} {
 		if _, err := os.Stat(snapshot + suffix); !os.IsNotExist(err) {
@@ -75,9 +108,6 @@ func TestCheckpointSnapshotExcludesAnUncommittedWrite(t *testing.T) {
 	defer func() { _ = reopened.Close() }()
 	if reopened.SchemaVersion() != store.CurrentSchemaVersion {
 		t.Fatalf("snapshot schema = %d, want %d", reopened.SchemaVersion(), store.CurrentSchemaVersion)
-	}
-	if fileDigest(t, snapshot) != fileDigest(t, snapshot) {
-		t.Fatal("snapshot checksum is not stable")
 	}
 }
 
@@ -237,13 +267,53 @@ func runStatus(t *testing.T, database *sql.DB, id string) string {
 	return status
 }
 
-// fileDigest returns the SHA-256 of one file.
-func fileDigest(t *testing.T, path string) string {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
+// TestCheckpointRestoreRefusesAChangedKnownObject shows the second rule of
+// ADR 0032: the manifest records the observable state of every known
+// external object, and restore compares each one. A known branch that moved
+// without a new name, pull request, or comment is a divergence, and an
+// object that cannot be read refuses as unverified.
+func TestCheckpointRestoreRefusesAChangedKnownObject(t *testing.T) {
+	t.Parallel()
+	recorded := map[string]string{
+		"branch factory/run-1":   "3f1c0a9",
+		"pull request #7":        "head 3f1c0a9, merged",
+		"issue #107 state label": "agent-done",
 	}
-	sum := sha256.Sum256(body)
-	return hex.EncodeToString(sum[:])
+	unchanged := map[string]string{
+		"branch factory/run-1":   "3f1c0a9",
+		"pull request #7":        "head 3f1c0a9, merged",
+		"issue #107 state label": "agent-done",
+	}
+	if refusals := knownObjectDivergence(recorded, unchanged); len(refusals) != 0 {
+		t.Fatalf("unchanged objects refusals = %v, want none", refusals)
+	}
+	moved := map[string]string{
+		"branch factory/run-1":   "9b72e44",
+		"pull request #7":        "head 3f1c0a9, merged",
+		"issue #107 state label": "agent-done",
+	}
+	if refusals := knownObjectDivergence(recorded, moved); !slices.Equal(refusals, []string{"restore.external_divergence: branch factory/run-1"}) {
+		t.Fatalf("moved branch refusals = %v, want one divergence", refusals)
+	}
+	unreadable := map[string]string{"branch factory/run-1": "3f1c0a9", "pull request #7": "head 3f1c0a9, merged"}
+	if refusals := knownObjectDivergence(recorded, unreadable); !slices.Equal(refusals, []string{"restore.divergence_unverified: issue #107 state label"}) {
+		t.Fatalf("unreadable object refusals = %v, want one unverified", refusals)
+	}
+}
+
+// knownObjectDivergence compares the recorded state of each known external
+// object with its observed state. A missing observation means the object
+// could not be read.
+func knownObjectDivergence(recorded, observed map[string]string) []string {
+	var refusals []string
+	for _, object := range slices.Sorted(maps.Keys(recorded)) {
+		state, readable := observed[object]
+		switch {
+		case !readable:
+			refusals = append(refusals, "restore.divergence_unverified: "+object)
+		case state != recorded[object]:
+			refusals = append(refusals, "restore.external_divergence: "+object)
+		}
+	}
+	return refusals
 }
