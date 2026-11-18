@@ -252,7 +252,9 @@ func TestRestoreCheckpointOfADamagedLiveStore(t *testing.T) {
 	}
 	request := fixture.restoreRequest()
 	plan := preview(t, request)
-	if !slices.ContainsFunc(plan.Steps, func(step string) bool { return strings.Contains(step, "damaged") && strings.Contains(step, "not a database") }) {
+	if !slices.ContainsFunc(plan.Steps, func(step string) bool {
+		return strings.Contains(step, "damaged") && strings.Contains(step, "not a database")
+	}) {
 		t.Fatalf("steps = %v, want a step that names the damaged live store and why", plan.Steps)
 	}
 	request.Confirm = plan.Digest
