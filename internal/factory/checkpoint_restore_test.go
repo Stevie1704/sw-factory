@@ -580,7 +580,7 @@ func interruptRestore(t *testing.T, request RestoreRequest) {
 	if err := os.Rename(plan.StorePath, filepath.Join(plan.WorkDirectory, "original", filepath.Base(plan.StorePath))); err != nil {
 		t.Fatal(err)
 	}
-	journal, err := json.Marshal(checkpoint.RestoreJournal{SchemaVersion: checkpoint.RestoreJournalSchemaVersion, State: checkpoint.StatePreserving, Factory: checkpoint.Factory{Version: request.Build.Version, Build: request.Build.Build, Revision: request.Build.Revision}, RestorePlan: plan})
+	journal, err := json.Marshal(checkpoint.RestoreJournal{SchemaVersion: checkpoint.RestoreJournalSchemaVersion, State: checkpoint.StatePreserving, Factory: checkpointFactory(request.Build), RestorePlan: plan})
 	if err != nil {
 		t.Fatal(err)
 	}

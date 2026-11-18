@@ -366,6 +366,5 @@ func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan)
 	if err := os.MkdirAll(filepath.Dir(plan.files.StorePath), 0o700); err != nil {
 		return fmt.Errorf("create the store directory: %w", err)
 	}
-	build := checkpoint.Factory{Version: request.Build.Version, Build: request.Build.Build, Revision: request.Build.Revision, Modified: request.Build.Modified}
-	return checkpoint.ApplyRestore(ctx, plan.files, build)
+	return checkpoint.ApplyRestore(ctx, plan.files, checkpointFactory(request.Build))
 }
