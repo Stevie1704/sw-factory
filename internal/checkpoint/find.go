@@ -7,15 +7,17 @@ import (
 	"path/filepath"
 )
 
-// Match is the registration and release that a checkpoint must carry to be
-// offered for a restore or an upgrade plan.
+// Match is the registration and store schema that a checkpoint must carry
+// to be offered in an upgrade plan.
 type Match struct {
 	// RegistrationIdentity is onboarding.RegistrationIdentity of the
 	// installation.
 	RegistrationIdentity string
-	// Version and Revision identify the release of the running build.
-	Version  string
-	Revision string
+	// StoreSchemaVersion is the schema of the live store. Only the release
+	// that created a checkpoint restores it, and that release reads only its
+	// own schema, so a checkpoint of another schema cannot be restored
+	// before the store migration.
+	StoreSchemaVersion int
 }
 
 // Listed is a checkpoint directory that verifies, with its manifest.
@@ -52,7 +54,7 @@ func FindNewest(ctx context.Context, root string, match Match) (*Listed, error) 
 }
 
 // matchingCheckpoint verifies one candidate directory and reports whether its
-// manifest carries the registration and release of match.
+// manifest carries the registration and store schema of match.
 func matchingCheckpoint(ctx context.Context, directory string, match Match) (Listed, bool, error) {
 	manifest, err := Verify(ctx, directory)
 	if ctxErr := ctx.Err(); ctxErr != nil {
@@ -61,7 +63,7 @@ func matchingCheckpoint(ctx context.Context, directory string, match Match) (Lis
 	if err != nil {
 		return Listed{}, false, nil
 	}
-	if manifest.RegistrationIdentity != match.RegistrationIdentity || manifest.Factory.Version != match.Version || manifest.Factory.Revision != match.Revision {
+	if manifest.RegistrationIdentity != match.RegistrationIdentity || manifest.StoreSchemaVersion != match.StoreSchemaVersion {
 		return Listed{}, false, nil
 	}
 	return Listed{Path: directory, Manifest: manifest}, true, nil

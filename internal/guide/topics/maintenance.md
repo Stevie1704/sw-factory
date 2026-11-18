@@ -43,8 +43,11 @@ another configuration is a blocker, and its evidence is not used.
 filled; it defaults to the onboarding plan's directory. `--checkpoints`
 names a directory whose direct subdirectories may be maintenance
 checkpoints. The plan lists the newest one that verifies and matches this
-registration and the target release. It searches only one level deep and
-keeps no registry, so a checkpoint outside that directory is not listed.
+registration and the schema of the live store: the checkpoint that the
+installed release created before the migration. Only the release named in
+its manifest restores it, so keep that release until the upgrade is done.
+It searches only one level deep and keeps no registry, so a checkpoint
+outside that directory is not listed.
 
 The command only reads. It does not migrate the store, replace a binary,
 pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
@@ -118,9 +121,13 @@ A `done` operation has valid evidence; do not do it again.
     foreground and keep its terminal open.
 
 Optional, before `migrate_store`: a checkpoint before the store migration.
-Create it once the migration gate holds, as the Maintenance checkpoint
-section below describes. It adds no operation and no blocker, so the plan
-never requires it. Plan again with `--checkpoints <directory>` to list it.
+Create it with the installed release before `install_binary`, once the
+migration gate holds, as the Maintenance checkpoint section below describes.
+The target binary refuses a checkpoint of an older store schema. The
+checkpoint adds no operation and no blocker, so the plan never requires it.
+Plan again with `--checkpoints <directory>` to list it. To restore it before
+`migrate_store`, run `factory checkpoint restore` of the release that its
+manifest names.
 
 `migrate_store` holds the repository lock, rolls back an interrupted write,
 and refuses work that fails the migration gate, a lock that another process

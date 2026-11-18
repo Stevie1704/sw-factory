@@ -194,8 +194,9 @@ type Observation struct {
 	OnboardingPlanForeign string
 	Onboarding            []onboarding.StepStatus
 	// Checkpoint is the newest verified checkpoint of this registration and
-	// target release in the directory that --checkpoints named, or nil when
-	// none was named or none matches.
+	// of the live store schema in the directory that --checkpoints named, or
+	// nil when none was named or none matches. Its manifest names the
+	// release that restores it.
 	Checkpoint *checkpoint.Listed
 }
 

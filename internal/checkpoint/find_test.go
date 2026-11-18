@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/checkpoint"
+	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
 // placeCheckpoint moves a sealed checkpoint to name below parent, after
@@ -41,27 +42,31 @@ func placeCheckpoint(t *testing.T, parent, name string, edit func(*checkpoint.Ma
 }
 
 // TestFindNewestPicksTheNewestMatchingCheckpoint verifies that the scan
-// returns the newest checkpoint of the registration and release, and skips
-// a checkpoint of another registration or release and a damaged one.
+// returns the newest checkpoint of the registration and store schema, of
+// any release, and skips a checkpoint of another registration or schema and
+// a damaged one.
 func TestFindNewestPicksTheNewestMatchingCheckpoint(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
-	match := checkpoint.Match{RegistrationIdentity: "sha256:mine", Version: "v1.4.0", Revision: "abc123"}
+	match := checkpoint.Match{RegistrationIdentity: "sha256:mine", StoreSchemaVersion: store.CurrentSchemaVersion}
 	mine := func(at int64) func(*checkpoint.Manifest) {
 		return func(m *checkpoint.Manifest) {
-			m.RegistrationIdentity, m.Factory.Version, m.Factory.Revision = "sha256:mine", "v1.4.0", "abc123"
+			m.RegistrationIdentity, m.Factory.Version, m.Factory.Revision = "sha256:mine", "v1.3.0", "abc123"
 			m.CreatedAt = time.Unix(at, 0).UTC()
 		}
 	}
 	older := placeCheckpoint(t, parent, "older", mine(100))
-	newest := placeCheckpoint(t, parent, "newest", mine(300))
+	newest := placeCheckpoint(t, parent, "newest", func(m *checkpoint.Manifest) {
+		mine(300)(m)
+		m.Factory.Version = "v1.2.0"
+	})
 	placeCheckpoint(t, parent, "other-registration", func(m *checkpoint.Manifest) {
 		mine(500)(m)
 		m.RegistrationIdentity = "sha256:other"
 	})
-	placeCheckpoint(t, parent, "other-release", func(m *checkpoint.Manifest) {
+	placeCheckpoint(t, parent, "other-schema", func(m *checkpoint.Manifest) {
 		mine(600)(m)
-		m.Factory.Version = "v1.3.0"
+		m.StoreSchemaVersion = store.CurrentSchemaVersion - 1
 	})
 	damaged := placeCheckpoint(t, parent, "damaged", mine(700))
 	corruptStore(t, damaged)
@@ -104,7 +109,7 @@ func TestFindNewestIgnoresNestedDirectoriesAndFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	listed, err := checkpoint.FindNewest(context.Background(), parent, checkpoint.Match{RegistrationIdentity: "sha256:mine", Version: "v1.4.0", Revision: "abc123"})
+	listed, err := checkpoint.FindNewest(context.Background(), parent, checkpoint.Match{RegistrationIdentity: "sha256:mine", StoreSchemaVersion: store.CurrentSchemaVersion})
 	if err != nil || listed != nil {
 		t.Fatalf("FindNewest() = %+v, %v; want no checkpoint and no error", listed, err)
 	}
