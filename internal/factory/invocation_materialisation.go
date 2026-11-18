@@ -130,11 +130,9 @@ func streamReviewDiffFromWorktree(ctx context.Context, worktree, base, checkpoin
 	return hostcmd.Stream(ctx, command, destination)
 }
 
-// reviewRoleInvocation reports whether a versioned invocation belongs to
-// either review axis. Isolated legacy projections may omit the prompt
-// version; the persisted packet schema determines whether every other review
-// requires an artifact, rather than equality with a mutable current prompt
-// version.
+// reviewRoleInvocation identifies a review-axis invocation with a recorded
+// prompt version. Focused adapter projections without a prompt version are
+// excluded from artifact inspection.
 func reviewRoleInvocation(invocation store.Invocation) bool {
 	definition, ok := workflow.DefaultRegistry().Role(invocation.Role)
 	return ok && definition.Kind == workflow.RoleKindReview && strings.TrimSpace(invocation.PromptVersion) != ""
@@ -147,16 +145,6 @@ func checkpointDiffInvocation(invocation store.Invocation) bool {
 	return ok && definition.ReadOnly() && strings.TrimSpace(invocation.PromptVersion) != ""
 }
 
-// packetUsesReviewDiffArtifact distinguishes artifact-backed reviews from
-// historical inline packets. Metadata also recognizes packets written by the
-// first artifact implementation before the packet schema advanced to eleven.
-func packetUsesReviewDiffArtifact(packet InvocationPacket) bool {
-	if packet.SchemaVersion >= reviewDiffArtifactPacketVersion {
-		return true
-	}
-	return packet.ReviewContext != nil && (packet.ReviewContext.DiffPath != "" || packet.ReviewContext.DiffSHA256 != "")
-}
-
 // validatePersistedReviewDiff verifies the review artifact recorded by a new
 // invocation packet without loading its contents into coordinator memory.
 func validatePersistedReviewDiff(invocation store.Invocation) error {
@@ -167,9 +155,6 @@ func validatePersistedReviewDiff(invocation store.Invocation) error {
 	packet, err := decodePersistedInvocationPacket(packetData)
 	if err != nil {
 		return fmt.Errorf("decode persisted invocation packet: %w", err)
-	}
-	if !packetUsesReviewDiffArtifact(packet) {
-		return nil
 	}
 	if packet.ReviewContext == nil {
 		return errors.New("persisted review packet has no review context")

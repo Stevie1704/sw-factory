@@ -18,7 +18,6 @@ func TestResumeRetriesChecksForACheckInfrastructurePause(t *testing.T) {
 
 	for _, run := range []store.Run{
 		{ID: "run-check-pause", Stage: store.StageCheck, Status: store.StatusWaitingForHuman, LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable + ": setup execution failed: worker unavailable"},
-		{ID: "run-legacy-wait", Stage: store.StageCheck, Status: store.StatusWaitingForHarness, LifecycleReason: "check repair waiting for infrastructure: setup command failed with exit code 1"},
 	} {
 		t.Run(run.ID, func(t *testing.T) {
 			var continued []store.Run
@@ -43,37 +42,6 @@ func TestResumeRetriesChecksForACheckInfrastructurePause(t *testing.T) {
 				t.Fatalf("Resume() = %#v, continued %d times, want one check continuation and no invocation", result, len(continued))
 			}
 		})
-	}
-}
-
-// TestRetryWaitingForHarnessRecoversALegacyCheckWait verifies the polling
-// retry recognizes a persisted check infrastructure wait and retries checks
-// instead of launching an agent that the check stage cannot host.
-func TestRetryWaitingForHarnessRecoversALegacyCheckWait(t *testing.T) {
-	t.Parallel()
-
-	run := store.Run{ID: "run-legacy-retry", Stage: store.StageCheck, Status: store.StatusWaitingForHarness, LifecycleReason: "check repair harness unavailable", CheckRepairAttempts: 1, CheckRepairBudget: 3}
-	continued := 0
-	module := newInvocationLifecycle(nil, &repairContractWorker{}, nil, nil, nil, nil, invocationLifecycleHooks{
-		resumeRecoveredCheck: func(_ context.Context, _ config.RepositoryRegistration, _ RunStore, target store.Run) (store.Run, error) {
-			continued++
-			if target.ID != run.ID {
-				t.Fatalf("continued run = %q, want %q", target.ID, run.ID)
-			}
-			return target, nil
-		},
-	}, nil)
-
-	err := module.retryWaitingForHarness(t.Context(), config.RepositoryRegistration{}, &retryCredentialProjectionStore{}, run, func(store.Run) (AgentLaunchResult, error) {
-		t.Fatal("legacy check wait must not launch an agent")
-		return AgentLaunchResult{}, nil
-	})
-
-	if err != nil {
-		t.Fatalf("retryWaitingForHarness() error = %v", err)
-	}
-	if continued != 1 {
-		t.Fatalf("check continuations = %d, want 1", continued)
 	}
 }
 
@@ -156,7 +124,7 @@ func TestCheckContinuationActionNamesTheRetry(t *testing.T) {
 		want bool
 	}{
 		{name: "check infrastructure pause", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHuman, LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable}, want: true},
-		{name: "legacy check wait", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHarness, LifecycleReason: "check repair waiting for infrastructure"}, want: true},
+		{name: "unsupported check wait", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHarness, LifecycleReason: "check repair waiting for infrastructure"}, want: false},
 		{name: "pending clarification", run: store.Run{Stage: store.StageCheck, Status: store.StatusWaitingForHuman, LifecycleReason: LifecycleReasonCheckInfrastructureUnavailable, PendingQuestions: []store.PendingQuestion{{ID: "question-1"}}}},
 		{name: "capacity wait", run: store.Run{Stage: store.StageImplementation, Status: store.StatusWaitingForHarness, LifecycleReason: LifecycleReasonHarnessCapacityUnavailable}},
 	} {

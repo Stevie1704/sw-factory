@@ -124,48 +124,6 @@ func TestSupervisorHeartbeatRecordsAStoppedCoordinator(t *testing.T) {
 	}
 }
 
-// TestSchema40MigrationCreatesSupervisorHeartbeat verifies older operational
-// stores gain the heartbeat singleton during the normal migration path.
-func TestSchema40MigrationCreatesSupervisorHeartbeat(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), "DROP TABLE supervisor_heartbeat; UPDATE schema_metadata SET version = 39 WHERE singleton = 1"); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	if got := migrated.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	heartbeat, err := migrated.ReadSupervisorHeartbeat(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if heartbeat != nil {
-		t.Fatalf("heartbeat = %#v, want empty after migration", heartbeat)
-	}
-}
-
 // TestSupervisorHeartbeatAllowsWallClockRollback verifies a host clock step
 // does not make a valid renewal unpersistable merely because it predates the
 // process start timestamp.
@@ -224,189 +182,6 @@ func TestCurrentInvocationSchemaContainsNoTerminalProjection(t *testing.T) {
 	}
 	if notificationTables != 0 {
 		t.Fatal("current schema still contains retired lifecycle_notifications table")
-	}
-}
-
-// TestSchema36MigrationPreservesHeadlessInvocationState verifies the table
-// rebuild removes only retired local-UI columns from a populated schema-35
-// database while retaining restart and uniqueness invariants.
-func TestSchema36MigrationPreservesHeadlessInvocationState(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	statements := []string{
-		"ALTER TABLE invocations DROP COLUMN manual_resume_count",
-		"ALTER TABLE invocations ADD COLUMN workspace_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE invocations ADD COLUMN status_surface_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE invocations ADD COLUMN role_surface_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE invocations ADD COLUMN implementation_surface_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE invocations ADD COLUMN checks_surface_id TEXT NOT NULL DEFAULT ''",
-		"ALTER TABLE invocations ADD COLUMN attach_required INTEGER NOT NULL DEFAULT 0",
-		"UPDATE schema_metadata SET version = 35 WHERE singleton = 1",
-	}
-	for _, statement := range statements {
-		if _, err := database.ExecContext(t.Context(), statement); err != nil {
-			_ = database.Close()
-			t.Fatalf("prepare schema-35 fixture with %q: %v", statement, err)
-		}
-	}
-	created := "2026-08-20T10:00:00.000000000Z"
-	updated := "2026-08-20T10:01:00.000000000Z"
-	insert := "INSERT INTO invocations (" +
-		"id, run_id, harness, role, stage, model, reasoning_effort, " +
-		"credential_store_id, native_session_id, invocation_directory, " +
-		"result_directory, permitted_paths, prompt_version, " +
-		"prompt_craft_source_path, prompt_craft_sha256, status, " +
-		"launch_voided, recovery_resume_count, created_at, updated_at, " +
-		"workspace_id, status_surface_id, role_surface_id, " +
-		"implementation_surface_id, checks_surface_id, attach_required" +
-		") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-	_, err = database.ExecContext(t.Context(), insert,
-		"inv-migrate", "run-migrate", "claude", "implementation", store.StageImplementation,
-		"claude-opus", "high", "/repo", "native-1", "/packet", "/results",
-		"[\"internal/factory\"]", "implementation-v8", "docs/craft.md", strings.Repeat("a", 64),
-		store.InvocationStatusActive, 1, 1, created, updated,
-		"workspace-old", "status-old", "role-old", "implementation-old", "checks-old", 1)
-	if err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open(schema 35) error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	got, err := migrated.Invocation(t.Context(), "run-migrate", "inv-migrate")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got == nil || got.Harness != "claude" || got.NativeSessionID != "native-1" ||
-		got.CredentialStoreID != "/repo" || got.PromptVersion != "implementation-v8" ||
-		got.RecoveryResumeCount != 1 || got.ManualResumeCount != 0 || !got.LaunchVoided ||
-		len(got.PermittedPaths) != 1 || got.PermittedPaths[0] != "internal/factory" {
-		t.Fatalf("migrated invocation = %#v, want retained headless state", got)
-	}
-	wantCreated, wantUpdated := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 20, 10, 1, 0, 0, time.UTC)
-	if !got.CreatedAt.Equal(wantCreated) || !got.UpdatedAt.Equal(wantUpdated) {
-		t.Fatalf("migrated timestamps = %s/%s, want %s/%s", got.CreatedAt, got.UpdatedAt, created, updated)
-	}
-	if err := migrated.SaveInvocation(t.Context(), store.Invocation{
-		ID: "inv-conflict", RunID: "run-migrate", Harness: "codex",
-		Role: "implementation", Stage: store.StageImplementation,
-		Status: store.InvocationStatusActive,
-	}); err == nil || !strings.Contains(err.Error(), "active invocation already exists") {
-		t.Fatalf("active-role conflict error = %v", err)
-	}
-	backups, err := filepath.Glob(path + ".bak-*")
-	if err != nil || len(backups) != 1 {
-		t.Fatalf("migration backups = %v, %v; want one", backups, err)
-	}
-	verification, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = verification.Close() }()
-	for _, retired := range []string{"workspace_id", "status_surface_id", "role_surface_id", "implementation_surface_id", "checks_surface_id", "attach_required"} {
-		if testInvocationColumnExists(t, verification, retired) {
-			t.Fatalf("migrated invocations table still contains retired column %q", retired)
-		}
-	}
-}
-
-// TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice verifies
-// schema 32 rows retain every active invocation when the singular projection is
-// removed.
-func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("initial Open() error = %v", err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatalf("close initial store: %v", err)
-	}
-
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !testOperationalRunsColumnExists(t, database, "active_invocation_id") {
-		if _, err := database.ExecContext(t.Context(), "ALTER TABLE operational_runs ADD COLUMN active_invocation_id TEXT NOT NULL DEFAULT ''"); err != nil {
-			_ = database.Close()
-			t.Fatalf("add schema 32 active invocation column: %v", err)
-		}
-	}
-	if testInvocationColumnExists(t, database, "launch_voided") {
-		if _, err := database.ExecContext(t.Context(), "ALTER TABLE invocations DROP COLUMN launch_voided"); err != nil {
-			_ = database.Close()
-			t.Fatalf("remove schema 34 launch-voided column from schema 32 fixture: %v", err)
-		}
-	}
-	if testOperationalRunsColumnExists(t, database, "accepted_implementation_checkpoint_sha") {
-		if _, err := database.ExecContext(t.Context(), "ALTER TABLE operational_runs DROP COLUMN accepted_implementation_checkpoint_sha"); err != nil {
-			_ = database.Close()
-			t.Fatalf("remove schema 35 accepted-checkpoint column from schema 32 fixture: %v", err)
-		}
-	}
-	_, err = database.ExecContext(t.Context(), `
-		INSERT INTO operational_runs (
-			id, repository_path, issue_number, stage, status,
-			active_invocation_id, active_invocation_ids, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-		UPDATE schema_metadata SET version = 32 WHERE singleton = 1`,
-		"run-schema-32", "/work/repository", 118, store.StageImplementation, store.StatusActive,
-		"inv-singular", `["inv-existing"]`, "2026-08-01T00:00:00.000000000Z", "2026-08-01T00:00:01.000000000Z")
-	if err != nil {
-		_ = database.Close()
-		t.Fatalf("write schema 32 fixture: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := openMigrated(context.Background(), path)
-	if err != nil {
-		t.Fatalf("schema 33 migration error = %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	if got := reopened.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	got, err := reopened.CurrentRun(context.Background())
-	if err != nil {
-		t.Fatalf("CurrentRun() error = %v", err)
-	}
-	if got == nil || len(got.ActiveInvocationIDs) != 2 || got.ActiveInvocationIDs[0] != "inv-singular" || got.ActiveInvocationIDs[1] != "inv-existing" {
-		t.Fatalf("CurrentRun() active invocations = %#v, want singular value first", got)
-	}
-
-	if err := reopened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err = sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = database.Close() }()
-	if testOperationalRunsColumnExists(t, database, "active_invocation_id") {
-		t.Fatal("schema 33 still has the active_invocation_id column")
 	}
 }
 
@@ -472,63 +247,6 @@ func testInvocationColumnExists(t *testing.T, database *sql.DB, wanted string) b
 	return false
 }
 
-// TestPreviousBuildImplementationHandoffRowsDecodeIntoRoleHandoff verifies
-// the existing implementation_handoff column remains the durable role-handoff
-// source when the Run compatibility field is removed.
-func TestPreviousBuildImplementationHandoffRowsDecodeIntoRoleHandoff(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("initial Open() error = %v", err)
-	}
-	if err := opened.SaveRun(context.Background(), store.Run{
-		ID:             "run-legacy-handoff",
-		RepositoryPath: "/work/repository",
-		Stage:          store.StageImplementation,
-		Status:         store.StatusActive,
-		CreatedAt:      time.Unix(100, 0).UTC(),
-		UpdatedAt:      time.Unix(200, 0).UTC(),
-	}); err != nil {
-		_ = opened.Close()
-		t.Fatalf("seed run: %v", err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = database.ExecContext(t.Context(), `UPDATE operational_runs
-		SET implementation_handoff = ?
-		WHERE id = ?`,
-		`{"change_summary":"written by schema 32","acceptance_mapping":[{"criterion":"legacy row","evidence":"stored JSON"}],"production_files_changed":["internal/store/store.go"],"focused_commands":["go test ./internal/store"]}`,
-		"run-legacy-handoff")
-	if err != nil {
-		_ = database.Close()
-		t.Fatalf("write previous-build handoff row: %v", err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("reopen error = %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	got, err := reopened.CurrentRun(context.Background())
-	if err != nil {
-		t.Fatalf("CurrentRun() error = %v", err)
-	}
-	if got == nil || got.RoleHandoff == nil || got.RoleHandoff.ChangeSummary != "written by schema 32" {
-		t.Fatalf("CurrentRun() role handoff = %#v, want previous-build handoff", got)
-	}
-}
-
 func TestOpenRejectsANewerSchemaVersion(t *testing.T) {
 	t.Parallel()
 
@@ -589,128 +307,6 @@ func TestOpenRejectsANonPrivateExistingStoreDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not private") {
 		t.Fatalf("error = %v, want private-directory diagnostic", err)
-	}
-}
-
-func TestOpenBacksUpBeforeApplyingAnOlderMigration(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO schema_metadata(singleton, version) VALUES (1, 0);`); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	opened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	defer func() { _ = opened.Close() }()
-	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	backups, err := filepath.Glob(path + ".bak-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(backups) != 1 {
-		t.Fatalf("backup files = %v, want one backup", backups)
-	}
-}
-
-// TestStoreMigratesSchemaThreeAndReadsLegacyEmptyPermittedPaths verifies the
-// invocation column migration remains compatible with rows whose old default
-// was an empty string rather than JSON.
-func TestStoreMigratesSchemaThreeAndReadsLegacyEmptyPermittedPaths(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacySchema := `
-		CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
-		INSERT INTO schema_metadata(singleton, version) VALUES (1, 3);
-		CREATE TABLE operational_runs (
-			id TEXT PRIMARY KEY,
-			repository_path TEXT NOT NULL,
-			issue_number INTEGER NOT NULL,
-			stage TEXT NOT NULL,
-			status TEXT NOT NULL,
-			branch TEXT NOT NULL DEFAULT '',
-			worktree TEXT NOT NULL DEFAULT '',
-			checkpoint_sha TEXT NOT NULL DEFAULT '',
-			image_digest TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			coordinator TEXT NOT NULL DEFAULT '',
-			status_comment_id TEXT NOT NULL DEFAULT '',
-			specification_packet TEXT NOT NULL DEFAULT ''
-		);
-		CREATE UNIQUE INDEX one_active_run_per_repository
-			ON operational_runs (repository_path)
-			WHERE status NOT IN ('complete', 'cancelled', 'failed');`
-	if _, err := database.ExecContext(t.Context(), legacySchema); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	opened, err := openMigrated(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	if got := opened.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	if err := opened.SaveInvocation(context.Background(), store.Invocation{
-		ID: "inv-migrated", RunID: "run-migrated", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted,
-	}); err != nil {
-		_ = opened.Close()
-		t.Fatalf("SaveInvocation() error = %v", err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	database, err = sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), "UPDATE invocations SET permitted_paths = '' WHERE id = 'inv-migrated'"); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("reopen error = %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	invocation, err := reopened.Invocation(context.Background(), "run-migrated", "inv-migrated")
-	if err != nil {
-		t.Fatalf("Invocation() error = %v", err)
-	}
-	if invocation == nil || len(invocation.PermittedPaths) != 0 {
-		t.Fatalf("Invocation() = %#v, want an invocation with empty permitted paths", invocation)
 	}
 }
 
@@ -1063,7 +659,7 @@ func TestRunPersistsRoleAndSpecificationReviewProjections(t *testing.T) {
 			FocusedCommands:        []string{"go test ./internal/factory"},
 			KnownLimitations:       []string{"advisory naming note"},
 		},
-		SpecificationReview: &store.SpecificationReview{
+		SpecificationReview: &store.SpecificationReview{Outcome: "completed",
 			CheckpointSHA: checkpoint,
 			Findings: []store.ReviewFinding{{
 				Location: "internal/factory/review.go:1", Claim: "claim", Evidence: "evidence", Severity: "advisory", Category: "scope",
@@ -1144,7 +740,7 @@ func TestRunRejectsAReviewProjectionForAnOlderCheckpoint(t *testing.T) {
 		Stage:          store.StageReview,
 		Status:         store.StatusWaitingForHuman,
 		CheckpointSHA:  strings.Repeat("b", 64),
-		SpecificationReview: &store.SpecificationReview{
+		SpecificationReview: &store.SpecificationReview{Outcome: "completed",
 			CheckpointSHA: strings.Repeat("a", 64),
 		},
 	}
@@ -1216,7 +812,7 @@ func TestStorePersistsReviewRepairState(t *testing.T) {
 			Attempt: 1, Outcome: store.ReviewRepairStarted,
 			BlockerKeys: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 		}},
-		ReviewRepairPacket: &store.ReviewRepairPacket{
+		ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory",
 			Version: 1, RunID: "run-review-repair", CheckpointSHA: strings.Repeat("b", 64), Attempt: 2, Budget: 2,
 			Findings: []store.ReviewRepairFinding{{ReviewerRole: "spec_review", Finding: store.ReviewFinding{Location: "internal/factory/review.go:1", Claim: "behavior is incomplete", Evidence: "the completion branch omits the required transition", Severity: "blocker", Category: "correctness", SuggestedResolution: "apply the required transition before returning", SuggestedOwner: "implementation"}}},
 		},
@@ -1317,7 +913,7 @@ func TestStoreRejectsIncompleteReviewRepairFindings(t *testing.T) {
 		Stage:              store.StageImplementation,
 		Status:             store.StatusActive,
 		ReviewRepairBudget: 1,
-		ReviewRepairPacket: &store.ReviewRepairPacket{
+		ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory",
 			Version: 1, RunID: "run-incomplete-review-repair", CheckpointSHA: strings.Repeat("b", 64), Attempt: 1, Budget: 1,
 			Findings: []store.ReviewRepairFinding{{
 				ReviewerRole: "spec_review",
@@ -1575,170 +1171,6 @@ func TestCurrentRunPersistsSpecificationAndStatusCommentIdentity(t *testing.T) {
 	}
 }
 
-// TestSchemaOneMigrationPreservesClaimMetadata verifies schema 1 databases
-// receive the claim columns before the current store is reopened.
-func TestSchemaOneMigrationPreservesClaimMetadata(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
-		INSERT INTO schema_metadata(singleton, version) VALUES (1, 1);
-		CREATE TABLE operational_runs (
-			id TEXT PRIMARY KEY,
-			repository_path TEXT NOT NULL,
-			issue_number INTEGER NOT NULL,
-			stage TEXT NOT NULL,
-			status TEXT NOT NULL,
-			branch TEXT NOT NULL DEFAULT '',
-			worktree TEXT NOT NULL DEFAULT '',
-			checkpoint_sha TEXT NOT NULL DEFAULT '',
-			image_digest TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`)
-	if err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	opened, err := openMigrated(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	wanted := store.Run{
-		ID:                  "run-migrated",
-		RepositoryPath:      "/work/repository",
-		IssueNumber:         42,
-		Stage:               store.StageClaim,
-		Status:              store.StatusActive,
-		Coordinator:         "host-a",
-		StatusCommentID:     "12345",
-		SpecificationPacket: `{"version":1,"issue":{"number":42}}`,
-		CreatedAt:           time.Unix(100, 0).UTC(),
-		UpdatedAt:           time.Unix(200, 0).UTC(),
-	}
-	if err := opened.SaveRun(context.Background(), wanted); err != nil {
-		_ = opened.Close()
-		t.Fatalf("SaveRun() after migration error = %v", err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := store.Open(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Open() after migration error = %v", err)
-	}
-	defer func() { _ = reopened.Close() }()
-	got, err := reopened.CurrentRun(context.Background())
-	if err != nil {
-		t.Fatalf("CurrentRun() error = %v", err)
-	}
-	if got == nil {
-		t.Fatal("CurrentRun() = nil, want migrated run")
-	}
-	if got.Coordinator != wanted.Coordinator || got.StatusCommentID != wanted.StatusCommentID || got.SpecificationPacket != wanted.SpecificationPacket {
-		t.Fatalf("migrated claim metadata = %#v, want %#v", got, wanted)
-	}
-}
-
-// TestSchemaTwoMigrationReconcilesDuplicateActiveRuns verifies migration 3
-// keeps the newest legacy run and makes older duplicates terminal before the
-// active-run uniqueness index is created.
-func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = database.ExecContext(t.Context(), `CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY, version INTEGER NOT NULL);
-		INSERT INTO schema_metadata(singleton, version) VALUES (1, 2);
-		CREATE TABLE operational_runs (
-			id TEXT PRIMARY KEY,
-			repository_path TEXT NOT NULL,
-			issue_number INTEGER NOT NULL,
-			stage TEXT NOT NULL,
-			status TEXT NOT NULL,
-			branch TEXT NOT NULL DEFAULT '',
-			worktree TEXT NOT NULL DEFAULT '',
-			checkpoint_sha TEXT NOT NULL DEFAULT '',
-			image_digest TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			coordinator TEXT NOT NULL DEFAULT '',
-			status_comment_id TEXT NOT NULL DEFAULT '',
-			specification_packet TEXT NOT NULL DEFAULT ''
-		);
-		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
-		VALUES ('run-old', '/work/repository', 42, 'claim', 'active', '2026-08-20T10:00:00.1Z', '2026-08-20T10:00:00.1Z');
-		INSERT INTO operational_runs (id, repository_path, issue_number, stage, status, created_at, updated_at)
-		VALUES ('run-new', '/work/repository', 42, 'implementation', 'waiting_for_harness', '2026-08-20T10:00:00.12Z', '2026-08-20T10:00:00.12Z')`)
-	if err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	opened, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	current, err := opened.CurrentRun(t.Context())
-	if err != nil {
-		_ = opened.Close()
-		t.Fatalf("CurrentRun() error = %v", err)
-	}
-	wantUpdatedAt := time.Date(2026, 8, 20, 10, 0, 0, 120_000_000, time.UTC)
-	if current == nil || current.ID != "run-new" || current.Status != store.StatusWaitingForHarness || !current.UpdatedAt.Equal(wantUpdatedAt) {
-		_ = opened.Close()
-		t.Fatalf("CurrentRun() = %#v, want newest .12Z run to remain active", current)
-	}
-	// Verify LatestRun also returns the correct run after timestamp normalization
-	latest, err := opened.LatestRun(t.Context())
-	if err != nil {
-		_ = opened.Close()
-		t.Fatalf("LatestRun() error = %v", err)
-	}
-	if latest == nil || latest.ID != "run-new" || !latest.UpdatedAt.Equal(wantUpdatedAt) {
-		_ = opened.Close()
-		t.Fatalf("LatestRun() = %#v, want run-new with normalized timestamp after migration", latest)
-	}
-	current.Status = store.StatusComplete
-	if err := opened.SaveRun(t.Context(), *current); err != nil {
-		_ = opened.Close()
-		t.Fatalf("SaveRun() terminal update error = %v", err)
-	}
-	remaining, err := opened.CurrentRun(t.Context())
-	if err != nil {
-		_ = opened.Close()
-		t.Fatalf("CurrentRun() after terminal update error = %v", err)
-	}
-	if remaining != nil {
-		_ = opened.Close()
-		t.Fatalf("CurrentRun() = %#v, want no legacy duplicate after reconciliation", remaining)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestSaveRunEnforcesOneActiveRunPerRepository verifies the store-level
 // invariant that protects concurrent claimers from creating two active runs.
 func TestSaveRunEnforcesOneActiveRunPerRepository(t *testing.T) {
@@ -1848,7 +1280,7 @@ func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 		ProcessedReviewRevision: 7,
 		Revision:                7,
 		ReviewRepairPacket: &store.ReviewRepairPacket{
-			Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001",
+			Version: 1, Source: store.ReviewRepairSourceHuman, SourceEventKind: store.ReviewRepairEventPullRequestReview, SourceEventID: "4001",
 			RunID: "run-human-review", CheckpointSHA: strings.Repeat("b", 64), Budget: 2,
 			Findings: []store.ReviewRepairFinding{finding},
 		},
@@ -1873,7 +1305,7 @@ func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 	if got == nil || got.ProcessedReviewID != "4001" || got.ProcessedReviewRevision != 7 {
 		t.Fatalf("CurrentRun() = %#v, want the persisted human review watermark", got)
 	}
-	if got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Source != store.ReviewRepairSourceHuman || got.ReviewRepairPacket.ReviewID != "4001" {
+	if got.ReviewRepairPacket == nil || got.ReviewRepairPacket.Source != store.ReviewRepairSourceHuman || got.ReviewRepairPacket.SourceEventID != "4001" {
 		t.Fatalf("CurrentRun() packet = %#v, want the human repair packet", got.ReviewRepairPacket)
 	}
 
@@ -1881,7 +1313,7 @@ func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 	anonymous.ID = "run-anonymous-human-review"
 	packet := *run.ReviewRepairPacket
 	packet.RunID = anonymous.ID
-	packet.ReviewID = ""
+	packet.SourceEventID = ""
 	anonymous.ReviewRepairPacket = &packet
 	if err := reopened.SaveRun(context.Background(), anonymous); err == nil || !strings.Contains(err.Error(), "must identify its maintainer event") {
 		t.Fatalf("SaveRun() error = %v, want a refusal of an unidentified human repair packet", err)
@@ -1890,8 +1322,7 @@ func TestStorePersistsTheHumanReviewWatermarkAndPacket(t *testing.T) {
 
 // TestReviewRepairPacketSourceEventReadsEveryPersistedShape verifies durable
 // replay preserves provenance for a pull-request review, a supervision
-// command, and a packet written before supervision commands existed. The
-// legacy shape must keep replaying without a migration.
+// command. Pre-baseline review identities do not confer provenance.
 func TestReviewRepairPacketSourceEventReadsEveryPersistedShape(t *testing.T) {
 	t.Parallel()
 
@@ -1904,12 +1335,12 @@ func TestReviewRepairPacketSourceEventReadsEveryPersistedShape(t *testing.T) {
 		{
 			name:         "legacy review identity only",
 			encoded:      `{"version":1,"source":"human","review_id":"4001"}`,
-			wantKind:     store.ReviewRepairEventPullRequestReview,
-			wantIdentity: "4001",
+			wantKind:     "",
+			wantIdentity: "",
 		},
 		{
 			name:         "pull request review event",
-			encoded:      `{"version":1,"source":"human","review_id":"4001","source_event_kind":"pull_request_review","source_event_id":"4001"}`,
+			encoded:      `{"version":1,"source":"human","source_event_kind":"pull_request_review","source_event_id":"4001"}`,
 			wantKind:     store.ReviewRepairEventPullRequestReview,
 			wantIdentity: "4001",
 		},
@@ -1944,7 +1375,7 @@ func TestReviewRepairPacketSourceEventReadsEveryPersistedShape(t *testing.T) {
 
 // TestStorePersistsACommandSourcedHumanRepairPacket verifies a packet whose
 // provenance is a supervision comment survives a coordinator restart with its
-// source kind and identity, and without borrowing the legacy review field.
+// source kind and identity.
 func TestStorePersistsACommandSourcedHumanRepairPacket(t *testing.T) {
 	t.Parallel()
 
@@ -1988,8 +1419,5 @@ func TestStorePersistsACommandSourcedHumanRepairPacket(t *testing.T) {
 	kind, identity := got.ReviewRepairPacket.SourceEvent()
 	if kind != store.ReviewRepairEventSupervisionCommand || identity != "5539017380" {
 		t.Fatalf("SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
-	}
-	if got.ReviewRepairPacket.ReviewID != "" {
-		t.Fatalf("ReviewID = %q, want the legacy review field left empty", got.ReviewRepairPacket.ReviewID)
 	}
 }

@@ -86,7 +86,7 @@ func unsafeReplays() []unsafeReplay {
 		workflow("superseded status comment", store.PendingEffectKindStatusComment, nil),
 		workflow("stale checkpoint", store.PendingEffectKindCheckpoint, map[string]any{"Request": map[string]any{}}),
 		workflow("stale pull request", store.PendingEffectKindPullRequest, map[string]any{"PersistRun": true}),
-		workflow("stale result acceptance", store.PendingEffectKindResultAcceptance, nil),
+		workflow("stale result acceptance", store.PendingEffectKindResultAcceptance, map[string]any{"AcceptedReport": "{}"}),
 		refusedBy(infrastructure("clarification comment that GitHub refuses", store.PendingEffectKindClarificationComment, func(run store.Run) any {
 			return map[string]any{"Repository": repository, "Target": run.IssueNumber, "Body": "Which API version?", "PacketVersion": 1}
 		}), func(adapters *pauseAdapters) {

@@ -190,12 +190,6 @@ type InvocationPacket struct {
 }
 
 const (
-	// invocationPacketMinimumSupportedVersion identifies the oldest append-only
-	// packet shape retained for restart recovery.
-	invocationPacketMinimumSupportedVersion = 1
-	// reviewDiffArtifactPacketVersion identifies the first packet shape whose
-	// review invocations require the persisted review.diff artifact.
-	reviewDiffArtifactPacketVersion = 11
 	// invocationPacketVersion identifies the read-only invocation packet shape.
 	// Version eleven records the review.diff artifact identity and the exact
 	// review round and unit assignment.

@@ -22,7 +22,7 @@ type Repository struct {
 	Owner string
 	// Project is the Azure DevOps project between the organization and the
 	// repository. It is empty for a provider without projects, such as
-	// GitHub. A payload stored before this field existed decodes as empty.
+	// GitHub.
 	Project string
 	// Name is the repository name.
 	Name string

@@ -398,7 +398,7 @@ func TestBuildIncludesCombinedReviewRepairOwnership(t *testing.T) {
 		Role:                "implementation",
 		Stage:               "implementation",
 		SpecificationPacket: `{"issue":{"title":"Repair review findings"}}`,
-		ReviewRepair: &store.ReviewRepairPacket{
+		ReviewRepair: &store.ReviewRepairPacket{Source: "factory",
 			Version: 1, RunID: "run-review", CheckpointSHA: strings.Repeat("a", 64), Attempt: 1, Budget: 2,
 			Findings: []store.ReviewRepairFinding{{
 				ReviewerRole: "spec_review",
@@ -433,7 +433,7 @@ func TestBuildIncludesIndependentReviewRules(t *testing.T) {
 		Stage:               "review",
 		SpecificationPacket: `{"issue":{"title":"Review"}}`,
 		ReviewContext: &prompt.ReviewContext{
-			CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", DiffPath: prompt.WorkerReviewDiffPath,
 		},
 	})
 	if err != nil {
@@ -453,28 +453,6 @@ func TestBuildIncludesIndependentReviewRules(t *testing.T) {
 		if !strings.Contains(value, marker) {
 			t.Fatalf("review prompt missing %q:\n%s", marker, value)
 		}
-	}
-}
-
-// TestBuildKeepsLegacyReviewRulesVersioned verifies a historical review prompt
-// is not silently augmented with the current outcome-and-finding contract.
-func TestBuildKeepsLegacyReviewRulesVersioned(t *testing.T) {
-	value, err := prompt.Build(prompt.Request{
-		InvocationID:        "inv-legacy-review",
-		RunID:               "run-legacy-review",
-		Role:                workflow.RoleSpecificationReview,
-		Stage:               string(store.StageReview),
-		PromptVersion:       "specification-review-v4",
-		SpecificationPacket: `{}`,
-		ReviewContext: &prompt.ReviewContext{
-			CheckpointSHA: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
-	if strings.Contains(value, "Review outcome and finding contract:") {
-		t.Fatalf("legacy review prompt received current review contract:\n%s", value)
 	}
 }
 
@@ -807,88 +785,6 @@ func TestEmbeddedPromptContentIdentitiesKeepsEveryCurrentRoleVersionStable(t *te
 	}
 }
 
-// TestBuildVerifiesRetainedLegacyPromptVersions verifies restart recovery still
-// loads each explicitly retained role body through the same identity check.
-func TestBuildVerifiesRetainedLegacyPromptVersions(t *testing.T) {
-	tests := []struct {
-		name    string
-		role    string
-		stage   string
-		version string
-		marker  string
-	}{
-		{name: "implementation v1", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v1", marker: "Implementation-owned TDD:"},
-		{name: "implementation v2", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v2", marker: "Repair and handoff ownership:"},
-		{name: "implementation v3", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v3", marker: "Implementation craft:"},
-		{name: "implementation v4", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v4", marker: "Implementation craft:"},
-		{name: "implementation v5", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v5", marker: "Implementation craft:"},
-		{name: "implementation v8", role: workflow.RoleImplementation, stage: string(store.StageImplementation), version: "implementation-v8", marker: "Implementation craft:"},
-		{name: "test v2", role: workflow.RoleTest, stage: string(store.StageTest), version: "test-v2", marker: "Test-stage ownership:"},
-		{name: "architecture v1", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v1", marker: "Architecture-role ownership:"},
-		{name: "architecture v2", role: workflow.RoleArchitecture, stage: string(workflow.StageArchitecture), version: "architecture-v2", marker: "Architecture-role ownership:"},
-		{name: "specification review v1", role: workflow.RoleSpecificationReview, stage: string(store.StageReview), version: "specification-review-v1", marker: "Specification-review scope:"},
-		{name: "standards review v1", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v1", marker: "Standards-review precedence:"},
-		{name: "standards review v2", role: workflow.RoleStandardsReview, stage: string(workflow.StageStandardsReview), version: "standards-review-v2", marker: "Standards-review scope:"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			value, err := prompt.Build(prompt.Request{
-				InvocationID:        "inv-legacy",
-				RunID:               "run-legacy",
-				Role:                test.role,
-				Stage:               test.stage,
-				PromptVersion:       test.version,
-				TestPolicyMode:      "advisory",
-				SpecificationPacket: `{}`,
-			})
-			if err != nil {
-				t.Fatalf("Build() error = %v", err)
-			}
-			if !strings.Contains(value, "factory prompt version "+test.version) || !strings.Contains(value, test.marker) {
-				t.Fatalf("legacy prompt missing version or body marker:\n%s", value)
-			}
-		})
-	}
-}
-
-// TestBuildRetainedImplementationV4KeepsHistoricalRouteSelection verifies
-// the pre-v6 implementation body still resolves its two frozen routes through
-// the existing renderer without exposing source markers.
-func TestBuildRetainedImplementationV4KeepsHistoricalRouteSelection(t *testing.T) {
-	tests := []struct {
-		name   string
-		route  workflow.Route
-		want   string
-		absent string
-	}{
-		{name: "implementation-owned", route: workflow.RouteDefault, want: "Implementation-owned TDD:", absent: "On a contract-first route, use the seam supplied by the accepted test-stage handoff."},
-		{name: "contract-first", route: workflow.RouteAcceptance, want: "On a contract-first route, use the seam supplied by the accepted test-stage handoff.", absent: "Implementation-owned TDD:"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			value, err := prompt.Build(prompt.Request{
-				InvocationID:        "inv-legacy-v4-" + test.name,
-				RunID:               "run-legacy-v4",
-				Role:                workflow.RoleImplementation,
-				Stage:               string(store.StageImplementation),
-				PromptVersion:       "implementation-v4",
-				TestPolicyMode:      "advisory",
-				Route:               test.route,
-				SpecificationPacket: `{}`,
-			})
-			if err != nil {
-				t.Fatalf("Build() error = %v", err)
-			}
-			if strings.Contains(value, "implementation-craft-independent-test-handoff:") {
-				t.Fatalf("legacy prompt exposed a source marker:\n%s", value)
-			}
-			if !strings.Contains(value, test.want) || strings.Contains(value, test.absent) {
-				t.Fatalf("legacy prompt route rendering did not select the expected arm:\n%s", value)
-			}
-		})
-	}
-}
-
 // TestBuildAcceptsEmptyRepositoryGuidance verifies an empty checked-in guidance
 // set remains a valid prompt input and still leaves the owned fence in place.
 func TestBuildAcceptsEmptyRepositoryGuidance(t *testing.T) {
@@ -918,7 +814,7 @@ func TestBuildStandardsReviewPromptSeparatesDocumentedRulesFromHeuristics(t *tes
 		Stage:               string(workflow.StageStandardsReview),
 		SpecificationPacket: `{}`,
 		RepositoryGuidance:  "### AGENTS.md\nUse named repository rules.",
-		ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64)},
+		ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64), DiffPath: prompt.WorkerReviewDiffPath},
 	})
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
@@ -965,7 +861,7 @@ func TestBuildRendersEveryRoleAndRouteWithAuthority(t *testing.T) {
 					TestPolicyMode:      "advisory",
 					Route:               route,
 					SpecificationPacket: `{"issue":{"title":"Prompt boundary"}}`,
-					ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64)},
+					ReviewContext:       &prompt.ReviewContext{CheckpointSHA: strings.Repeat("a", 64), DiffPath: prompt.WorkerReviewDiffPath},
 				})
 				if err != nil {
 					t.Fatalf("Build() error = %v", err)
@@ -1045,6 +941,24 @@ func TestImplementationPromptRenderingIsRouteDeterministic(t *testing.T) {
 		}
 		if recorded != implicit {
 			t.Fatalf("route %q rendered different bytes for the same frozen route with implicit and recorded prompt versions", route)
+		}
+	}
+}
+
+// TestBuildRejectsPreBaselinePromptBodies verifies restart requests cannot
+// select role contracts shipped before the supported store baseline.
+func TestBuildRejectsPreBaselinePromptBodies(t *testing.T) {
+	t.Parallel()
+	for _, entry := range []struct{ role, stage, version string }{
+		{"implementation", "implementation", "implementation-v8"},
+		{"test", "test", "test-v2"},
+		{"architecture", "architecture", "architecture-v2"},
+		{"spec_review", "review", "specification-review-v7"},
+		{"standards_review", "standards_review", "standards-review-v7"},
+	} {
+		request := prompt.Request{InvocationID: "inv-1", RunID: "run-1", Role: entry.role, Stage: entry.stage, PromptVersion: entry.version, SpecificationPacket: "frozen spec"}
+		if _, err := prompt.Build(request); err == nil || !strings.Contains(err.Error(), "not supported") {
+			t.Errorf("Build(%s) = %v, want unsupported prompt version", entry.version, err)
 		}
 	}
 }

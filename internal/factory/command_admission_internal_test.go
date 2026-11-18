@@ -107,7 +107,7 @@ func TestResumeAdmissionReasonCoversEveryPolicyBranch(t *testing.T) {
 				Status:          store.StatusWaitingForHarness,
 				LifecycleReason: "check repair waiting for infrastructure: setup command failed with exit code 1",
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "legacy check repair launch wait",
@@ -116,7 +116,7 @@ func TestResumeAdmissionReasonCoversEveryPolicyBranch(t *testing.T) {
 				Status:          store.StatusWaitingForHarness,
 				LifecycleReason: "check repair harness unavailable",
 			},
-			want: true,
+			want: false,
 		},
 		{
 			name: "other status",

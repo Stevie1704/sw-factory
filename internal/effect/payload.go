@@ -61,8 +61,7 @@ type clarificationCommentEffectPayload struct {
 	Target     int
 	Body       string
 	// PullRequest reports that Target is the run's pull request rather than
-	// its issue. A payload stored before this field existed decodes as false,
-	// which matches its meaning for a GitHub run (ADR 0019).
+	// its issue (ADR 0019).
 	PullRequest bool
 	// PacketVersion scopes the comment marker to one clarification round so a
 	// replay repairs that round's comment instead of overwriting an earlier one.
@@ -153,8 +152,8 @@ type resultAcceptanceEffectPayload struct {
 	Issue      tracker.Issue
 	Session    harness.Session
 	Invocation store.Invocation
-	// WorkerID identifies the worker that owns this invocation. Empty legacy
-	// payloads intentionally fall back to the run-scoped worker identity.
+	// WorkerID identifies the worker that owns this invocation. An empty value
+	// selects the run-scoped worker used by ordinary roles.
 	WorkerID         string
 	Previous         store.Run
 	Next             store.Run

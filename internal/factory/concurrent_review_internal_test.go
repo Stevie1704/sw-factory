@@ -57,13 +57,13 @@ func TestReviewRoundCompleteRequiresOnlyConfiguredRoles(t *testing.T) {
 		{
 			name:       "unconfigured specification role",
 			configured: []string{workflow.RoleStandardsReview},
-			standards:  &store.StandardsReview{CheckpointSHA: checkpoint},
+			standards:  &store.StandardsReview{Outcome: "completed", CheckpointSHA: checkpoint},
 			want:       true,
 		},
 		{
 			name:          "unconfigured standards role",
 			configured:    []string{workflow.RoleSpecificationReview},
-			specification: &store.SpecificationReview{CheckpointSHA: checkpoint},
+			specification: &store.SpecificationReview{Outcome: "completed", CheckpointSHA: checkpoint},
 			want:          true,
 		},
 		{
@@ -74,8 +74,8 @@ func TestReviewRoundCompleteRequiresOnlyConfiguredRoles(t *testing.T) {
 		{
 			name:          "configured standards role has stale result",
 			configured:    []string{workflow.RoleSpecificationReview, workflow.RoleStandardsReview},
-			specification: &store.SpecificationReview{CheckpointSHA: checkpoint},
-			standards:     &store.StandardsReview{CheckpointSHA: "stale"},
+			specification: &store.SpecificationReview{Outcome: "completed", CheckpointSHA: checkpoint},
+			standards:     &store.StandardsReview{Outcome: "completed", CheckpointSHA: "stale"},
 			want:          false,
 		},
 	} {
@@ -139,7 +139,7 @@ func TestStandardsReviewKeepsCrossAxisAndHeuristicFindingsAdvisory(t *testing.T)
 			run := store.Run{
 				CheckpointSHA:       checkpoint,
 				SpecificationPacket: string(packetData),
-				StandardsReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
+				StandardsReview: &store.ReviewResult{Outcome: "completed", CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
 					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category), Evidence: test.evidence,
 				}}},
 			}
@@ -182,7 +182,7 @@ func TestSpecificationReviewKeepsDocumentedStandardsFindingsAdvisory(t *testing.
 			run := store.Run{
 				CheckpointSHA:       checkpoint,
 				SpecificationPacket: string(packetData),
-				SpecificationReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
+				SpecificationReview: &store.ReviewResult{Outcome: "completed", CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
 					Severity: string(report.ReviewSeverityBlocker), Category: string(test.category),
 				}}},
 			}
@@ -220,8 +220,8 @@ func TestMissingConcurrentReviewRoleResumesTheUnlaunchedReviewer(t *testing.T) {
 		standards       *store.StandardsReview
 		wantMissingRole string
 	}{
-		{name: "standards missing", specification: &store.SpecificationReview{CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleStandardsReview},
-		{name: "specification missing", standards: &store.StandardsReview{CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleSpecificationReview},
+		{name: "standards missing", specification: &store.SpecificationReview{Outcome: "completed", CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleStandardsReview},
+		{name: "specification missing", standards: &store.StandardsReview{Outcome: "completed", CheckpointSHA: checkpoint}, wantMissingRole: workflow.RoleSpecificationReview},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			state := progressionState{Run: &store.Run{

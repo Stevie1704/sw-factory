@@ -32,22 +32,6 @@ type LocalIssueProjection struct {
 	Labels []string
 }
 
-// migrateLocalIssueProjections creates revision-addressed source and local history.
-func migrateLocalIssueProjections(ctx context.Context, tx *sql.Tx) error {
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS local_issue_snapshots(repository_path TEXT NOT NULL, revision TEXT NOT NULL, graph_digest TEXT NOT NULL, PRIMARY KEY(repository_path,revision))`,
-		`CREATE TABLE IF NOT EXISTS local_issue_sources(repository_path TEXT NOT NULL, revision TEXT NOT NULL, issue_id TEXT NOT NULL, source_path TEXT NOT NULL, content_digest TEXT NOT NULL, content BLOB NOT NULL, PRIMARY KEY(repository_path,revision,issue_id))`,
-		`CREATE TABLE IF NOT EXISTS local_issue_projections(repository_path TEXT NOT NULL, issue_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', labels TEXT NOT NULL DEFAULT '[]', PRIMARY KEY(repository_path,issue_id))`,
-		`CREATE TABLE IF NOT EXISTS local_issue_comments(sequence INTEGER PRIMARY KEY AUTOINCREMENT, repository_path TEXT NOT NULL, issue_id TEXT NOT NULL, author TEXT NOT NULL, body TEXT NOT NULL, creation_key TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(repository_path,issue_id,creation_key))`,
-		`CREATE INDEX IF NOT EXISTS local_issue_comments_by_issue ON local_issue_comments(repository_path,issue_id,sequence)`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // IndexLocalIssueSnapshot validates all content before atomically importing
 // mappings and an immutable projection. Import never writes approval or labels.
 func (s *Store) IndexLocalIssueSnapshot(ctx context.Context, repositoryPath, revision string, graph localissues.Graph) ([]LocalIssueSource, error) {

@@ -39,7 +39,7 @@ const PullRequestWriterVersion = workflow.PromptVersionPullRequestWriter
 // into the factory binary; the target repository cannot replace them at run
 // time.
 //
-//go:embed prompts/*.md prompts/legacy/*.md
+//go:embed prompts/*.md
 var rolePromptFS embed.FS
 
 // PromptIdentity identifies the exact embedded role-body bytes used by a
@@ -63,47 +63,21 @@ var rolePromptFiles = map[string]string{
 }
 
 // rolePromptVersions maps each supported persisted prompt version to its
-// embedded body. Legacy bodies remain compiled in so restart recovery never
-// silently substitutes a newer role contract for an older invocation.
+// embedded body. Unsupported role contracts fail closed during recovery.
 var rolePromptVersions = map[string]map[string]string{
 	workflow.RoleImplementation: {
-		"implementation-v1":                  "prompts/legacy/implementation-v1.md",
-		"implementation-v2":                  "prompts/legacy/implementation-v2.md",
-		"implementation-v3":                  "prompts/legacy/implementation-v3.md",
-		"implementation-v4":                  "prompts/legacy/implementation-v4.md",
-		"implementation-v5":                  "prompts/legacy/implementation-v5.md",
-		"implementation-v6":                  "prompts/legacy/implementation-v6.md",
-		"implementation-v7":                  "prompts/legacy/implementation-v7.md",
-		"implementation-v8":                  "prompts/legacy/implementation-v8.md",
 		workflow.PromptVersionImplementation: rolePromptFiles[workflow.RoleImplementation],
 	},
 	workflow.RoleTest: {
-		"test-v2":                  "prompts/legacy/test-v2.md",
 		workflow.PromptVersionTest: rolePromptFiles[workflow.RoleTest],
 	},
 	workflow.RoleArchitecture: {
-		"architecture-v1":                  "prompts/legacy/architecture-v1.md",
-		"architecture-v2":                  "prompts/legacy/architecture-v2.md",
 		workflow.PromptVersionArchitecture: rolePromptFiles[workflow.RoleArchitecture],
 	},
 	workflow.RoleSpecificationReview: {
-		"specification-review-v1":                 "prompts/legacy/specification-review-v1.md",
-		"specification-review-v2":                 "prompts/legacy/specification-review-v2.md",
-		"specification-review-v3":                 "prompts/legacy/specification-review-v3.md",
-		"specification-review-v4":                 "prompts/legacy/specification-review-v4.md",
-		"specification-review-v5":                 "prompts/legacy/specification-review-v5.md",
-		"specification-review-v6":                 "prompts/legacy/specification-review-v6.md",
-		"specification-review-v7":                 "prompts/legacy/specification-review-v7.md",
 		workflow.PromptVersionSpecificationReview: rolePromptFiles[workflow.RoleSpecificationReview],
 	},
 	workflow.RoleStandardsReview: {
-		"standards-review-v1":                 "prompts/legacy/standards-review-v1.md",
-		"standards-review-v2":                 "prompts/legacy/standards-review-v2.md",
-		"standards-review-v3":                 "prompts/legacy/standards-review-v3.md",
-		"standards-review-v4":                 "prompts/legacy/standards-review-v4.md",
-		"standards-review-v5":                 "prompts/legacy/standards-review-v5.md",
-		"standards-review-v6":                 "prompts/legacy/standards-review-v6.md",
-		"standards-review-v7":                 "prompts/legacy/standards-review-v7.md",
 		workflow.PromptVersionStandardsReview: rolePromptFiles[workflow.RoleStandardsReview],
 	},
 	workflow.RolePullRequestWriter: {
@@ -118,38 +92,11 @@ var expectedPromptSHA256 = map[string]string{
 	workflow.PromptVersionImplementation:      "e0a6f046876022c8095a3bc161127e2b6ec0518ef51bbc57f0a753fb8a0ca998",
 	workflow.PromptVersionTest:                "041c14a87705590f02de2a622f58c7361477034f7a99593d8e03bd0050167ae5",
 	workflow.PromptVersionArchitecture:        "c789ad14c540e067207ef00fada44c1c6c56dde111aef945e7a2daf6734eac74",
-	"specification-review-v4":                 "164dc97b4cb7250391158537b4f931c151df6eede866e8ce9b139b49dc067773",
-	"specification-review-v5":                 "b8f39cd13be19fbb71878f30bd8354a64e28a766e557b5e967f643a4974ce3e5",
-	"specification-review-v6":                 "6ae0e5d82480384e8c6bfb3bdc4e3f2c66b37f71f5501abf77029b53da07ad88",
-	"specification-review-v7":                 "f127acc9fa3ad7d8c31a2944a418f601a9b6185f06fd7214eff3a4d30a16e318",
 	workflow.PromptVersionSpecificationReview: "9f07951a1a8ef748f8e4ef01032383b3191376fa5a321d8f460d425d8d7990a8",
-	"standards-review-v5":                     "f6c848e43eba598767911ba91e73b9372bd2c82d2a9d0729f79ec7e6a6a6fddb",
-	"standards-review-v6":                     "2f8bb85f4e36cbd23a9894bfdd5ea5f9c815bb87df49a074f90c95a4bdc05469",
-	"standards-review-v7":                     "b773948d204ff17301cde3663a8d449deef6a904560bc4dbdd9dd9f324457dcd",
 	workflow.PromptVersionStandardsReview:     "b55ea69e303fbbde83931681a7fb2691849030afe43e975e4f57c69f87f731a0",
 	workflow.PromptVersionPullRequestWriter:   "e3b2acce46fabc616e05afc63a7e1288bdf75cc6bd40471bee658ed3a79675fb",
-	"implementation-v1":                       "c482b3b566b3a3e6eae9df5c690efa29a2656d070696cf3798abef3365eda769",
-	"implementation-v2":                       "658c12098f707a3f400197802747e29b7665428bd00e6f3dd1fe4f0b2923a439",
-	"implementation-v3":                       "d1e5598640f885fae8c5f3f650255fba7e9b4c07c0cb790bdbd81537e1fe8354",
-	"implementation-v4":                       "e169b645f4f22d91fa14941765e004d4c9708949502dd35fe146e2696bc78911",
-	"implementation-v5":                       "563454d454a86d5fe9b35c0c141430cac254c83097281e1c70b02711731d77a2",
-	"implementation-v6":                       "3e43a7434986c73b61c095e1afaedb3f7aa2b0c37779128ec2dd50b91b15c939",
-	"implementation-v7":                       "ea182bf98f0d70c3ac0887b0877a5bb770dc1533f5fcd4072abb729513943a3a",
-	"implementation-v8":                       "1a7d302191e1f3e34de34046b188db5ae1c191be986e4ad40327e5932bd01cdd",
-	"architecture-v1":                         "03efc454fd338fdb007244f439d92adb963eaca872d3f024df2ab3c0b970a5d2",
-	"architecture-v2":                         "7f5b0571433ef5c718290fce85e32bd921ed3bd0c3c2b38406d002f84e223e70",
-	"test-v2":                                 "5a9bcd6604df2c1bcffddb4571561f371c3854f1d7e16fecf24643ea6d971d3f",
-	"specification-review-v1":                 "a5c7d2a64a84758796036ef8636da3118fef31be49eb3d0d5e45e3ed5caf7507",
-	"specification-review-v2":                 "9810c426d9d878e8104f135ac89f33e877d40fd23606e540eda6b025fcb799ed",
-	"specification-review-v3":                 "ea66e87d7f144bbc12c63ba2a2d6bb40c05aaef7112cb12d7cb626c858f2c204",
-	"standards-review-v1":                     "f7c0eb584bd5fe0d4b72052bffe96da34c3a2d226bbc5b2046172bf286051472",
-	"standards-review-v2":                     "40a8037692125475a7796da524bbca2f654e89b61ba097d7e124263184bfc05d",
-	"standards-review-v3":                     "92b351c4f73aa779faa2e915ade8519ff41691c840d8ead77e6207094e32020c",
-	"standards-review-v4":                     "007370ac417296565ab8c5ae6e009e6a39591c2a0122acb669f348ceaef9bebb",
 	workflow.PromptVersionIdeation:            "43c82f2fbffcc3ad3a592f2f61bbc887a203b9d6427bce7c8baa235a20a98deb",
-	"ideation-v1":                             "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d",
 	workflow.PromptVersionPlanning:            "06aae50573d4ab663f04b5068b34bd55935d383fea75b510ec3993ccd883b20d",
-	"planning-v1":                             "849893b461300fd4cc2f80c8619b08acd237f9151b3c8e4d4803d3cd8aee3b86",
 }
 
 const (
@@ -301,34 +248,13 @@ type ReviewContext struct {
 	ReviewPrimaryNonTextFiles []string `json:"review_primary_non_text_files,omitempty"`
 	// DiffPath is the stable worker path of the exact review artifact. New
 	// packets set it to WorkerReviewDiffPath. It is required for new review
-	// packets but omitted by historical packets.
+	// packets, including an empty diff.
 	DiffPath string `json:"diff_path"`
 	// DiffBytes is the byte count of the exact review artifact. It is not omitted
 	// for a zero-byte artifact.
 	DiffBytes int64 `json:"diff_bytes"`
 	// DiffSHA256 is the hexadecimal SHA-256 identity of the exact review artifact.
 	DiffSHA256 string `json:"diff_sha256"`
-	// CurrentDiff is retained only so historical packet readers can decode the
-	// old packet shape. New packets never populate it.
-	CurrentDiff string `json:"current_diff,omitempty"`
-	// OmittedDiffBytes is retained only for historical packet readers. New packets
-	// never populate it.
-	OmittedDiffBytes int `json:"omitted_diff_bytes,omitempty"`
-	// ChangedPathsCommand is retained only for historical packet readers. New
-	// packets never populate it.
-	ChangedPathsCommand string `json:"changed_paths_command,omitempty"`
-	// DiffPathCommand is retained only for historical packet readers. New packets
-	// never populate it.
-	DiffPathCommand string `json:"diff_path_command,omitempty"`
-	// TestHandoff is retained for compatibility with older packet readers and is
-	// omitted from new isolated review packets.
-	TestHandoff *store.TestHandoff `json:"test_handoff,omitempty"`
-	// ImplementationHandoff is retained for compatibility with older packet
-	// readers and is omitted from new isolated review packets.
-	ImplementationHandoff *store.ImplementationHandoff `json:"implementation_handoff,omitempty"`
-	// ProtectedTestPaths is retained for compatibility with older packet readers
-	// and is omitted from new isolated review packets.
-	ProtectedTestPaths []store.ProtectedTestPath `json:"protected_test_paths,omitempty"`
 	// TestExemption is the deliberate provisional-exemption signal supplied to
 	// the standards reviewer for documented-standards evaluation.
 	TestExemption *store.TestExemption `json:"test_exemption,omitempty"`
@@ -463,15 +389,7 @@ Review-repair packet (coordinator-owned):
 	}
 	if definition.ReadOnly() && request.ReviewContext != nil {
 		if request.ReviewContext.DiffPath != "" {
-			// Historical packet fields are deliberately cleared before an artifact-
-			// backed context is rendered. File-backed review prompts use one procedure
-			// regardless of the artifact size, including a zero-byte artifact.
-			withoutDiff := *request.ReviewContext
-			withoutDiff.CurrentDiff = ""
-			withoutDiff.OmittedDiffBytes = 0
-			withoutDiff.ChangedPathsCommand = ""
-			withoutDiff.DiffPathCommand = ""
-			data, err := marshalHandoff(withoutDiff)
+			data, err := marshalHandoff(request.ReviewContext)
 			if err != nil {
 				return "", fmt.Errorf("encode review context: %w", err)
 			}
@@ -488,21 +406,7 @@ Read-only review context (coordinator-owned):
 %s
 `, data, location)
 		} else {
-			data, err := marshalHandoff(request.ReviewContext)
-			if err != nil {
-				return "", fmt.Errorf("encode historical review context: %w", err)
-			}
-			location := "This checkpoint changed nothing against its base, so the context carries no diff."
-			if size := len([]byte(request.ReviewContext.CurrentDiff)); size > 0 {
-				location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes. Read it in the mounted packet at\n%s under review_context.current_diff; it is not repeated here.", size, WorkerSpecificationPath)
-			} else if omitted := request.ReviewContext.OmittedDiffBytes; omitted > 0 {
-				location = fmt.Sprintf("The exact diff for this checkpoint is %d bytes, larger than the packet carries. Its\nreview_context in %s names the diff size and the read-only commands that read it.", omitted, WorkerSpecificationPath)
-			}
-			dynamicContext = fmt.Sprintf(`
-Read-only review context (coordinator-owned):
-%s
-%s
-`, data, location)
+			return "", errors.New("read-only review context requires a mounted diff artifact")
 		}
 	}
 	if request.Continuation {
@@ -661,10 +565,6 @@ func renderRoleBodyWithCraft(body, role string, implementationOwnsTDD bool, repo
 		scope string
 	}{
 		{name: "implementation-owned-tdd", keep: implementationOwnsTDD, scope: "TDD"},
-		// This marker exists only in the retained pre-v6 implementation body;
-		// keep its historical route behavior without adding a second block to
-		// the current implementation craft section.
-		{name: "implementation-craft-independent-test-handoff", keep: !implementationOwnsTDD, scope: "legacy implementation craft handoff"},
 		{name: "independent-test-handoff", keep: !implementationOwnsTDD, scope: "independent-test handoff"},
 		{name: "implementation-owned-tdd-repair", keep: implementationOwnsTDD, scope: "TDD repair"},
 	}
@@ -678,8 +578,7 @@ func renderRoleBodyWithCraft(body, role string, implementationOwnsTDD bool, repo
 }
 
 // validateCraftSection verifies that a current role body has exactly one
-// non-nested, correctly ordered craft section. Legacy bodies intentionally do
-// not call this validator so their recorded bytes remain replayable.
+// non-nested, correctly ordered craft section.
 func validateCraftSection(body, role string) error {
 	if strings.Count(body, craftStartMarker) != 1 || strings.Count(body, craftEndMarker) != 1 {
 		return fmt.Errorf("embedded %s prompt has malformed craft section", role)
@@ -691,8 +590,7 @@ func validateCraftSection(body, role string) error {
 }
 
 // renderCraftSection removes the factory-owned craft markers while retaining
-// their prose. Bodies without craft markers are legacy bodies and pass through
-// unchanged so persisted invocations rebuild the exact historical prompt.
+// their prose.
 func renderCraftSection(body, role string) (string, error) {
 	return renderCraftSectionWithOverride(body, role, nil)
 }
@@ -700,12 +598,6 @@ func renderCraftSection(body, role string) (string, error) {
 // renderCraftSectionWithOverride replaces the current embedded craft prose when
 // repositoryCraft is present, while preserving the surrounding authority bytes.
 func renderCraftSectionWithOverride(body, role string, repositoryCraft *string) (string, error) {
-	if !strings.Contains(body, craftStartMarker) && !strings.Contains(body, craftEndMarker) {
-		if repositoryCraft != nil {
-			return "", fmt.Errorf("role %q has no replaceable embedded craft section", role)
-		}
-		return body, nil
-	}
 	if err := validateCraftSection(body, role); err != nil {
 		return "", err
 	}

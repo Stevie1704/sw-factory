@@ -243,7 +243,7 @@ invocation identity and permits one coordinator-owned native harness resume.
 _Avoid_: Diagnosis, unbounded retry
 
 **Recovery-required result**:
-A typed discrepancy result that reports the agreement state and discovered discrepancies; journaled runs reconcile safe effects automatically and pause unresolved disagreements for a human, while legacy stores retain the fail-closed refusal.
+A typed result describing an interrupted run's agreement state and discrepancies that need reconciliation or human disposition. It does not imply that the run has recovered or that an operator has approved an action.
 _Avoid_: Recovered run, implicit operator approval
 
 **Startup diagnosis**:

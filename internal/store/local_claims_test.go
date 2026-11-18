@@ -85,10 +85,9 @@ func TestNewClaimMustUseLatestSelectedAuthority(t *testing.T) {
 	}
 }
 
-// TestLegacyGraphKeyedClaimStillGuardsItsRevision stores a claim row in the
-// earlier format, whose key also hashed the graph digest. The row stays
-// readable, and a new reservation of the same revision cannot consume it twice.
-func TestLegacyGraphKeyedClaimStillGuardsItsRevision(t *testing.T) {
+// TestLocalClaimsRefusesGraphKeyedRecords rejects a pre-baseline record whose
+// key includes the graph digest instead of the exact issue revision.
+func TestLocalClaimsRefusesGraphKeyedRecords(t *testing.T) {
 	for _, state := range []string{"reserved", "claimed"} {
 		t.Run(state, func(t *testing.T) {
 			db, path := openIdeationStoreForTest(t)
@@ -108,19 +107,8 @@ func TestLegacyGraphKeyedClaimStillGuardsItsRevision(t *testing.T) {
 				t.Fatal(err)
 			}
 			_ = raw.Close()
-			claims, err := db.LocalClaims(t.Context(), claim.RepositoryPath)
-			if err != nil || len(claims) != 1 || claims[0].RevisionKey() != claim.RevisionKey() {
-				t.Fatalf("legacy claim unreadable: %#v,%v", claims, err)
-			}
-			reserved, err := db.ReserveLocalClaim(t.Context(), claim)
-			if state == "reserved" {
-				if err != nil || reserved.RunID != legacy.RunID {
-					t.Fatalf("legacy reservation not adopted: %#v,%v", reserved, err)
-				}
-				return
-			}
-			if !errors.Is(err, store.ErrLocalClaimConflict) {
-				t.Fatalf("consumed legacy revision reserved again: %#v,%v", reserved, err)
+			if _, err := db.LocalClaims(t.Context(), claim.RepositoryPath); !errors.Is(err, store.ErrLocalClaimConflict) {
+				t.Fatalf("LocalClaims() = %v, want ErrLocalClaimConflict", err)
 			}
 		})
 	}

@@ -74,9 +74,6 @@ type ResetRun struct {
 // persisted credential-store identity. Ordinary cleanup retains these; only a
 // complete reset removes them.
 type ResetCredentialStore struct {
-	// RunID is the run whose worker mounted the store, used as the adapter's
-	// legacy fallback identity.
-	RunID string
 	// CredentialStoreID is the persisted credential-store identity.
 	CredentialStoreID string
 }
@@ -486,7 +483,7 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 				continue
 			}
 			seenCredentialStores[storeID] = struct{}{}
-			plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{RunID: candidate.Run.ID, CredentialStoreID: storeID})
+			plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{CredentialStoreID: storeID})
 		}
 	}
 	if sessions, ok := resetStore.(SessionResourceStore); ok && resetStore != nil {
@@ -502,7 +499,7 @@ func (s *Service) buildResetPlan(ctx context.Context, registration config.Reposi
 					continue
 				}
 				seenCredentialStores[storeID] = struct{}{}
-				plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{RunID: session.WorkerRunID, CredentialStoreID: storeID})
+				plan.CredentialStores = append(plan.CredentialStores, ResetCredentialStore{CredentialStoreID: storeID})
 			}
 		}
 	}
@@ -689,7 +686,7 @@ func (s *Service) executeReset(ctx context.Context, registration config.Reposito
 			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: "the worker runtime cannot remove factory-managed credential storage"})
 			continue
 		}
-		if err := remover.RemoveCredentialStore(ctx, worker.RemoveCredentialStoreRequest{RunID: credentialStore.RunID, CredentialStoreID: credentialStore.CredentialStoreID}); err != nil {
+		if err := remover.RemoveCredentialStore(ctx, worker.RemoveCredentialStoreRequest{CredentialStoreID: credentialStore.CredentialStoreID}); err != nil {
 			result.Remaining = append(result.Remaining, ResetFailure{Target: target, Reason: resetFailureReason(err)})
 			continue
 		}

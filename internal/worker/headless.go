@@ -310,9 +310,8 @@ type headlessInspectionWire struct {
 	StdoutTruncated bool `json:"stdout_truncated"`
 	// StderrTruncated reports incomplete retained diagnostic output.
 	StderrTruncated bool `json:"stderr_truncated"`
-	// StartFailed reports that the helper could not start the command. It is
-	// absent from a helper in a worker image built before the field existed.
-	StartFailed *bool `json:"start_failed"`
+	// StartFailed reports that the helper could not start the command.
+	StartFailed bool `json:"start_failed"`
 }
 
 // toInspection validates the worker helper's neutral wire values.
@@ -331,17 +330,7 @@ func (w headlessInspectionWire) toInspection() (HeadlessInspection, error) {
 	if err != nil {
 		return HeadlessInspection{}, errors.New("headless process stderr is not valid base64")
 	}
-	return HeadlessInspection{Status: status, ExitCode: w.ExitCode, Stdout: string(stdout), Stderr: string(stderr), StdoutTruncated: w.StdoutTruncated, StderrTruncated: w.StderrTruncated, StartFailed: w.startFailed(string(stderr))}, nil
-}
-
-// startFailed returns the helper's start-failure state. A helper from an
-// older worker image reports no state; for it the exit status and the
-// leading stderr marker stay the evidence, which is all that helper records.
-func (w headlessInspectionWire) startFailed(stderr string) bool {
-	if w.StartFailed != nil {
-		return *w.StartFailed
-	}
-	return HeadlessStatus(w.Status) == HeadlessStatusExited && w.ExitCode == HeadlessStartFailedExitCode && strings.HasPrefix(stderr, HeadlessStartFailedMarker+"\n")
+	return HeadlessInspection{Status: status, ExitCode: w.ExitCode, Stdout: string(stdout), Stderr: string(stderr), StdoutTruncated: w.StdoutTruncated, StderrTruncated: w.StderrTruncated, StartFailed: w.StartFailed}, nil
 }
 
 // validateHeadlessRequest validates identity, command, policy, and explicit

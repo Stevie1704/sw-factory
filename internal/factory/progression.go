@@ -78,8 +78,7 @@ type progressionState struct {
 	// reading each active invocation. The planner must not repeat that I/O.
 	ReadyInvocationIDs map[string]bool
 	// AgentTimeout is the parsed agent deadline from the frozen specification
-	// packet. A zero value preserves the no-deadline behavior of legacy packets
-	// that predate the required timeout field.
+	// packet.
 	AgentTimeout time.Duration
 	// Now is the coordinator clock observation paired with AgentTimeout.
 	Now time.Time
@@ -671,8 +670,7 @@ func progressionStageStep(state progressionState, registry workflow.Registry) (p
 				runID: run.ID,
 			}, nil
 		}
-		// Older packets without the standards role retain the historical
-		// draft-pull-request stop until they are explicitly reviewed.
+		// A repository without both automatic review roles stops at its draft PR.
 		return progressionAction{}, &progressionResult{Outcome: progressionDraftPullRequest, Reason: fmt.Sprintf("draft pull request #%d is ready for review", run.PullRequestNumber)}
 	case store.StageReview:
 		return progressionAction{}, &progressionResult{Outcome: progressionWaiting, Reason: "review round has no active invocation"}
@@ -788,17 +786,13 @@ func (s *Service) readProgressionState(ctx context.Context, registration config.
 }
 
 // agentTimeoutForProgression reads the agent deadline from the frozen
-// specification packet. A missing value is retained as an unconfigured
-// deadline for packets created before the timeout was consumed by progression.
+// specification packet. Missing and invalid deadlines fail closed.
 func agentTimeoutForProgression(run store.Run) (time.Duration, error) {
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
 		return 0, fmt.Errorf("decode specification packet for agent deadline: %w", err)
 	}
 	serialized := strings.TrimSpace(packet.RepositoryConfig.Timeouts.Agent)
-	if serialized == "" {
-		return 0, nil
-	}
 	timeout, err := time.ParseDuration(serialized)
 	if err != nil || timeout <= 0 {
 		if err == nil {

@@ -34,8 +34,8 @@ func invocationReadOnly(invocation store.Invocation) bool {
 }
 
 // workerIDForInvocation gives each review invocation its own worker,
-// role-home volume, and temporary filesystem while retaining the historical
-// run-scoped worker for ordinary roles.
+// role-home volume, and temporary filesystem. Ordinary roles use a run-scoped
+// worker.
 func workerIDForInvocation(invocation store.Invocation) string {
 	if invocationReadOnly(invocation) {
 		return invocation.RunID + "-" + invocation.ID

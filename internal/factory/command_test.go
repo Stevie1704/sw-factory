@@ -921,9 +921,6 @@ func TestHandleCommandRepairResumesImplementationOnASingleAccountHost(t *testing
 	if kind != store.ReviewRepairEventSupervisionCommand || identity != "21" {
 		t.Fatalf("SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
 	}
-	if packet.ReviewID != "" {
-		t.Fatalf("ReviewID = %q, want the legacy review field left empty", packet.ReviewID)
-	}
 	if len(packet.Findings) != 1 {
 		t.Fatalf("findings = %#v, want the single maintainer instruction", packet.Findings)
 	}
@@ -1163,7 +1160,7 @@ func repairRun(t *testing.T) store.Run {
 	// The parked state a reviewer leaves behind: one axis produced a result for
 	// the checkpoint and the other did not, so the round is incomplete and
 	// readiness cannot be reached without a human.
-	run.StandardsReview = &store.StandardsReview{CheckpointSHA: run.CheckpointSHA}
+	run.StandardsReview = &store.StandardsReview{Outcome: "completed", CheckpointSHA: run.CheckpointSHA}
 	run.LifecycleReason = "spec_review cannot proceed"
 	return run
 }

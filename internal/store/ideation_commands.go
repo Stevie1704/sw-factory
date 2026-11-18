@@ -405,29 +405,6 @@ func validateCommandJSON(label string, value []byte, maxBytes int, required bool
 	return nil
 }
 
-// ideationCommandSchema creates the additive command inbox of schema version
-// 45 (ADR 0024).
-var ideationCommandSchema = []string{
-	`CREATE TABLE IF NOT EXISTS ideation_commands (
-		sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-		request_id TEXT NOT NULL UNIQUE,
-		session_id TEXT NOT NULL,
-		kind TEXT NOT NULL,
-		expected_revision INTEGER NOT NULL,
-		payload TEXT NOT NULL,
-		state TEXT NOT NULL,
-		attempts INTEGER NOT NULL DEFAULT 0,
-		outcome TEXT NOT NULL DEFAULT '',
-		detail TEXT NOT NULL DEFAULT '',
-		session_revision INTEGER NOT NULL DEFAULT 0,
-		result TEXT NOT NULL DEFAULT '',
-		accepted_at TEXT NOT NULL,
-		completed_at TEXT NOT NULL DEFAULT ''
-	)`,
-	"CREATE INDEX IF NOT EXISTS ideation_commands_by_session ON ideation_commands (session_id, sequence)",
-	"CREATE INDEX IF NOT EXISTS ideation_commands_by_state ON ideation_commands (state, sequence)",
-}
-
 // CommandInbox is the narrow write handle of the local UI. It can append a
 // command and read what a command submission needs. It cannot change
 // sessions, runs, or any other record, and opening it never creates,

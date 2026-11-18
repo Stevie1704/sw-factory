@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 )
 
 // CurrentSchemaVersion is the supported operational-store schema version.
-const CurrentSchemaVersion = 52
+const CurrentSchemaVersion = 53
 
 const (
 	// MaxReviewFindings bounds the findings one review axis may retain.
@@ -353,10 +354,6 @@ type RoleHandoff struct {
 	TestObjections []TestObjection `json:"test_objections,omitempty"`
 }
 
-// ImplementationHandoff is the legacy name retained for callers and persisted
-// rows created before role-owned handoffs were introduced.
-type ImplementationHandoff = RoleHandoff
-
 // ReviewFinding is the durable finding projection shared by status and PR
 // renderers without retaining the reviewer transcript.
 type ReviewFinding struct {
@@ -378,19 +375,9 @@ type ReviewFinding struct {
 	UnitID string `json:"unit_id,omitempty"`
 }
 
-// SourceEvent returns the maintainer source and event identity behind a human
-// repair packet. A packet written before supervision commands existed recorded
-// only its GitHub review identity, so that shape reads as a pull-request review
-// event and remains replayable without a migration.
+// SourceEvent returns the explicit maintainer event of a human repair packet.
 func (p ReviewRepairPacket) SourceEvent() (ReviewRepairSourceEvent, string) {
-	kind := ReviewRepairSourceEvent(strings.TrimSpace(string(p.SourceEventKind)))
-	if identity := strings.TrimSpace(p.SourceEventID); kind != "" && identity != "" {
-		return kind, identity
-	}
-	if identity := strings.TrimSpace(p.ReviewID); identity != "" {
-		return ReviewRepairEventPullRequestReview, identity
-	}
-	return "", ""
+	return ReviewRepairSourceEvent(strings.TrimSpace(string(p.SourceEventKind))), strings.TrimSpace(p.SourceEventID)
 }
 
 // ReviewResult is one review role's latest exact-checkpoint result. A result
@@ -398,8 +385,7 @@ func (p ReviewRepairPacket) SourceEvent() (ReviewRepairSourceEvent, string) {
 type ReviewResult struct {
 	// CheckpointSHA identifies the exact commit reviewed.
 	CheckpointSHA string `json:"checkpoint_sha"`
-	// Outcome identifies whether the reviewer completed its assignment. An empty
-	// value is treated as completed for rows written before this field existed.
+	// Outcome identifies whether the reviewer completed its assignment.
 	Outcome string `json:"outcome,omitempty"`
 	// Summary is the reviewer's bounded observable reason or completion summary.
 	Summary string `json:"summary,omitempty"`
@@ -487,14 +473,8 @@ const (
 type ReviewRepairPacket struct {
 	// Version identifies this packet shape.
 	Version int `json:"version"`
-	// Source identifies who requested the repair. It is empty for packets
-	// written before human-requested repair existed, which means factory.
+	// Source identifies who requested the repair: factory or human.
 	Source ReviewRepairSource `json:"source,omitempty"`
-	// ReviewID is the GitHub review identity of a human repair packet written
-	// before supervision commands could produce one. It is empty for a factory
-	// packet and for a command-sourced packet; SourceEvent reads it so a packet
-	// persisted by an earlier coordinator stays replayable.
-	ReviewID string `json:"review_id,omitempty"`
 	// SourceEventKind identifies which maintainer source produced a human
 	// packet. It is empty for a factory packet.
 	SourceEventKind ReviewRepairSourceEvent `json:"source_event_kind,omitempty"`
@@ -688,7 +668,7 @@ type Run struct {
 	// this run. Claim initializes it to the latest pre-claim issue comment so
 	// historical commands cannot execute against the new run.
 	// Separate tracker/code-host namespaces use a versioned per-stream payload;
-	// legacy combined adapters retain their original raw IDs.
+	// combined adapters use raw IDs in their shared comment namespace.
 	ProcessedCommentID string
 	// ProcessedCommentRevision records the run revision at which the watermark
 	// was persisted, making the watermark tuple restart-safe and auditable.
@@ -784,10 +764,10 @@ type Invocation struct {
 	// operator-requested native resume. It prevents replay after response loss.
 	ManualResumeCount int
 	// ReviewRoundID identifies the exact review round for a partitioned review
-	// invocation. It is empty for non-review and historical invocations.
+	// invocation. It is empty for non-review invocations.
 	ReviewRoundID string
 	// ReviewUnitID identifies the manifest unit assigned to this invocation. It
-	// is empty for non-review and historical invocations.
+	// is empty for non-review invocations.
 	ReviewUnitID string
 	// CreatedAt is the immutable invocation creation time.
 	CreatedAt time.Time
@@ -863,11 +843,9 @@ func (e *MigrationRequiredError) Error() string {
 	return fmt.Sprintf("operational store schema version %d is older than supported version %d; migrate it with factory upgrade migrate-store", e.Version, e.Supported)
 }
 
-// openMigrating opens or creates a store and reports the schema migration
-// it applied and the path of the pre-migration backup. It migrates an
-// existing older store only when migrateExisting is set. An existing store
-// at version 0 has only its metadata, from an initialization that stopped
-// before its first migration, so it is completed like a new store.
+// openMigrating opens or creates a store and reports its schema migration.
+// Existing pre-baseline schemas are refused even by the migration entry point.
+// A fresh store creates its complete baseline and metadata atomically.
 func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Store, Migration, error) {
 	if path == "" {
 		return nil, Migration{}, errors.New("operational store path is required")
@@ -902,19 +880,17 @@ func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Sto
 			_ = database.Close()
 		}
 	}()
-	if !existed {
-		if err := initializeMetadata(ctx, database); err != nil {
+	version := 0
+	if existed {
+		version, err = readSchemaVersion(ctx, database, absolutePath)
+		if err != nil {
 			return nil, Migration{}, err
 		}
-	}
-	version, err := readSchemaVersion(ctx, database, absolutePath)
-	if err != nil {
-		return nil, Migration{}, err
 	}
 	if version > CurrentSchemaVersion {
 		return nil, Migration{}, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
-	if existed && version > 0 && version < CurrentSchemaVersion && !migrateExisting {
+	if existed && (version < MinimumUpgradeSchemaVersion || (version < CurrentSchemaVersion && !migrateExisting)) {
 		return nil, Migration{}, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	migration := Migration{FromVersion: version, ToVersion: version}
@@ -1429,8 +1405,7 @@ func normalizePendingEffect(effect PendingEffect) (PendingEffect, error) {
 	return effect, nil
 }
 
-// pendingEffectIdentity keeps a conflict error useful even if a malformed
-// legacy row is ever encountered.
+// pendingEffectIdentity describes a conflict even when its row is missing.
 func pendingEffectIdentity(effect *PendingEffect) string {
 	if effect == nil {
 		return "<missing>"
@@ -1784,8 +1759,8 @@ func validateReviewRepairProjection(run Run) error {
 			if kind != ReviewRepairEventPullRequestReview && kind != ReviewRepairEventSupervisionCommand {
 				return fmt.Errorf("unsupported review repair source event %q", kind)
 			}
-		case "", ReviewRepairSourceFactory:
-			if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || packet.ReviewID != "" || strings.TrimSpace(packet.SourceEventID) != "" {
+		case ReviewRepairSourceFactory:
+			if packet.Attempt < 1 || packet.Attempt > run.ReviewRepairBudget || strings.TrimSpace(packet.SourceEventID) != "" {
 				return errors.New("factory review repair packet attempt is invalid")
 			}
 		default:
@@ -1859,11 +1834,6 @@ func validateReviewProjection(label string, review *ReviewResult, checkpoint str
 		return fmt.Errorf("%s review checkpoint SHA must contain exactly 40 or 64 lowercase hexadecimal characters", label)
 	}
 	outcome := review.Outcome
-	if outcome == "" {
-		// Rows written before incomplete review outcomes were represented have
-		// only a checkpoint and findings, which is the completed shape.
-		outcome = "completed"
-	}
 	switch outcome {
 	case "completed":
 		if len(review.Questions) != 0 || len(review.Evidence) != 0 {
@@ -3045,20 +3015,6 @@ func configure(ctx context.Context, database *sql.DB) error {
 	return nil
 }
 
-// initializeMetadata creates the schema metadata table and initializes its version to zero.
-func initializeMetadata(ctx context.Context, database *sql.DB) error {
-	if _, err := database.ExecContext(ctx, `CREATE TABLE schema_metadata (
-		singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-		version INTEGER NOT NULL
-	)`); err != nil {
-		return fmt.Errorf("create schema metadata: %w", err)
-	}
-	if _, err := database.ExecContext(ctx, `INSERT INTO schema_metadata(singleton, version) VALUES (1, 0)`); err != nil {
-		return fmt.Errorf("initialize schema metadata: %w", err)
-	}
-	return nil
-}
-
 // readSchemaVersion reads the schema version recorded in the database metadata.
 // It returns an UnversionedDatabaseError if the metadata cannot be read.
 func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
@@ -3069,976 +3025,30 @@ func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int,
 	return version, nil
 }
 
-// trackerRepositoryTrigger refuses to change or clear the frozen repository
-// identity of a run once set (ADR 0030).
-const trackerRepositoryTrigger = `CREATE TRIGGER IF NOT EXISTS operational_runs_tracker_repository_frozen
-		BEFORE UPDATE OF tracker_repository ON operational_runs
-		WHEN OLD.tracker_repository <> '' AND NEW.tracker_repository <> OLD.tracker_repository
-		BEGIN
-			SELECT RAISE(ABORT, 'the frozen tracker repository of a run cannot change');
-		END`
+// storeBaselineSchema creates the supported operational store schema directly.
+//
+//go:embed store_baseline.sql
+var storeBaselineSchema string
 
-// migrate applies supported schema migrations from the specified version through the current schema version in a single transaction. It records each completed migration and leaves the database unchanged if a migration fails.
+// migrate creates the baseline in one transaction. Future releases add their
+// supported upgrade steps here; pre-baseline stores are refused by the opener.
 func migrate(ctx context.Context, database *sql.DB, from int) error {
+	if from != 0 {
+		return fmt.Errorf("no migration registered from schema version %d", from)
+	}
 	tx, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin store migration: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	version := from
-	for version < CurrentSchemaVersion {
-		switch version + 1 {
-		case 1:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE operational_runs (
-				id TEXT PRIMARY KEY,
-				repository_path TEXT NOT NULL,
-				issue_number INTEGER NOT NULL,
-				stage TEXT NOT NULL,
-				status TEXT NOT NULL,
-				branch TEXT NOT NULL DEFAULT '',
-				worktree TEXT NOT NULL DEFAULT '',
-				checkpoint_sha TEXT NOT NULL DEFAULT '',
-				image_digest TEXT NOT NULL DEFAULT '',
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 1: %w", err)
-			}
-		case 2:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN coordinator TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN status_comment_id TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN specification_packet TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 2: %w", err)
-				}
-			}
-		case 3:
-			if err := reconcileDuplicateRuns(ctx, tx); err != nil {
-				return fmt.Errorf("reconcile runs before store migration 3: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_run_per_repository
-				ON operational_runs (repository_path)
-				WHERE status NOT IN ('complete', 'cancelled', 'failed')`); err != nil {
-				return fmt.Errorf("apply store migration 3: %w", err)
-			}
-		case 4:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE invocations (
-					id TEXT PRIMARY KEY,
-					run_id TEXT NOT NULL,
-					harness TEXT NOT NULL,
-					role TEXT NOT NULL,
-					stage TEXT NOT NULL,
-					model TEXT NOT NULL DEFAULT '',
-					reasoning_effort TEXT NOT NULL DEFAULT '',
-					native_session_id TEXT NOT NULL DEFAULT '',
-					workspace_id TEXT NOT NULL DEFAULT '',
-					status_surface_id TEXT NOT NULL DEFAULT '',
-					implementation_surface_id TEXT NOT NULL DEFAULT '',
-					checks_surface_id TEXT NOT NULL DEFAULT '',
-					invocation_directory TEXT NOT NULL DEFAULT '',
-					result_directory TEXT NOT NULL DEFAULT '',
-					prompt_version TEXT NOT NULL DEFAULT '',
-					status TEXT NOT NULL,
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL
-				)`); err != nil {
-				return fmt.Errorf("apply store migration 4: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE INDEX invocations_by_run
-					ON invocations (run_id, updated_at)`); err != nil {
-				return fmt.Errorf("apply store migration 4 index: %w", err)
-			}
-		case 5:
-			if _, err := tx.ExecContext(ctx, `ALTER TABLE invocations ADD COLUMN permitted_paths TEXT NOT NULL DEFAULT ''`); err != nil {
-				return fmt.Errorf("apply store migration 5: %w", err)
-			}
-		case 6:
-			if err := reconcileDuplicateInvocations(ctx, tx); err != nil {
-				return fmt.Errorf("reconcile invocations before store migration 6: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX one_active_invocation_per_run
-				ON invocations (run_id)
-				WHERE status = 'active'`); err != nil {
-				return fmt.Errorf("apply store migration 6: %w", err)
-			}
-		case 7:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN pull_request_number INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN pull_request_url TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 7: %w", err)
-				}
-			}
-		case 8:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN revision INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN processed_comment_id TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN processed_comment_revision INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN last_command_name TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN last_command_outcome TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN last_command_message TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN harness_override TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 8: %w", err)
-				}
-			}
-		case 9:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN merge_commit_sha TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN lifecycle_reason TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 9: %w", err)
-				}
-			}
-		case 10:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN lifecycle_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 10: %w", err)
-			}
-		case 11:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE lifecycle_notifications (
-					run_id TEXT NOT NULL,
-					terminal_status TEXT NOT NULL,
-					created_at TEXT NOT NULL,
-					PRIMARY KEY (run_id, terminal_status)
-				)`); err != nil {
-				return fmt.Errorf("apply store migration 11: %w", err)
-			}
-		case 12:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE gate_results (
-					run_id TEXT NOT NULL,
-					checkpoint_sha TEXT NOT NULL,
-					phase TEXT NOT NULL,
-					ordinal INTEGER NOT NULL,
-					gate_name TEXT NOT NULL,
-					outcome TEXT NOT NULL,
-					status TEXT NOT NULL,
-					blocking INTEGER NOT NULL,
-					skip_reason TEXT NOT NULL DEFAULT '',
-					setup_fingerprint TEXT NOT NULL DEFAULT '',
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL,
-					PRIMARY KEY (run_id, checkpoint_sha, phase, gate_name)
-				)`); err != nil {
-				return fmt.Errorf("apply store migration 12: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE INDEX gate_results_by_run
-					ON gate_results (run_id, phase, checkpoint_sha, ordinal)`); err != nil {
-				return fmt.Errorf("apply store migration 12 index: %w", err)
-			}
-		case 13:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_summaries (
-				run_id TEXT PRIMARY KEY,
-				outcome TEXT NOT NULL,
-				started_at TEXT NOT NULL,
-				completed_at TEXT NOT NULL DEFAULT '',
-				total_wall_nanos INTEGER NOT NULL DEFAULT 0,
-				stage_durations TEXT NOT NULL DEFAULT '[]',
-				invocation_versions TEXT NOT NULL DEFAULT '[]',
-				invocation_count INTEGER NOT NULL DEFAULT 0,
-				gate_count INTEGER NOT NULL DEFAULT 0,
-				check_repair_count INTEGER NOT NULL DEFAULT 0,
-				test_revision_count INTEGER NOT NULL DEFAULT 0,
-				review_revision_count INTEGER NOT NULL DEFAULT 0,
-				budget_exhausted INTEGER NOT NULL DEFAULT 0,
-				exemptions TEXT NOT NULL DEFAULT '[]',
-				escalation_categories TEXT NOT NULL DEFAULT '[]',
-				repeated_blockers TEXT NOT NULL DEFAULT '[]',
-				usage_available INTEGER NOT NULL DEFAULT 0,
-				usage_unavailable_reason TEXT NOT NULL DEFAULT 'not_reported',
-				usage_input_tokens INTEGER NOT NULL DEFAULT 0,
-				usage_output_tokens INTEGER NOT NULL DEFAULT 0,
-				usage_total_tokens INTEGER NOT NULL DEFAULT 0,
-				usage_cost_reported INTEGER NOT NULL DEFAULT 0,
-				usage_cost_micros INTEGER NOT NULL DEFAULT 0,
-				usage_currency TEXT NOT NULL DEFAULT '',
-				active_stage TEXT NOT NULL DEFAULT '',
-				active_stage_started_at TEXT NOT NULL DEFAULT '',
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 13 evaluation summaries: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_usage (
-				run_id TEXT NOT NULL,
-				invocation_id TEXT NOT NULL,
-				input_tokens INTEGER NOT NULL DEFAULT 0,
-				output_tokens INTEGER NOT NULL DEFAULT 0,
-				total_tokens INTEGER NOT NULL DEFAULT 0,
-				cost_reported INTEGER NOT NULL DEFAULT 0,
-				cost_micros INTEGER NOT NULL DEFAULT 0,
-				currency TEXT NOT NULL DEFAULT '',
-				recorded_at TEXT NOT NULL,
-				PRIMARY KEY (run_id, invocation_id)
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 13 evaluation usage: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE INDEX evaluation_usage_by_run
-					ON evaluation_usage (run_id, recorded_at)`); err != nil {
-				return fmt.Errorf("apply store migration 13 evaluation usage index: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE evaluation_dispositions (
-				run_id TEXT NOT NULL,
-				event_id_hash TEXT NOT NULL,
-				category TEXT NOT NULL,
-				disposition TEXT NOT NULL,
-				decided_at TEXT NOT NULL,
-				PRIMARY KEY (run_id, event_id_hash)
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 13 evaluation dispositions: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `CREATE INDEX evaluation_dispositions_by_run
-					ON evaluation_dispositions (run_id, decided_at)`); err != nil {
-				return fmt.Errorf("apply store migration 13 evaluation dispositions index: %w", err)
-			}
-		case 14:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN check_repair_attempts INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN check_repair_budget INTEGER NOT NULL DEFAULT 0",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 14: %w", err)
-				}
-			}
-		case 15:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN credential_store_id TEXT NOT NULL DEFAULT ''"); err != nil {
-				return fmt.Errorf("apply store migration 15: %w", err)
-			}
-		case 16:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN check_repair_pending_attempt INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 16: %w", err)
-			}
-		case 17:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN pending_questions TEXT NOT NULL DEFAULT '[]'"); err != nil {
-				return fmt.Errorf("apply store migration 17: %w", err)
-			}
-		case 18:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN clarification_comment_id TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN clarification_notification_sent INTEGER NOT NULL DEFAULT 0",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 18: %w", err)
-				}
-			}
-		case 19:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN base_checkpoint_sha TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN test_checkpoint_sha TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN test_handoff TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN test_exemption TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN protected_test_paths TEXT NOT NULL DEFAULT '[]'",
-				"ALTER TABLE operational_runs ADD COLUMN test_stage_skipped INTEGER NOT NULL DEFAULT 0",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 19: %w", err)
-				}
-			}
-		case 20:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN implementation_handoff TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN specification_review TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 20: %w", err)
-				}
-			}
-		case 21:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE pending_effects (
-				run_id TEXT PRIMARY KEY,
-				effect_id TEXT NOT NULL,
-				kind TEXT NOT NULL,
-				payload TEXT NOT NULL,
-				created_at TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 21: %w", err)
-			}
-		case 22:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN recovery_resume_count INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 22: %w", err)
-			}
-		case 23:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN attach_required INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 23: %w", err)
-			}
-		case 24:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN terminal_at TEXT NOT NULL DEFAULT ''"); err != nil {
-				return fmt.Errorf("apply store migration 24: %w", err)
-			}
-		case 25:
-			for _, statement := range []string{
-				"ALTER TABLE invocations ADD COLUMN role_surface_id TEXT NOT NULL DEFAULT ''",
-				"UPDATE invocations SET role_surface_id = implementation_surface_id WHERE role_surface_id = '' AND implementation_surface_id <> ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 25: %w", err)
-				}
-			}
-		case 26:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN active_invocation_id TEXT NOT NULL DEFAULT ''"); err != nil {
-				return fmt.Errorf("apply store migration 26: %w", err)
-			}
-		case 27:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN test_invocation_id TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN test_revision_attempts INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN test_revision_budget INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN test_revision_history TEXT NOT NULL DEFAULT '[]'",
-				"ALTER TABLE operational_runs ADD COLUMN test_objection TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN test_revision_base_changed_paths TEXT NOT NULL DEFAULT '[]'",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 27: %w", err)
-				}
-			}
-		case 28:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN standards_review TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN active_invocation_ids TEXT NOT NULL DEFAULT '[]'",
-				"DROP INDEX one_active_invocation_per_run",
-				"CREATE UNIQUE INDEX one_active_invocation_per_role ON invocations (run_id, role) WHERE status = 'active'",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 28: %w", err)
-				}
-			}
-		case 29:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN review_repair_attempts INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN review_repair_budget INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN review_repair_pending_attempt INTEGER NOT NULL DEFAULT 0",
-				"ALTER TABLE operational_runs ADD COLUMN review_repair_history TEXT NOT NULL DEFAULT '[]'",
-				"ALTER TABLE operational_runs ADD COLUMN review_repair_packet TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 29: %w", err)
-				}
-			}
-		case 30:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN ready_notification_sent INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 30: %w", err)
-			}
-		case 31:
-			for _, statement := range []string{
-				"ALTER TABLE operational_runs ADD COLUMN processed_review_id TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE operational_runs ADD COLUMN processed_review_revision INTEGER NOT NULL DEFAULT 0",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 31: %w", err)
-				}
-			}
-		case 32:
-			for _, statement := range []string{
-				"ALTER TABLE invocations ADD COLUMN prompt_craft_source_path TEXT NOT NULL DEFAULT ''",
-				"ALTER TABLE invocations ADD COLUMN prompt_craft_sha256 TEXT NOT NULL DEFAULT ''",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 32: %w", err)
-				}
-			}
-		case 33:
-			if _, err := tx.ExecContext(ctx, `UPDATE operational_runs
-				SET active_invocation_ids = (
-					SELECT json_group_array(value)
-					FROM (
-						SELECT operational_runs.active_invocation_id AS value, -1 AS position
-						UNION ALL
-						SELECT json_each.value, json_each.key
-						FROM json_each(operational_runs.active_invocation_ids)
-						WHERE json_each.value <> operational_runs.active_invocation_id
-						ORDER BY position
-					)
-				)
-				WHERE active_invocation_id <> ''`); err != nil {
-				return fmt.Errorf("apply store migration 33 active invocation fold: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN active_invocation_id"); err != nil {
-				return fmt.Errorf("apply store migration 33 active invocation removal: %w", err)
-			}
-		case 34:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN launch_voided INTEGER NOT NULL DEFAULT 0"); err != nil {
-				return fmt.Errorf("apply store migration 34: %w", err)
-			}
-		case 35:
-			if _, err := tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN accepted_implementation_checkpoint_sha TEXT NOT NULL DEFAULT ''"); err != nil {
-				return fmt.Errorf("apply store migration 35: %w", err)
-			}
-		case 36:
-			for _, statement := range []string{
-				`CREATE TABLE invocations_headless (
-					id TEXT PRIMARY KEY,
-					run_id TEXT NOT NULL,
-					harness TEXT NOT NULL,
-					role TEXT NOT NULL,
-					stage TEXT NOT NULL,
-					model TEXT NOT NULL DEFAULT '',
-					reasoning_effort TEXT NOT NULL DEFAULT '',
-					native_session_id TEXT NOT NULL DEFAULT '',
-					invocation_directory TEXT NOT NULL DEFAULT '',
-					result_directory TEXT NOT NULL DEFAULT '',
-					prompt_version TEXT NOT NULL DEFAULT '',
-					status TEXT NOT NULL,
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL,
-					permitted_paths TEXT NOT NULL DEFAULT '',
-					credential_store_id TEXT NOT NULL DEFAULT '',
-					recovery_resume_count INTEGER NOT NULL DEFAULT 0,
-					manual_resume_count INTEGER NOT NULL DEFAULT 0,
-					prompt_craft_source_path TEXT NOT NULL DEFAULT '',
-					prompt_craft_sha256 TEXT NOT NULL DEFAULT '',
-					launch_voided INTEGER NOT NULL DEFAULT 0
-				)`,
-				`INSERT INTO invocations_headless (
-					id, run_id, harness, role, stage, model, reasoning_effort,
-					native_session_id, invocation_directory, result_directory,
-					prompt_version, status, created_at, updated_at, permitted_paths,
-					credential_store_id, recovery_resume_count, manual_resume_count,
-					prompt_craft_source_path, prompt_craft_sha256, launch_voided
-				) SELECT id, run_id, harness, role, stage, model, reasoning_effort,
-					native_session_id, invocation_directory, result_directory,
-					prompt_version, status, created_at, updated_at, permitted_paths,
-					credential_store_id, recovery_resume_count, 0,
-					prompt_craft_source_path, prompt_craft_sha256, launch_voided
-				FROM invocations`,
-				"DROP TABLE invocations",
-				"ALTER TABLE invocations_headless RENAME TO invocations",
-				"CREATE INDEX invocations_by_run ON invocations (run_id, updated_at)",
-				"CREATE UNIQUE INDEX one_active_invocation_per_role ON invocations (run_id, role) WHERE status = 'active'",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 36: %w", err)
-				}
-			}
-			for _, column := range []string{"lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent"} {
-				if err := dropOperationalRunColumnIfPresent(ctx, tx, column); err != nil {
-					return fmt.Errorf("apply store migration 36: %w", err)
-				}
-			}
-			if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS lifecycle_notifications"); err != nil {
-				return fmt.Errorf("apply store migration 36: drop lifecycle notifications: %w", err)
-			}
-		case 37:
-			for _, column := range []string{"review_round_id", "review_unit_id"} {
-				if err := addInvocationColumnIfMissing(ctx, tx, column); err != nil {
-					return fmt.Errorf("apply store migration 37: %w", err)
-				}
-			}
-			for _, statement := range []string{
-				"DROP INDEX IF EXISTS one_active_invocation_per_role",
-				"CREATE UNIQUE INDEX IF NOT EXISTS one_active_invocation_per_review_unit ON invocations (run_id, role, review_unit_id) WHERE status = 'active'",
-				`CREATE TABLE IF NOT EXISTS review_rounds (
-					id TEXT PRIMARY KEY,
-					run_id TEXT NOT NULL,
-					base_checkpoint_sha TEXT NOT NULL,
-					checkpoint_sha TEXT NOT NULL,
-					diff_path TEXT NOT NULL,
-					diff_bytes INTEGER NOT NULL,
-					diff_sha256 TEXT NOT NULL,
-					manifest_sha256 TEXT NOT NULL,
-					schema_version INTEGER NOT NULL,
-					policy_version TEXT NOT NULL,
-					max_unit_bytes INTEGER NOT NULL,
-					max_units INTEGER NOT NULL,
-					context_lines INTEGER NOT NULL,
-					concurrency INTEGER NOT NULL DEFAULT 2,
-					authorized_max_units INTEGER NOT NULL DEFAULT 0,
-					status TEXT NOT NULL,
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL
-				)`,
-				"CREATE UNIQUE INDEX IF NOT EXISTS review_rounds_by_run_checkpoint ON review_rounds (run_id, checkpoint_sha)",
-				`CREATE TABLE IF NOT EXISTS review_units (
-					round_id TEXT NOT NULL,
-					unit_id TEXT NOT NULL,
-					ordinal INTEGER NOT NULL,
-					workload_bytes INTEGER NOT NULL,
-					diff_sha256 TEXT NOT NULL,
-					segments TEXT NOT NULL,
-					primary_ranges TEXT NOT NULL,
-					context_ranges TEXT NOT NULL,
-					primary_non_text_files TEXT NOT NULL,
-					changed_lines INTEGER NOT NULL,
-					PRIMARY KEY (round_id, unit_id),
-					UNIQUE (round_id, ordinal)
-				)`,
-				"CREATE INDEX IF NOT EXISTS review_units_by_round ON review_units (round_id, ordinal)",
-				`CREATE TABLE IF NOT EXISTS review_unit_results (
-					round_id TEXT NOT NULL,
-					role TEXT NOT NULL,
-					unit_id TEXT NOT NULL,
-					invocation_id TEXT NOT NULL,
-					checkpoint_sha TEXT NOT NULL,
-					outcome TEXT NOT NULL,
-					summary TEXT NOT NULL DEFAULT '',
-					questions TEXT NOT NULL,
-					evidence TEXT NOT NULL,
-					findings TEXT NOT NULL,
-					created_at TEXT NOT NULL,
-					updated_at TEXT NOT NULL,
-					PRIMARY KEY (round_id, role, unit_id)
-				)`,
-				"CREATE INDEX IF NOT EXISTS review_unit_results_by_round_role ON review_unit_results (round_id, role, unit_id)",
-			} {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 37: %w", err)
-				}
-			}
-		case 38:
-			if err := addReviewRoundColumnIfMissing(ctx, tx, "concurrency"); err != nil {
-				return fmt.Errorf("apply store migration 38: %w", err)
-			}
-		case 39:
-			for _, column := range []string{
-				"review_diff_bytes", "review_changed_lines", "review_unit_count",
-				"review_largest_unit_bytes", "review_invocation_count", "review_duration_nanos",
-				"review_finding_counts", "review_incomplete_unit_count",
-				"review_cannot_proceed_unit_count", "review_over_budget_count",
-			} {
-				if err := addEvaluationSummaryColumnIfMissing(ctx, tx, column); err != nil {
-					return fmt.Errorf("apply store migration 39: %w", err)
-				}
-			}
-		case 40:
-			if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS supervisor_heartbeat (
-				singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-				coordinator TEXT NOT NULL,
-				pid INTEGER NOT NULL,
-				started_at TEXT NOT NULL,
-				renewed_at TEXT NOT NULL,
-				expires_at TEXT NOT NULL
-			)`); err != nil {
-				return fmt.Errorf("apply store migration 40: %w", err)
-			}
-		case 41:
-			if err := addOperationalRunColumnIfMissing(ctx, tx, "pull_request_summary"); err != nil {
-				return fmt.Errorf("apply store migration 41: %w", err)
-			}
-		case 42:
-			if err := migrateIdeationSchema(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 42: %w", err)
-			}
-		case 43:
-			if _, err := tx.ExecContext(ctx, publicationLedgerSchema); err != nil {
-				return fmt.Errorf("apply store migration 43: %w", err)
-			}
-		case 44:
-			if err := migrateSessionInvocationSchema(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 44: %w", err)
-			}
-		case 45:
-			for _, statement := range ideationCommandSchema {
-				if _, err := tx.ExecContext(ctx, statement); err != nil {
-					return fmt.Errorf("apply store migration 45: %w", err)
-				}
-			}
-		case 46:
-			if err := migrateTurnCorrectionSchema(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 46: %w", err)
-			}
-		case 47:
-			if err := migrateSessionResourceReleaseSchema(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 47: %w", err)
-			}
-		case 48:
-			if _, err := tx.ExecContext(ctx, localIssueIdentitySchema); err != nil {
-				return fmt.Errorf("apply store migration 48: %w", err)
-			}
-		case 49:
-			if err := migrateLocalIssueProjections(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 49: %w", err)
-			}
-		case 50:
-			if err := migrateLocalExecution(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 50: %w", err)
-			}
-		case 51:
-			if err := migrateLocalClaims(ctx, tx); err != nil {
-				return fmt.Errorf("apply store migration 51: %w", err)
-			}
-		case 52:
-			if err := addOperationalRunColumnIfMissing(ctx, tx, "tracker_repository"); err != nil {
-				return fmt.Errorf("apply store migration 52: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, trackerRepositoryTrigger); err != nil {
-				return fmt.Errorf("apply store migration 52: %w", err)
-			}
-		default:
-			return fmt.Errorf("no migration registered for schema version %d", version+1)
-		}
-		version++
-		if _, err := tx.ExecContext(ctx, "UPDATE schema_metadata SET version = ? WHERE singleton = 1", version); err != nil {
-			return fmt.Errorf("record store schema version %d: %w", version, err)
-		}
+	if _, err := tx.ExecContext(ctx, storeBaselineSchema); err != nil {
+		return fmt.Errorf("create store baseline schema: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_metadata(singleton, version) VALUES (1, ?)", CurrentSchemaVersion); err != nil {
+		return fmt.Errorf("record store baseline schema version: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit store migration: %w", err)
-	}
-	return nil
-}
-
-// dropOperationalRunColumnIfPresent removes one obsolete run projection while
-// tolerating reduced schema fixtures that never carried that historical field.
-func dropOperationalRunColumnIfPresent(ctx context.Context, tx *sql.Tx, column string) error {
-	found, err := operationalRunHasColumn(ctx, tx, column)
-	if err != nil || !found {
-		return err
-	}
-	switch column {
-	case "lifecycle_notification_sent", "ready_notification_sent", "clarification_notification_sent":
-		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs DROP COLUMN "+column)
-		return err
-	default:
-		return fmt.Errorf("refuse unknown operational run column %q", column)
-	}
-}
-
-// addOperationalRunColumnIfMissing adds one run projection column. It
-// tolerates a store whose schema metadata names an older version than the
-// columns it already holds.
-func addOperationalRunColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
-	found, err := operationalRunHasColumn(ctx, tx, column)
-	if err != nil || found {
-		return err
-	}
-	switch column {
-	case "pull_request_summary":
-		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN pull_request_summary TEXT NOT NULL DEFAULT ''")
-		return err
-	case "tracker_repository":
-		_, err = tx.ExecContext(ctx, "ALTER TABLE operational_runs ADD COLUMN tracker_repository TEXT NOT NULL DEFAULT ''")
-		return err
-	default:
-		return fmt.Errorf("refuse unknown operational run column %q", column)
-	}
-}
-
-// operationalRunHasColumn reports whether the run table holds one column.
-func operationalRunHasColumn(ctx context.Context, tx *sql.Tx, column string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(operational_runs)")
-	if err != nil {
-		return false, fmt.Errorf("inspect operational run columns: %w", err)
-	}
-	found := false
-	for rows.Next() {
-		var ordinal int
-		var name, dataType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&ordinal, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return false, fmt.Errorf("scan operational run column: %w", err)
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return false, fmt.Errorf("read operational run columns: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return false, fmt.Errorf("close operational run columns: %w", err)
-	}
-	return found, nil
-}
-
-// addInvocationColumnIfMissing keeps the newest migration compatible with
-// test and operator fixtures that already contain a partially-created review
-// projection while their schema metadata still names an older version.
-func addInvocationColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(invocations)")
-	if err != nil {
-		return fmt.Errorf("inspect invocation columns: %w", err)
-	}
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, columnType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan invocation column: %w", err)
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read invocation columns: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close invocation columns: %w", err)
-	}
-	if found {
-		return nil
-	}
-	if column != "review_round_id" && column != "review_unit_id" {
-		return fmt.Errorf("unsupported invocation migration column %q", column)
-	}
-	if _, err := tx.ExecContext(ctx, "ALTER TABLE invocations ADD COLUMN "+column+" TEXT NOT NULL DEFAULT ''"); err != nil {
-		return fmt.Errorf("add invocation column %q: %w", column, err)
-	}
-	return nil
-}
-
-// addReviewRoundColumnIfMissing keeps schema migration idempotent for a
-// database whose metadata was rolled back after a partially completed
-// review-round migration.
-func addReviewRoundColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
-	if column != "concurrency" {
-		return fmt.Errorf("unsupported review round migration column %q", column)
-	}
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(review_rounds)")
-	if err != nil {
-		return fmt.Errorf("inspect review round columns: %w", err)
-	}
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, columnType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan review round column: %w", err)
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read review round columns: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close review round columns: %w", err)
-	}
-	if found {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, "ALTER TABLE review_rounds ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 2"); err != nil {
-		return fmt.Errorf("add review round column %q: %w", column, err)
-	}
-	return nil
-}
-
-// addEvaluationSummaryColumnIfMissing keeps the content-free review telemetry
-// migration safe to retry after an interrupted schema update.
-func addEvaluationSummaryColumnIfMissing(ctx context.Context, tx *sql.Tx, column string) error {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(evaluation_summaries)")
-	if err != nil {
-		return fmt.Errorf("inspect evaluation summary columns: %w", err)
-	}
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, columnType string
-		var notNull, primaryKey int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan evaluation summary column: %w", err)
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read evaluation summary columns: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close evaluation summary columns: %w", err)
-	}
-	if found {
-		return nil
-	}
-	definitions := map[string]string{
-		"review_diff_bytes":                "INTEGER NOT NULL DEFAULT 0",
-		"review_changed_lines":             "INTEGER NOT NULL DEFAULT 0",
-		"review_unit_count":                "INTEGER NOT NULL DEFAULT 0",
-		"review_largest_unit_bytes":        "INTEGER NOT NULL DEFAULT 0",
-		"review_invocation_count":          "INTEGER NOT NULL DEFAULT 0",
-		"review_duration_nanos":            "INTEGER NOT NULL DEFAULT 0",
-		"review_finding_counts":            "TEXT NOT NULL DEFAULT '{}'",
-		"review_incomplete_unit_count":     "INTEGER NOT NULL DEFAULT 0",
-		"review_cannot_proceed_unit_count": "INTEGER NOT NULL DEFAULT 0",
-		"review_over_budget_count":         "INTEGER NOT NULL DEFAULT 0",
-	}
-	definition, supported := definitions[column]
-	if !supported {
-		return fmt.Errorf("unsupported evaluation summary migration column %q", column)
-	}
-	if _, err := tx.ExecContext(ctx, "ALTER TABLE evaluation_summaries ADD COLUMN "+column+" "+definition); err != nil {
-		return fmt.Errorf("add evaluation summary column %q: %w", column, err)
-	}
-	return nil
-}
-
-// reconcileDuplicateRuns keeps the newest non-terminal run per repository
-// while migrating legacy rows whose timestamp text may have variable-width
-// fractional seconds. Go's RFC3339Nano parser provides chronological ordering
-// at nanosecond precision before older duplicates are marked failed.
-func reconcileDuplicateRuns(ctx context.Context, tx *sql.Tx) error {
-	type runCandidate struct {
-		id        string
-		updatedAt time.Time
-	}
-	// First, normalize all legacy timestamps to the canonical fixed-width format
-	// so that subsequent SQL ORDER BY operations on created_at/updated_at produce
-	// correct chronological results via lexical string comparison.
-	allRows, err := tx.QueryContext(ctx, `SELECT id, created_at, updated_at FROM operational_runs`)
-	if err != nil {
-		return fmt.Errorf("list runs for timestamp normalization: %w", err)
-	}
-	type timestampUpdate struct {
-		id        string
-		createdAt string
-		updatedAt string
-	}
-	updates := make([]timestampUpdate, 0)
-	for allRows.Next() {
-		var id, createdAt, updatedAt string
-		if err := allRows.Scan(&id, &createdAt, &updatedAt); err != nil {
-			_ = allRows.Close()
-			return fmt.Errorf("scan run for timestamp normalization: %w", err)
-		}
-		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
-		if err != nil {
-			_ = allRows.Close()
-			return fmt.Errorf("parse run created_at for normalization: %w", err)
-		}
-		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
-		if err != nil {
-			_ = allRows.Close()
-			return fmt.Errorf("parse run updated_at for normalization: %w", err)
-		}
-		normalizedCreatedAt := parsedCreatedAt.Format(runTimestampLayout)
-		normalizedUpdatedAt := parsedUpdatedAt.Format(runTimestampLayout)
-		if createdAt != normalizedCreatedAt || updatedAt != normalizedUpdatedAt {
-			updates = append(updates, timestampUpdate{
-				id:        id,
-				createdAt: normalizedCreatedAt,
-				updatedAt: normalizedUpdatedAt,
-			})
-		}
-	}
-	if err := allRows.Err(); err != nil {
-		_ = allRows.Close()
-		return fmt.Errorf("read runs for timestamp normalization: %w", err)
-	}
-	if err := allRows.Close(); err != nil {
-		return fmt.Errorf("close runs for timestamp normalization: %w", err)
-	}
-	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE operational_runs SET created_at = ?, updated_at = ? WHERE id = ?`,
-			update.createdAt, update.updatedAt, update.id); err != nil {
-			return fmt.Errorf("normalize timestamps for run %q: %w", update.id, err)
-		}
-	}
-	// Now reconcile duplicates using the normalized timestamps
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, repository_path, updated_at
-		FROM operational_runs
-		WHERE status NOT IN (?, ?, ?)`, StatusComplete, StatusCancelled, StatusFailed)
-	if err != nil {
-		return fmt.Errorf("list non-terminal runs: %w", err)
-	}
-	newestByRepository := make(map[string]runCandidate)
-	duplicates := make([]string, 0)
-	for rows.Next() {
-		var id, repositoryPath, updatedAt string
-		if err := rows.Scan(&id, &repositoryPath, &updatedAt); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan run for reconciliation: %w", err)
-		}
-		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
-		if err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("parse run updated_at for reconciliation: %w", err)
-		}
-		candidate := runCandidate{id: id, updatedAt: parsedUpdatedAt}
-		current, exists := newestByRepository[repositoryPath]
-		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
-			if exists {
-				duplicates = append(duplicates, current.id)
-			}
-			newestByRepository[repositoryPath] = candidate
-		} else {
-			duplicates = append(duplicates, candidate.id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read runs for reconciliation: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close runs for reconciliation: %w", err)
-	}
-	for _, id := range duplicates {
-		if _, err := tx.ExecContext(ctx, "UPDATE operational_runs SET status = ? WHERE id = ?", StatusFailed, id); err != nil {
-			return fmt.Errorf("mark duplicate run %q failed: %w", id, err)
-		}
-	}
-	return nil
-}
-
-// reconcileDuplicateInvocations keeps the newest active invocation per run
-// before the partial unique index is created for migrated stores.
-func reconcileDuplicateInvocations(ctx context.Context, tx *sql.Tx) error {
-	type invocationCandidate struct {
-		id        string
-		updatedAt time.Time
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, run_id, updated_at
-		FROM invocations
-		WHERE status = ?`, InvocationStatusActive)
-	if err != nil {
-		return fmt.Errorf("list active invocations: %w", err)
-	}
-	newestByRun := make(map[string]invocationCandidate)
-	duplicates := make([]string, 0)
-	for rows.Next() {
-		var id, runID, updatedAt string
-		if err := rows.Scan(&id, &runID, &updatedAt); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan invocation for reconciliation: %w", err)
-		}
-		parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
-		if err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("parse invocation updated_at for reconciliation: %w", err)
-		}
-		candidate := invocationCandidate{id: id, updatedAt: parsedUpdatedAt}
-		current, exists := newestByRun[runID]
-		if !exists || parsedUpdatedAt.After(current.updatedAt) || (parsedUpdatedAt.Equal(current.updatedAt) && id > current.id) {
-			if exists {
-				duplicates = append(duplicates, current.id)
-			}
-			newestByRun[runID] = candidate
-		} else {
-			duplicates = append(duplicates, candidate.id)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("read invocations for reconciliation: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close invocations for reconciliation: %w", err)
-	}
-	for _, id := range duplicates {
-		if _, err := tx.ExecContext(ctx, "UPDATE invocations SET status = ? WHERE id = ?", InvocationStatusCannotProceed, id); err != nil {
-			return fmt.Errorf("mark duplicate invocation %q unavailable: %w", id, err)
-		}
 	}
 	return nil
 }
@@ -4047,9 +3057,7 @@ func reconcileDuplicateInvocations(ctx context.Context, tx *sql.Tx) error {
 // without depending on a driver-specific SQLite error type.
 func isActiveInvocationConflict(err error) bool {
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "one_active_invocation_per_run") ||
-		strings.Contains(message, "one_active_invocation_per_role") ||
-		strings.Contains(message, "one_active_invocation_per_review_unit") ||
+	return strings.Contains(message, "one_active_invocation_per_review_unit") ||
 		strings.Contains(message, "unique constraint failed: invocations.run_id, invocations.role")
 }
 

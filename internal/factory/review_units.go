@@ -122,8 +122,8 @@ func reviewContextWithUnit(base prompt.ReviewContext, round store.ReviewRound, u
 // preparePartitionedReview creates or validates the immutable round manifest,
 // selects one axis unit, and writes the bounded worker artifact before packet
 // publication. The returned context carries the assigned round and unit
-// identity. It is used only by stores that expose the normalized projection;
-// historical compatibility stores retain the whole-diff path.
+// identity. Stores with the normalized review capability use this path;
+// injected stores without that capability review the whole mounted diff.
 func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, rounds store.ReviewRoundStore, run store.Run, invocation store.Invocation, base prompt.ReviewContext, requested string, registration config.RepositoryRegistration) (*prompt.ReviewContext, error) {
 	sourcePath := filepath.Join(invocation.InvocationDirectory, reviewDiffFileName)
 	metadata, err := inspectReviewArtifact(sourcePath)
@@ -250,15 +250,12 @@ func (l *invocationLifecycle) preparePartitionedReview(ctx context.Context, roun
 	base.DiffPath = prompt.WorkerReviewDiffPath
 	base.DiffBytes = round.DiffBytes
 	base.DiffSHA256 = round.DiffSHA256
-	base.CurrentDiff = ""
-	base.OmittedDiffBytes = 0
-	base.ChangedPathsCommand = ""
-	base.DiffPathCommand = ""
 	return reviewContextWithUnit(base, *round, *unit, len(units)), nil
 }
 
 // runReviewUnitConfig extracts repository review policy from the frozen run
-// packet, falling back to defaults for historical packets.
+// packet. An unreadable packet returns the zero policy; effective partition
+// limits are applied by the review-unit planner.
 func runReviewUnitConfig(run store.Run) config.ReviewUnitConfig {
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {

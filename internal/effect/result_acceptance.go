@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/harness"
@@ -35,7 +36,7 @@ type ResultAcceptance struct {
 	// Report is the accepted report snapshot encoded for deterministic replay.
 	Report report.Report
 	// ReviewUnitResult is the normalized per-axis result for a partitioned
-	// review invocation. It is nil for historical whole-diff acceptances.
+	// review invocation. It is nil for non-partitioned acceptances.
 	ReviewUnitResult *store.ReviewUnitResult
 }
 
@@ -171,8 +172,8 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayReque
 		return store.Run{}, err
 	}
 	effect := request.Effect
-	var payload resultAcceptanceEffectPayload
-	if err := decodePendingEffect(effect, &payload); err != nil {
+	payload, err := decodeResultAcceptance(effect)
+	if err != nil {
 		return store.Run{}, err
 	}
 	if err := validateRunBeforeReplay(store.PendingEffectKindResultAcceptance, payload.Next); err != nil {
@@ -276,8 +277,7 @@ func (h resultAcceptanceHandler) Replay(ctx context.Context, request replayReque
 type resultAcceptanceRecord struct {
 	// Invocation is the terminal invocation the acceptance reserved.
 	Invocation store.Invocation
-	// AcceptedReport is the JSON-encoded report snapshot. A journal entry
-	// written before the snapshot existed leaves it empty.
+	// AcceptedReport is the JSON-encoded report snapshot.
 	AcceptedReport string
 	// ReviewUnitResult is the normalized per-axis result, when present.
 	ReviewUnitResult *store.ReviewUnitResult
@@ -285,12 +285,25 @@ type resultAcceptanceRecord struct {
 
 // ReadResultAcceptance decodes one result-acceptance journal entry.
 func ReadResultAcceptance(pending store.PendingEffect) (resultAcceptanceRecord, error) {
+	payload, err := decodeResultAcceptance(pending)
+	if err != nil {
+		return resultAcceptanceRecord{}, err
+	}
+	return resultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport, ReviewUnitResult: payload.ReviewUnitResult}, nil
+}
+
+// decodeResultAcceptance requires the immutable report snapshot before a reader
+// or replay may use the effect. Disk artifacts cannot replace accepted evidence.
+func decodeResultAcceptance(pending store.PendingEffect) (resultAcceptanceEffectPayload, error) {
 	if pending.Kind != store.PendingEffectKindResultAcceptance {
-		return resultAcceptanceRecord{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
+		return resultAcceptanceEffectPayload{}, fmt.Errorf("expected result_acceptance effect, got %s", pending.Kind)
 	}
 	var payload resultAcceptanceEffectPayload
 	if err := decodePendingEffect(pending, &payload); err != nil {
-		return resultAcceptanceRecord{}, fmt.Errorf("decode result acceptance payload: %w", err)
+		return resultAcceptanceEffectPayload{}, fmt.Errorf("decode result acceptance payload: %w", err)
 	}
-	return resultAcceptanceRecord{Invocation: payload.Invocation, AcceptedReport: payload.AcceptedReport, ReviewUnitResult: payload.ReviewUnitResult}, nil
+	if strings.TrimSpace(payload.AcceptedReport) == "" {
+		return resultAcceptanceEffectPayload{}, errors.New("result acceptance payload has no accepted report")
+	}
+	return payload, nil
 }

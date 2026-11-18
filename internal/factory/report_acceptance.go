@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -266,10 +265,12 @@ func (a *reportAcceptance) recoverRepeatedAcceptance(ctx context.Context, invoca
 	var acceptedReport report.Report
 	var haveAcceptedReport bool
 	if pending != nil && pending.Kind == store.PendingEffectKindResultAcceptance {
-		if extractedReport, extractErr := readAcceptedReportFromEffect(*pending); extractErr == nil {
-			acceptedReport = extractedReport
-			haveAcceptedReport = true
+		extractedReport, extractErr := readAcceptedReportFromEffect(*pending)
+		if extractErr != nil {
+			return AgentResult{}, fmt.Errorf("read pending report acceptance snapshot: %w", extractErr)
 		}
+		acceptedReport = extractedReport
+		haveAcceptedReport = true
 	}
 	if pending != nil {
 		updatedRun, replayErr := a.journal.Replay(ctx, request.RunStore, *pending)
@@ -285,8 +286,8 @@ func (a *reportAcceptance) recoverRepeatedAcceptance(ctx context.Context, invoca
 	if refreshed != nil {
 		invocation = refreshed
 	}
-	// Prefer the immutable snapshot the effect carried; a legacy payload
-	// without one falls back to the artifact retained on disk.
+	// A pending effect carries an immutable snapshot. When no effect remains,
+	// repeated acceptance reads the already accepted invocation artifact.
 	value := acceptedReport
 	var readErr error
 	if !haveAcceptedReport {
@@ -709,7 +710,7 @@ func projectAcceptance(snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, n
 }
 
 // commit makes the projection durable and hands the run to the stage policy
-// that owns it. The journaled and legacy stores share the projection and the
+// that owns it. Journaled and direct stores share the projection and the
 // dispatch; only the durability mechanism differs.
 func (a *reportAcceptance) commit(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, outcome AcceptanceOutcome, projection acceptanceProjection) (AgentResult, error) {
 	if err := recordAcceptanceEvaluation(ctx, a.evaluationRecorder, snapshot, outcome); err != nil {
@@ -769,7 +770,7 @@ func (a *reportAcceptance) commitJournaled(ctx context.Context, request ReportAc
 	return nil
 }
 
-// commitDirect persists the acceptance against a legacy store that has no
+// commitDirect persists the acceptance against an injected store that has no
 // journal. The harness session is finished first, so a failure leaves the
 // invocation active and the report re-acceptable.
 func (a *reportAcceptance) commitDirect(ctx context.Context, request ReportAcceptanceRequest, invocationStore InvocationStore, invocation *store.Invocation, snapshot AcceptanceSnapshot, harnessRuntime harness.Runtime, outcome AcceptanceOutcome, projection acceptanceProjection) error {
@@ -878,7 +879,7 @@ func acceptedInvocationStatus(outcome report.Outcome) store.InvocationStatus {
 }
 
 // agentReportRunProjection applies the declared workflow transition for a
-// validated generic handoff in both journaled and legacy paths. An unreadable
+// validated generic handoff in both journaled and direct paths. An unreadable
 // frozen packet or an undeclared transition fails the run at its invocation
 // stage instead of guessing a route that could skip a selected stage.
 func agentReportRunProjection(previous store.Run, invocationStage store.Stage, value report.Report) store.Run {
@@ -938,9 +939,6 @@ func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, e
 	if err != nil {
 		return report.Report{}, err
 	}
-	if strings.TrimSpace(payload.AcceptedReport) == "" {
-		return report.Report{}, errors.New("result acceptance payload has no accepted report")
-	}
 	var value report.Report
 	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {
 		return report.Report{}, fmt.Errorf("decode accepted report from effect: %w", err)
@@ -949,8 +947,7 @@ func readAcceptedReportFromEffect(pending store.PendingEffect) (report.Report, e
 }
 
 // readAcceptedReviewReportFromEffect extracts the immutable review invocation
-// and report snapshot from a result-acceptance effect. Legacy payloads without
-// the snapshot fall back to the invocation artifact retained on disk.
+// and report snapshot from a result-acceptance effect.
 func readAcceptedReviewReportFromEffect(pending store.PendingEffect) (store.Invocation, report.Report, bool, error) {
 	payload, err := effectkernel.ReadResultAcceptance(pending)
 	if err != nil {
@@ -958,13 +955,6 @@ func readAcceptedReviewReportFromEffect(pending store.PendingEffect) (store.Invo
 	}
 	if !roleIsKind(payload.Invocation, workflow.RoleKindReview) {
 		return payload.Invocation, report.Report{}, false, nil
-	}
-	if strings.TrimSpace(payload.AcceptedReport) == "" {
-		value, readErr := readAcceptedAgentReport(payload.Invocation)
-		if readErr != nil {
-			return store.Invocation{}, report.Report{}, true, fmt.Errorf("read accepted review report from invocation artifact: %w", readErr)
-		}
-		return payload.Invocation, value, true, nil
 	}
 	var value report.Report
 	if err := json.Unmarshal([]byte(payload.AcceptedReport), &value); err != nil {

@@ -1879,12 +1879,6 @@ func (s *Store) SaveEvaluationDisposition(ctx context.Context, request Evaluatio
 	return record, nil
 }
 
-// RecordEvaluationDisposition is an explicit alias for callers that model a
-// human disposition as an event rather than a saved record.
-func (s *Store) RecordEvaluationDisposition(ctx context.Context, request EvaluationDispositionRequest) (EvaluationDispositionRecord, error) {
-	return s.SaveEvaluationDisposition(ctx, request)
-}
-
 // ListEvaluationDispositions returns only hashed identities and fixed
 // categories for one run.
 func (s *Store) ListEvaluationDispositions(ctx context.Context, runID string) ([]EvaluationDispositionRecord, error) {

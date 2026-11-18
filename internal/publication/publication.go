@@ -194,8 +194,7 @@ type renderedItemJSON struct {
 	Fields      map[string]string `json:"fields"`
 	Labels      []string          `json:"labels"`
 	Correlation string            `json:"correlation"`
-	// TargetRepository is omitted without a target, so payloads approved
-	// before targets existed keep their bytes.
+	// TargetRepository is omitted for providers without per-item repository targets.
 	TargetRepository *renderedTargetJSON `json:"target_repository,omitempty"`
 }
 

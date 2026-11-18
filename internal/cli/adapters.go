@@ -28,7 +28,7 @@ type configuredCodeHost interface {
 	codehost.ReadinessChecker
 }
 
-// serviceDependencies keeps legacy combined adapters unchanged and explicitly
+// serviceDependencies wires combined remote adapters and explicitly
 // supplies every host capability when the work tracker has a separate namespace.
 func serviceDependencies(configPath string) factory.Dependencies {
 	dependencies := factory.Dependencies{Tracker: trackerAdapter(configPath)}
@@ -56,7 +56,7 @@ func codeHostAdapter(registration config.RepositoryRegistration) configuredCodeH
 	return github.NewCodeHostClient()
 }
 
-// trackerAdapter selects committed Markdown or a legacy combined remote tracker.
+// trackerAdapter selects committed Markdown or a combined remote tracker.
 // Azure registrations retain their plan mapping and selected route. A host configuration that
 // does not exist or does not load also
 // selects GitHub: init and register create it, and the command that needs it

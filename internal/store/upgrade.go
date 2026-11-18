@@ -15,7 +15,7 @@ import (
 // upgrade accepts. It is a literal on purpose: it moves only by a deliberate
 // decision, never as a side effect of a new CurrentSchemaVersion, so the next
 // release still accepts the store of this one.
-const MinimumUpgradeSchemaVersion = 52
+const MinimumUpgradeSchemaVersion = 53
 
 // UpgradeInspection is the read-only view of an operational store that an
 // upgrade plan needs. Its run facts are set only when Supported is true.

@@ -1017,13 +1017,6 @@ func (l *invocationLifecycle) materialiseLaunch(ctx context.Context, registratio
 		reviewContext.DiffPath = metadata.path
 		reviewContext.DiffBytes = metadata.bytes
 		reviewContext.DiffSHA256 = metadata.sha256
-		// These fields remain decodable for historical packets, but a newly
-		// written packet has one file artifact and never carries old delivery
-		// branches.
-		reviewContext.CurrentDiff = ""
-		reviewContext.OmittedDiffBytes = 0
-		reviewContext.ChangedPathsCommand = ""
-		reviewContext.DiffPathCommand = ""
 		if plan.RoleDefinition.Kind == workflow.RoleKindSummary {
 			copied, err := copyCheckpointGateOutput(plan.Run, packetDirectory)
 			if err != nil {
@@ -1504,8 +1497,9 @@ func harnessCredentialSeeding(workerRuntime worker.WorkerRuntime, registration c
 	}, registration.Path, nil
 }
 
-// ensureCredentialStoreIdentity restores the persisted identity for an older
-// invocation before its worker is recreated.
+// ensureCredentialStoreIdentity records a newly registered host credential
+// source for an invocation launched without one. Persisting the repository
+// identity before worker recreation keeps subsequent restarts deterministic.
 func (l *invocationLifecycle) ensureCredentialStoreIdentity(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, invocation store.Invocation) (store.Invocation, error) {
 	_, credentialStoreID, err := l.credentialSeeding(registration, AgentRequest{}, config.Harness(invocation.Harness))
 	if err != nil {
@@ -1521,7 +1515,7 @@ func (l *invocationLifecycle) ensureCredentialStoreIdentity(ctx context.Context,
 	invocation.CredentialStoreID = credentialStoreID
 	invocation.UpdatedAt = l.clock().UTC()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return invocation, fmt.Errorf("persist credential store identity during recovery: %w", err)
+		return invocation, fmt.Errorf("persist newly registered credential store identity: %w", err)
 	}
 	return invocation, nil
 }
@@ -1973,12 +1967,6 @@ func (l *invocationLifecycle) retryWaitingForHarness(ctx context.Context, regist
 		if err := l.supersedeInvocation(ctx, registration, runStore, *active); err != nil {
 			return err
 		}
-	}
-	if isCheckInfrastructurePause(run) {
-		// A legacy check infrastructure wait is left by retrying its checks;
-		// the continuation reconciles any pending effect first.
-		_, err := l.continueCheck(ctx, registration, runStore, run)
-		return err
 	}
 	if launch == nil {
 		return errors.New("launch callback is required for harness retry")

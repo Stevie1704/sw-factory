@@ -17,11 +17,10 @@ import (
 const WorkerSessionPacketPath = "/invocation/session.json"
 
 // sessionPromptVersions maps each supported session prompt version to its
-// embedded body. Retained versions let restart recovery rebuild the exact
-// prompt of a persisted invocation.
+// embedded body. Unsupported contracts fail closed during recovery.
 var sessionPromptVersions = map[string]map[string]string{
-	workflow.RoleIdeation: {workflow.PromptVersionIdeation: "prompts/ideation.md", "ideation-v1": "prompts/legacy/ideation-v1.md"},
-	workflow.RolePlanning: {workflow.PromptVersionPlanning: "prompts/planning.md", "planning-v1": "prompts/legacy/planning-v1.md"},
+	workflow.RoleIdeation: {workflow.PromptVersionIdeation: "prompts/ideation.md"},
+	workflow.RolePlanning: {workflow.PromptVersionPlanning: "prompts/planning.md"},
 }
 
 // SessionRequest contains the pinned identity of one session-role prompt.

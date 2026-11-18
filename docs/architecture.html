@@ -68,12 +68,13 @@
     for reconciliation; no display or notification channel can block progress.
   </p>
 
-  <h2>Compatibility boundary</h2>
+  <h2>Schema boundary</h2>
   <p>
-    Existing host registrations use schema 1 and contain obsolete local-UI
-    fields. Factory rejects them before mutation with instructions to drain the
-    previous binary, stop its coordinator, and register again. Repository
-    policy remains schema 1. Docker image and mount behavior are unchanged.
+    Host registrations use schema 2, repository policy uses schema 1, and the
+    operational store starts at baseline schema 53. Unsupported configurations
+    and stores are refused. Fresh stores create all current tables in one
+    transaction. Store upgrades use the explicit factory upgrade migrate-store
+    command and its migration gate.
   </p>
 
   <h2>Design records</h2>

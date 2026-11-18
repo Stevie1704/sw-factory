@@ -184,14 +184,7 @@ lease does not give distributed fencing or failover. The lease is optional per
 adapter: with a tracker adapter that has no lease, the coordinator polls
 without one (ADR 0018).
 
-Installations from before this change published the lease as a pending
-`factory/lease` Commit Status, and GitHub accepts at most 1,000 statuses for
-each commit and context. The coordinator no longer reads or writes that
-context, so an installation whose target commit is already at the cap starts
-normally. GitHub cannot delete Commit Statuses. The last legacy status stays
-pending on its old commit and stops showing on the branch head after the next
-commit. If branch protection requires `factory/lease`, remove that
-requirement. The coordinator also renews a host-local heartbeat
+The coordinator also renews a host-local heartbeat
 in the operational store. `factory status` and `factory doctor` report that
 heartbeat as live, expired, or missing; live additionally requires the
 kernel-backed coordinator lock, so a clean stop or process death is visible
@@ -587,10 +580,9 @@ its backlog item type:
 
 All paths persisted in a repository registration are absolute. The coordinator does not infer macOS-specific paths in its domain or deep modules; only the command's default host-config resolver uses the host operating system's standard user configuration directory.
 
-Host schema version 1 is deliberately not migrated in place. Before installing
-this binary, finish or cancel every non-terminal run with the previous binary,
-stop the previous coordinator, and re-register. Repository configuration keeps
-its independent schema version 1 authority.
+Host registrations use schema version 2. Repository configuration uses its
+independent schema version 1. Unsupported versions are refused before their
+fields are interpreted.
 
 `authentication.codex_auth_path` and `authentication.claude_auth_path` are both
 optional and each names one host-side harness credential file. The factory
@@ -598,7 +590,10 @@ stores only these paths. When an invocation selects a harness that has a
 registered source, the worker adapter streams that one file into a separate,
 factory-managed credential volume and links the copy into the role home. It
 never mounts the host harness directory and never writes back to the host
-source. Each harness has its own source because a host can hold one harness
+source. An invocation launched without a registered source can adopt a source
+registered while it is active. Recovery and `factory auth refresh` persist its
+credential-store identity before recreating its worker. Each harness has its
+own source because a host can hold one harness
 credential as a file without holding the other: macOS keeps the Claude Code
 credential in the login Keychain, so `claude_auth_path` is declared only where
 a credential file exists. A harness with no registered source keeps the
@@ -1431,8 +1426,7 @@ reservation. `factory status` reports
 the run, agreement state, pending effect, discrepancies, and safe operator
 actions. After inspecting an ambiguous mutation, an operator can explicitly
 discard it with `factory reconcile --abandon-effect <effect-id> --reason <reason>`;
-the run remains paused. Legacy stores without the journal retain the typed
-`recovery-required` refusal.
+the run remains paused.
 
 ## Authorized GitHub commands
 
@@ -1640,7 +1634,7 @@ demonstration evidence. Close the disposable pull request and issue, then use
 
 ## Operational SQLite store
 
-The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly. An existing store is migrated only by `factory upgrade migrate-store --config <path> --json`, the one migration entry point: it holds the coordinator lock, refuses work that fails the migration gate, and copies a store of a schema that the release supports to a timestamped `.bak-*` file before it migrates. `MinimumUpgradeSchemaVersion` names the oldest accepted schema; it moves only by a deliberate decision. This release accepts only its own schema 52, so it refuses every older store as unsupported and reports `current` for its own. Every other command, including `factory start`, refuses an older schema with an error that names that command. A `.bak-*` file is migration provenance, not a restore point ([ADR 0032](adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)). Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy, and `factory reset` removes only the backups whose file name proves they belong to that exact database. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
+The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly. An existing store is migrated only by `factory upgrade migrate-store --config <path> --json`, the one migration entry point: it holds the coordinator lock, refuses work that fails the migration gate, and copies a store of a schema that the release supports to a timestamped `.bak-*` file before it migrates. `MinimumUpgradeSchemaVersion` names the oldest accepted schema; it moves only by a deliberate decision. This release creates store baseline schema 53 in one transaction and accepts only schema 53, so it refuses every older store as unsupported and reports `current` for its own. Every other command, including `factory start`, refuses an older schema with an error that names that command. A `.bak-*` file is migration provenance, not a restore point ([ADR 0032](adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)). Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy, and `factory reset` removes only the backups whose file name proves they belong to that exact database. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
 Issue #25 adds a logically separate `evaluation_summaries` projection inside
 the same versioned SQLite store, plus isolated usage and disposition tables. It stores

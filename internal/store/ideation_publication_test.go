@@ -1,9 +1,7 @@
 package store_test
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -121,50 +119,6 @@ func TestPublicationLedgerKeepsEachExternalIdentityImmutable(t *testing.T) {
 	undeclared.State = "done"
 	if _, err := opened.RecordPublicationOperation(t.Context(), undeclared); err == nil {
 		t.Fatal("RecordPublicationOperation() accepted an undeclared state")
-	}
-}
-
-// TestSchema43MigrationAddsThePublicationLedger verifies that a schema 42
-// store gains the ledger table and keeps its sessions.
-func TestSchema43MigrationAddsThePublicationLedger(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	approvedSessionForTest(t, opened, "session-1")
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), `
-		DROP TABLE ideation_publication_operations;
-		UPDATE schema_metadata SET version = 42 WHERE singleton = 1`); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	if got := migrated.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	if session, err := migrated.IdeationSession(t.Context(), "session-1"); err != nil || session.ApprovalID != "approval-1" {
-		t.Fatalf("IdeationSession() after migration = %#v, %v", session, err)
-	}
-	if _, err := migrated.StartPublicationLedger(t.Context(), "session-1", "approval-1", publicationOperationsForTest(), ideationNow); err != nil {
-		t.Fatalf("StartPublicationLedger() after migration error = %v", err)
 	}
 }
 

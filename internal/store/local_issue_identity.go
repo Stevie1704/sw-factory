@@ -30,15 +30,6 @@ type LocalIssueIdentity struct {
 	Correlation    string
 }
 
-const localIssueIdentitySchema = `CREATE TABLE IF NOT EXISTS local_issue_identities (
-    number INTEGER PRIMARY KEY AUTOINCREMENT CHECK(number > 0 AND number <= 2147483647),
-    repository_path TEXT NOT NULL,
-    issue_id TEXT NOT NULL,
-    correlation TEXT NOT NULL,
-    UNIQUE(repository_path, issue_id),
-    UNIQUE(repository_path, correlation)
-)`
-
 // AllocateLocalIssueIdentity reserves an opaque identity and tracker number
 // before preview. The coordinator calls this explicit write once per stable
 // publication correlation; a retry returns the original reservation.

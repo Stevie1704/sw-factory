@@ -27,7 +27,7 @@ type LocalOperatorConfig struct {
 	Name string `yaml:"name"`
 }
 
-// EffectiveTracker preserves omitted legacy combined-provider selections.
+// EffectiveTracker defaults an omitted tracker to the configured code host.
 func (r RepositoryRegistration) EffectiveTracker() Provider {
 	if r.Tracker != "" {
 		return r.Tracker
@@ -51,10 +51,10 @@ func (r RepositoryRegistration) EffectiveCodeHost() Provider {
 
 var installationIdentityPattern = regexp.MustCompile(`^install-[0-9a-f]{32}$`)
 
-// validateProvider keeps old metadata and stored payload identities unchanged,
-// while accepting a local tracker with either supported code-host adapter.
+// validateProvider validates remote identities or a local tracker with either
+// supported code-host adapter.
 func validateProvider(prefix string, repository RepositoryRegistration) error {
-	if err := validateLegacyProvider(prefix, repository); err != nil {
+	if err := validateRepositoryIdentity(prefix, repository); err != nil {
 		return err
 	}
 	host := repository.EffectiveCodeHost()

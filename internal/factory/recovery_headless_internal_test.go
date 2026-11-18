@@ -415,3 +415,46 @@ func (h *headlessRecoveryHarness) NativeSessionID(context.Context, harness.Nativ
 func (*headlessRecoveryHarness) NativeSessionRunning(context.Context, harness.NativeSessionRequest) (bool, error) {
 	return true, nil
 }
+
+// TestReconcileAdoptsCredentialsRegisteredAfterLaunch verifies a current
+// invocation launched without a host auth source can recover after registration
+// adds that source. Its credential volume identity must survive another restart.
+func TestReconcileAdoptsCredentialsRegisteredAfterLaunch(t *testing.T) {
+	for _, harnessName := range []config.Harness{config.HarnessCodex, config.HarnessClaude, config.HarnessCopilot} {
+		t.Run(string(harnessName), func(t *testing.T) {
+			fixture := newHeadlessRecoveryFixture(t, harnessName, "session-late-credentials")
+			invocation := fixture.invocation
+			invocation.CredentialStoreID = ""
+			opened, err := store.Open(t.Context(), fixture.databasePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := opened.SaveInvocation(t.Context(), invocation); err != nil {
+				t.Fatal(err)
+			}
+			if err := opened.Close(); err != nil {
+				t.Fatal(err)
+			}
+			runtime := &headlessRecoveryHarness{name: string(harnessName), nativeSessionID: invocation.NativeSessionID}
+			dependencies := fixture.dependencies(map[config.Harness]harness.HeadlessRuntime{harnessName: runtime})
+			service := NewWithDependencies(filepath.Join(fixture.root, "host.yaml"), dependencies)
+			if _, err := service.Reconcile(t.Context()); err != nil {
+				t.Fatalf("Reconcile() after credential registration = %v", err)
+			}
+			persisted := fixture.persistedInvocation(t)
+			if persisted.CredentialStoreID != fixture.registration.Path {
+				t.Fatalf("persisted credential identity = %q, want registered repository identity", persisted.CredentialStoreID)
+			}
+			if len(fixture.worker.starts) != 1 || fixture.worker.starts[0].CredentialStoreID != persisted.CredentialStoreID || len(fixture.worker.seeds) != 1 {
+				t.Fatalf("worker starts/seeds = %#v/%#v, want recreated worker using the persisted credential store", fixture.worker.starts, fixture.worker.seeds)
+			}
+			restarted := NewWithDependencies(filepath.Join(fixture.root, "host.yaml"), dependencies)
+			if _, err := restarted.Reconcile(t.Context()); err != nil {
+				t.Fatalf("second Reconcile() = %v", err)
+			}
+			if len(fixture.worker.starts) != 1 || len(runtime.resumes) != 1 || fixture.persistedInvocation(t).CredentialStoreID != persisted.CredentialStoreID {
+				t.Fatal("restart recreated the worker, repeated native resume, or changed credential identity")
+			}
+		})
+	}
+}

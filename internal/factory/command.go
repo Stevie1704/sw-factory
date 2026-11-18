@@ -918,8 +918,7 @@ func (s *Service) shouldRestartFromAcceptedImplementationCheckpoint(ctx context.
 	if run.CheckpointSHA == "" || run.BaseCheckpointSHA == "" {
 		return false, nil
 	}
-	// A test-stage run's current checkpoint is protected test work, even if an
-	// older store did not retain the separate test-checkpoint marker.
+	// A test-stage run's current checkpoint is protected test work.
 	if run.Stage == store.StageTest {
 		return false, nil
 	}

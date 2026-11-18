@@ -519,8 +519,7 @@ func localClaimKey(binding store.LocalExecutionBinding, issue store.LocalExecuti
 }
 
 // localDependencyComplete requires normal lifecycle proof for the prerequisite's
-// exact content in this context. Any matching claim (legacy graph-keyed rows
-// can duplicate a revision) whose merge is visible at the target satisfies it.
+// exact content in this context, with its merge visible at the target.
 func (s *Service) localDependencyComplete(ctx context.Context, db localScheduleStore, claims []store.LocalClaim, binding store.LocalExecutionBinding, id, targetRevision string) bool {
 	var source *store.LocalExecutionIssue
 	for i := range binding.Issues {

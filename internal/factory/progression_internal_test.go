@@ -179,7 +179,7 @@ func TestProgressionStepPlansEveryCoordinatorCommand(t *testing.T) {
 	runWithMissingReview.ID = "run-missing-review"
 	runWithMissingReview.Stage = store.StageReview
 	runWithMissingReview.CheckpointSHA = "checkpoint"
-	runWithMissingReview.SpecificationReview = &store.SpecificationReview{CheckpointSHA: "checkpoint"}
+	runWithMissingReview.SpecificationReview = &store.SpecificationReview{Outcome: "completed", CheckpointSHA: "checkpoint"}
 	tests := []struct {
 		name           string
 		state          progressionState
@@ -386,8 +386,8 @@ func TestDriveRunDispatchesEveryProgressionCommand(t *testing.T) {
 				CheckpointSHA:       checkpoint,
 				BaseCheckpointSHA:   checkpoint,
 				SpecificationPacket: progressionDispatchPacket(t, true),
-				SpecificationReview: &store.SpecificationReview{CheckpointSHA: checkpoint},
-				StandardsReview:     &store.StandardsReview{CheckpointSHA: checkpoint},
+				SpecificationReview: &store.SpecificationReview{Outcome: "completed", CheckpointSHA: checkpoint},
+				StandardsReview:     &store.StandardsReview{Outcome: "completed", CheckpointSHA: checkpoint},
 			},
 			pullRequestErrors: []error{context.Canceled},
 			wantFindCalls:     1,
@@ -527,6 +527,7 @@ func progressionDispatchPacket(t *testing.T, reviews bool) string {
 	packet := SpecificationPacket{
 		Version: specificationPacketVersion,
 		RepositoryConfig: config.RepositoryConfig{
+			Timeouts:     config.TimeoutConfig{Agent: "1h"},
 			TargetBranch: "main",
 			TestPolicy:   config.TestPolicy{Mode: config.TestModeAdvisory},
 			RoleHarnessDefaults: map[string]config.Harness{

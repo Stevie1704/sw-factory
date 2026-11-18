@@ -185,14 +185,3 @@ func checkCorrectedTurn(ctx context.Context, tx *sql.Tx, sessionID, corrects str
 	}
 	return nil
 }
-
-// migrateTurnCorrectionSchema adds the correction link of schema version 46.
-// Existing turns correct nothing.
-func migrateTurnCorrectionSchema(ctx context.Context, tx *sql.Tx) error {
-	found, err := tableHasColumn(ctx, tx, "ideation_turns", "corrects")
-	if err != nil || found {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "ALTER TABLE ideation_turns ADD COLUMN corrects TEXT NOT NULL DEFAULT ''")
-	return err
-}

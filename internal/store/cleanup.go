@@ -105,11 +105,11 @@ func (s *Store) BeginCleanup(ctx context.Context, runID string, before time.Time
 		return nil, fmt.Errorf("reserve cleanup for run %q: %w", runID, err)
 	}
 	var status Status
-	var terminalAt, updatedAt string
+	var terminalAt string
 	err = tx.QueryRowContext(ctx, `
-		SELECT status, terminal_at, updated_at
+		SELECT status, terminal_at
 		FROM operational_runs
-		WHERE id = ?`, runID).Scan(&status, &terminalAt, &updatedAt)
+		WHERE id = ?`, runID).Scan(&status, &terminalAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return transaction, nil
 	}
@@ -122,7 +122,7 @@ func (s *Store) BeginCleanup(ctx context.Context, runID string, before time.Time
 		_ = tx.Rollback()
 		return nil, &CleanupNotEligibleError{RunID: runID}
 	}
-	eligibleAt, err := parseCleanupTimestamp(terminalAt, updatedAt)
+	eligibleAt, err := time.Parse(time.RFC3339Nano, terminalAt)
 	if err != nil {
 		_ = tx.Rollback()
 		return nil, fmt.Errorf("parse cleanup timestamp for run %q: %w", runID, err)
@@ -149,9 +149,9 @@ func (s *Store) ListRunRemovalCandidates(ctx context.Context, before time.Time, 
 		SELECT `+runColumns+`
 		FROM operational_runs
 		WHERE status IN (?, ?, ?)
-		  AND COALESCE(NULLIF(terminal_at, ''), updated_at) <= ?
+		  AND terminal_at <> '' AND terminal_at <= ?
 		  AND (? = '' OR id = ?)
-		ORDER BY COALESCE(NULLIF(terminal_at, ''), updated_at), id`,
+		ORDER BY terminal_at, id`,
 		StatusComplete, StatusCancelled, StatusFailed, cutoff, runID, runID)
 	if err != nil {
 		return nil, fmt.Errorf("list cleanup candidates: %w", err)
@@ -244,16 +244,6 @@ func (s *Store) Invocations(ctx context.Context, runID string) ([]Invocation, er
 		return nil, fmt.Errorf("read invocations for run %q: %w", runID, err)
 	}
 	return invocations, nil
-}
-
-// parseCleanupTimestamp selects the stable terminal timestamp and falls back
-// to updated_at for databases created before terminal_at was introduced.
-func parseCleanupTimestamp(terminalAt, updatedAt string) (time.Time, error) {
-	value := terminalAt
-	if value == "" {
-		value = updatedAt
-	}
-	return time.Parse(time.RFC3339Nano, value)
 }
 
 // deleteCleanupRows deletes one run-scoped table and reports affected rows.

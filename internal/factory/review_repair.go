@@ -105,7 +105,7 @@ func decideReviewRepair(run store.Run, findings []store.ReviewRepairFinding) rev
 // attempt number, so recording it would reset the bounded budget and let every
 // `CHANGES_REQUESTED` review revive an exhausted repair allowance.
 func consumesBoundedRepairRound(reviewRepair bool, packet *store.ReviewRepairPacket) bool {
-	return reviewRepair && packet != nil && packet.Source != store.ReviewRepairSourceHuman
+	return reviewRepair && packet != nil && packet.Source == store.ReviewRepairSourceFactory
 }
 
 // reviewRepairRemaining returns a non-negative budget remainder.
@@ -442,6 +442,7 @@ func reviewRepairPacketForDecision(run store.Run, findings []store.ReviewRepairF
 	}
 	return &store.ReviewRepairPacket{
 		Version:       1,
+		Source:        store.ReviewRepairSourceFactory,
 		RunID:         run.ID,
 		CheckpointSHA: run.CheckpointSHA,
 		Attempt:       decision.Attempt,

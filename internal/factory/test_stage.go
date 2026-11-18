@@ -472,13 +472,13 @@ func testObjectionDisputeKey(objection report.TestObjection) string {
 }
 
 // testRevisionHistoryMatchesDispute reports whether retained cycles belong to
-// the same test claim. Empty keys are legacy history and start a fresh dispute.
+// the same test claim. A different claim starts a fresh dispute.
 func testRevisionHistoryMatchesDispute(history []store.TestRevision, disputeKey string) bool {
 	if len(history) == 0 || strings.TrimSpace(disputeKey) == "" {
 		return len(history) == 0
 	}
 	for _, revision := range history {
-		if revision.DisputeKey == "" || revision.DisputeKey != disputeKey {
+		if revision.DisputeKey != disputeKey {
 			return false
 		}
 	}
@@ -580,17 +580,17 @@ func mergeProtectedTestPaths(worktree string, previous []store.ProtectedTestPath
 	return protectedTestPathsForCheckpoint(worktree, ordered)
 }
 
-// setTestRevisionOutcome replaces the pending history entry for an attempt,
-// or appends one when recovering a legacy run without that entry.
-func setTestRevisionOutcome(history []store.TestRevision, attempt int, outcome store.TestRevisionOutcome) []store.TestRevision {
+// setTestRevisionOutcome replaces the recorded history entry for an attempt.
+// An absent entry is an invalid projection, not a new revision.
+func setTestRevisionOutcome(history []store.TestRevision, attempt int, outcome store.TestRevisionOutcome) ([]store.TestRevision, error) {
 	updated := append([]store.TestRevision(nil), history...)
 	for index := range updated {
 		if updated[index].Attempt == attempt {
 			updated[index].Outcome = outcome
-			return updated
+			return updated, nil
 		}
 	}
-	return append(updated, store.TestRevision{Attempt: attempt, Outcome: outcome})
+	return nil, fmt.Errorf("test revision attempt %d has no recorded history", attempt)
 }
 
 // isUnverifiableTestReport identifies a completed test envelope whose identity
@@ -1059,7 +1059,11 @@ func (s *Service) acceptTestRevisionReport(ctx context.Context, registration con
 	}
 	next.TestObjection = nil
 	next.TestRevisionBaseChangedPaths = nil
-	next.TestRevisionHistory = setTestRevisionOutcome(next.TestRevisionHistory, next.TestRevisionAttempts, store.TestRevisionAccepted)
+	history, historyErr := setTestRevisionOutcome(next.TestRevisionHistory, next.TestRevisionAttempts, store.TestRevisionAccepted)
+	if historyErr != nil {
+		return AgentResult{}, historyErr
+	}
+	next.TestRevisionHistory = history
 	next.TestInvocationID = invocation.ID
 	next.ProtectedTestPaths = protected
 	next.SpecificationReview = nil
@@ -1123,7 +1127,11 @@ func (s *Service) pauseTestRevisionForHuman(ctx context.Context, registration co
 	run.Status = store.StatusWaitingForHuman
 	clearActiveInvocations(run)
 	run.PendingQuestions = nil
-	run.TestRevisionHistory = setTestRevisionOutcome(run.TestRevisionHistory, run.TestRevisionAttempts, outcome)
+	history, historyErr := setTestRevisionOutcome(run.TestRevisionHistory, run.TestRevisionAttempts, outcome)
+	if historyErr != nil {
+		return AgentResult{}, historyErr
+	}
+	run.TestRevisionHistory = history
 	run.LifecycleReason = reason
 	run.UpdatedAt = s.deps.Now().UTC()
 	run.Revision = previous.Revision + 1
