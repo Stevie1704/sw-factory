@@ -1,14 +1,15 @@
 {
   "schema_version": 1,
   "manifest_schema_version": 1,
-  "generated_at": "2026-10-15T13:15:54.091778Z",
+  "generated_at": "2026-11-18T20:04:30.467794Z",
   "release": {
     "schema_version": 1,
     "version": "development",
     "build": "development",
-    "revision": "a27ac52ec0f0a640a85c80b4047902520ae03a99",
+    "revision": "5d00e20f8f66ddb86a35e9837246e9242d6fea85",
     "modified": false,
     "worker_base_image": "",
+    "worker_base_images": {},
     "platform": "darwin/arm64"
   },
   "host_harness": null,
@@ -71,15 +72,9 @@
         "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
       },
       "deterministic": {
-        "outcome": "pass",
-        "reason": "covers recovery semantics only; durable-effect failure injection stays with #181"
+        "outcome": "pass"
       },
-      "gaps": [
-        {
-          "issue": 181,
-          "summary": "Failure injection around every durable effect is still open; these tests do not replace it."
-        }
-      ]
+      "gaps": []
     },
     {
       "id": "inspect-history",
@@ -95,24 +90,15 @@
     },
     {
       "id": "upgrade-maintenance",
-      "title": "Upgrade the installation and report unsupported restore",
+      "title": "Upgrade the installation and report the restore boundary",
       "live": {
         "outcome": "not-run",
         "reason": "no live run yet; needs an operator-approved target repository, host harness, and spending limit"
       },
       "deterministic": {
-        "outcome": "blocked",
-        "reason": "only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships"
+        "outcome": "pass"
       },
       "gaps": [
-        {
-          "issue": 257,
-          "summary": "No upgrade preflight or resumable maintenance procedure ships yet."
-        },
-        {
-          "issue": 258,
-          "summary": "No supported backup and restore contract exists."
-        },
         {
           "issue": 204,
           "summary": "Service supervision under launchd or systemd is not part of the upgrade yet."
@@ -154,20 +140,187 @@
         "outcome": "pass"
       },
       "gaps": []
+    },
+    {
+      "id": "ideation-publish-github",
+      "title": "Turn an idea into reviewed, linked GitHub issues",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-publish-azure-devops",
+      "title": "Turn an idea into reviewed, linked Azure Boards work items",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-without-backlog",
+      "title": "End an ideation session without backlog work",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "ideation-recovery",
+      "title": "Recover an ideation session from interruption and stale input",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 265,
+          "summary": "factory reset and factory cleanup do not remove session-role Docker volumes or the snapshot worktree of a role active at coordinator stop (ADR 0023)."
+        }
+      ]
+    },
+    {
+      "id": "copilot-mixed-harness-recovery",
+      "title": "Run and recover a Copilot and mixed-harness workflow",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 281,
+          "summary": "Copilot identity, failure, and capacity shapes are provisional until live evidence closes release blockers RB-1 to RB-8; capacity maps to an unexpected exit."
+        }
+      ]
+    },
+    {
+      "id": "local-backlog-publish-and-start",
+      "title": "Turn an idea into committed local issues and supervised Runs",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-authorize-committed",
+      "title": "Authorize committed local issues after the session ended",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-recovery",
+      "title": "Recover local specification publication and claims after failures",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "local-backlog-code-host-access",
+      "title": "Diagnose the code-host access that a local tracker still needs",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 300,
+          "summary": "A local issue cannot complete without a code-host adapter; fully local or manual review and merge is not shipped."
+        },
+        {
+          "issue": 301,
+          "summary": "Azure Repos is reachable only through az; no code-host access route without the Azure CLI is shipped."
+        }
+      ]
+    },
+    {
+      "id": "azure-extension-publish-and-execute",
+      "title": "Publish an Epic with PBIs and run one PBI to a ready pull request with a PAT login",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": []
+    },
+    {
+      "id": "azure-extension-repository-assignment",
+      "title": "Run PBIs of one Azure project in two repositories with separate installations",
+      "live": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "deterministic": {
+        "outcome": "not-run",
+        "reason": "not recorded in this run"
+      },
+      "gaps": [
+        {
+          "issue": 302,
+          "summary": "A plan node selects another repository only through target_repository in the stored or draft plan JSON; the plan editor has no control and the planning role gets no guidance for it."
+        }
+      ]
     }
   ],
   "summary": {
     "live": {
       "blocked": 0,
       "fail": 0,
-      "not-run": 10,
+      "not-run": 21,
       "pass": 0
     },
     "deterministic": {
-      "blocked": 1,
+      "blocked": 0,
       "fail": 0,
-      "not-run": 0,
-      "pass": 9
+      "not-run": 11,
+      "pass": 10
     }
   },
   "interventions_by_cause": {},
