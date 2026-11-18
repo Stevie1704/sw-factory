@@ -38,11 +38,25 @@ var (
 // operational-store path. Diagnosis uses the read-only opener so it never
 // creates, migrates, backs up, chmods, or initializes the operational store.
 func StartupCheck(path string) doctor.Check {
+	return sqliteCheck(path, OpenReadOnly)
+}
+
+// RestoredStoreCheck returns the SQLite readiness check of StartupCheck for
+// the replacement that a restore put at the live path. It runs while the
+// restore journal exists, so it skips only the journal refusal; the restore
+// that owns the journal runs it in its verifying step (ADR 0032).
+func RestoredStoreCheck(path string) doctor.Check {
+	return sqliteCheck(path, openRestoredReadOnly)
+}
+
+// sqliteCheck returns the SQLite readiness check that opens the store with
+// open.
+func sqliteCheck(path string, open func(context.Context, string) (*Store, error)) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
 			return doctor.Failure(sqlitePathMissing, "SQLite", "the operational store path is not configured", "register the repository with a private operational_data_path")
 		}
-		opened, err := OpenReadOnly(ctx, path)
+		opened, err := open(ctx, path)
 		var migration *MigrationRequiredError
 		var restore *RestoreInProgressError
 		if errors.As(err, &restore) {

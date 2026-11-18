@@ -932,6 +932,26 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openReadOnlyFile(ctx, absolutePath)
+}
+
+// openRestoredReadOnly opens the replacement that a restore put at the live
+// path, as OpenReadOnly does, while that restore's journal exists. Only the
+// restore that owns the journal calls it, through RestoredStoreCheck.
+func openRestoredReadOnly(ctx context.Context, path string) (*Store, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve operational store path: %w", err)
+	}
+	if err := checkStoreFile(absolutePath); err != nil {
+		return nil, err
+	}
+	return openReadOnlyFile(ctx, absolutePath)
+}
+
+// openReadOnlyFile opens the checked store file at absolutePath read-only
+// and refuses any schema other than the current one.
+func openReadOnlyFile(ctx context.Context, absolutePath string) (*Store, error) {
 	database, err := openReadOnlyDatabase(ctx, absolutePath)
 	if err != nil {
 		return nil, err

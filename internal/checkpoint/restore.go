@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -295,12 +296,26 @@ func (r *restorer) verify(ctx context.Context) error {
 }
 
 // verifyLive checks the replacement at the live store path: no sidecar is
-// beside it, and it verifies against the manifest.
+// beside it, it verifies against the manifest, and the store doctor check
+// passes.
 func verifyLive(ctx context.Context, storePath string, expected Replacement) error {
 	if err := refuseLiveSidecars(storePath); err != nil {
 		return err
 	}
-	return verifyReplacement(ctx, storePath, expected)
+	if err := verifyReplacement(ctx, storePath, expected); err != nil {
+		return err
+	}
+	return runStoreDoctor(ctx, storePath)
+}
+
+// runStoreDoctor runs the store doctor check on the replacement at the live
+// path, as factory doctor runs it after the restore.
+func runStoreDoctor(ctx context.Context, storePath string) error {
+	result := store.RestoredStoreCheck(storePath)(ctx)
+	if result.Status != doctor.StatusPassed {
+		return fmt.Errorf("the store doctor check refuses the replacement: %s: %s", result.Code, result.Problem)
+	}
+	return nil
 }
 
 // refuseLiveSidecars fails when a -journal, -wal, or -shm file is at the

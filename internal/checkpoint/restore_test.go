@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/checkpoint"
@@ -379,6 +380,25 @@ func TestApplyRestoreRefusesASidecarThatIsNotOfTheReplacement(t *testing.T) {
 			fixture.assertOriginal(t, point+", "+suffix)
 		}
 	}
+}
+
+// TestApplyRestoreRunsTheStoreDoctorCheckOnTheReplacement verifies that the
+// verifying step runs the store doctor check: a replacement that matches the
+// manifest but that factory doctor refuses, here because other users can
+// read it, is rolled back.
+func TestApplyRestoreRunsTheStoreDoctorCheckOnTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(point string) error {
+		if point == "after replace factory.db" {
+			return os.Chmod(fixture.storePath, 0o644)
+		}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "store.sqlite") {
+		t.Fatalf("ApplyRestore() of a replacement that the doctor refuses = %v, want a store.sqlite doctor failure", err)
+	}
+	fixture.assertOriginal(t, "doctor failure")
 }
 
 // TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement verifies a
