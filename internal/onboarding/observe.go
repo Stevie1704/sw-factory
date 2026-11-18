@@ -217,11 +217,22 @@ func registration(path, repository string) (Check, string) {
 	if !samePath(registered.Path, repository) {
 		return Check{Problem: "the host configuration at " + path + " registers another repository; ask the operator for a separate configuration path"}, ""
 	}
-	encoded, err := json.Marshal(registered)
+	identity, err := RegistrationIdentity(path, registered)
 	if err != nil {
 		return Check{Problem: err.Error()}, ""
 	}
-	return Check{Done: true}, digestOf("registration", path, string(encoded))
+	return Check{Done: true}, identity
+}
+
+// RegistrationIdentity returns the SHA-256 identity of a host configuration
+// path and its registration. An onboarding plan and a maintenance checkpoint
+// record it, so a changed registration does not match.
+func RegistrationIdentity(configPath string, registration config.RepositoryRegistration) (string, error) {
+	encoded, err := json.Marshal(registration)
+	if err != nil {
+		return "", fmt.Errorf("encode the registration identity: %w", err)
+	}
+	return digestOf("registration", configPath, string(encoded)), nil
 }
 
 // samePath reports whether two paths name the same directory after symbolic
