@@ -40,6 +40,10 @@ type SnapshotFile struct {
 type SnapshotInspection struct {
 	// File identifies the verified file.
 	File SnapshotFile
+	// Watermarks are the highest identities that the snapshot knows.
+	Watermarks Watermarks
+	// KnownRuns names the external objects of every run in the snapshot.
+	KnownRuns []KnownRun
 }
 
 // vacuumInto writes the online snapshot of the database of conn to
@@ -202,6 +206,17 @@ func InspectSnapshot(ctx context.Context, path string) (SnapshotInspection, erro
 		return SnapshotInspection{}, err
 	}
 	if inspection.File.Size, inspection.File.SHA256, err = fileDigest(absolutePath); err != nil {
+		return SnapshotInspection{}, err
+	}
+	// Only the current schema has known tables; a caller compares the
+	// schema version of another snapshot and refuses it.
+	if inspection.File.SchemaVersion != CurrentSchemaVersion {
+		return inspection, nil
+	}
+	if inspection.Watermarks, err = ReadWatermarks(ctx, database); err != nil {
+		return SnapshotInspection{}, err
+	}
+	if inspection.KnownRuns, err = ReadKnownRuns(ctx, database); err != nil {
 		return SnapshotInspection{}, err
 	}
 	return inspection, nil

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -180,6 +181,50 @@ func TestSnapshotExcludesAnInboxAppendThatWaitsForTheLock(t *testing.T) {
 	}
 	if got := commandCount(t, openRaw(t, path)); got != 1 {
 		t.Fatalf("store holds %d session commands after the snapshot, want 1", got)
+	}
+}
+
+// TestInspectSnapshotReadsWatermarksAndKnownRuns verifies that a snapshot
+// inspection names the highest identities and every external object that
+// the snapshot knows, which a manifest records and a restore compares.
+func TestInspectSnapshotReadsWatermarksAndKnownRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	run := completedRun("run-1", 7)
+	run.Branch = "factory/run-1"
+	run.StatusCommentID = "comment-9"
+	path := quiescentStore(t, run)
+	second := completedRun("run-2", 0)
+	second.CreatedAt = run.CreatedAt.Add(time.Hour)
+	opened, err := store.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.SaveRun(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(privateDirectory(t), "store.db")
+
+	snapshot, err := store.Snapshot(ctx, path, destination, nil)
+	if err != nil {
+		t.Fatalf("Snapshot() error = %v", err)
+	}
+	wantRuns := store.Watermark{Count: 2, Latest: "1970-01-01T01:01:40.000000000Z"}
+	if snapshot.Watermarks.Runs != wantRuns {
+		t.Fatalf("run watermark = %+v, want %+v", snapshot.Watermarks.Runs, wantRuns)
+	}
+	if snapshot.Watermarks.Invocations.Count != 0 || snapshot.Watermarks.LocalIssues.Count != 0 {
+		t.Fatalf("watermarks = %+v, want no invocation and no local issue", snapshot.Watermarks)
+	}
+	want := []store.KnownRun{
+		{RunID: "run-1", IssueNumber: 107, Branch: "factory/run-1", PullRequestNumber: 7, StatusCommentID: "comment-9"},
+		{RunID: "run-2", IssueNumber: 100},
+	}
+	if !slices.Equal(snapshot.KnownRuns, want) {
+		t.Fatalf("known runs = %+v, want %+v", snapshot.KnownRuns, want)
 	}
 }
 
