@@ -218,7 +218,7 @@ func TestSchema44MigrationAddsSessionInvocations(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(t.Context(), path)
+	reopened, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -289,7 +289,7 @@ func TestSchema47MigrationLeavesEndedInvocationsToRelease(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := store.Open(t.Context(), path)
+	reopened, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

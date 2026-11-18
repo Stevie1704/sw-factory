@@ -207,7 +207,7 @@ func migrationBackups(path string) ([]string, error) {
 // migrates an older supported schema in one transaction. A current store is
 // left unchanged. The caller must hold the coordinator lock.
 func Migrate(ctx context.Context, path string) (Migration, error) {
-	opened, migration, err := openMigrating(ctx, path)
+	opened, migration, err := openMigrating(ctx, path, true)
 	if err != nil {
 		return Migration{}, err
 	}

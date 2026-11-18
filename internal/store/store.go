@@ -840,17 +840,35 @@ type Store struct {
 	schemaVersion int
 }
 
-// Open opens or creates an operational store at path, applying supported schema migrations as needed.
-// It requires a private parent directory and rejects empty databases, unsupported schema versions,
-// and databases with missing or unreadable schema metadata. Existing databases are backed up before migration.
+// Open opens an existing current operational store, or creates a new one.
+// It never migrates an existing store: an older schema is refused with a
+// *MigrationRequiredError, because factory upgrade migrate-store is the only
+// migration entry point. It requires a private parent directory and rejects
+// empty databases, newer schema versions, and databases with missing or
+// unreadable schema metadata.
 func Open(ctx context.Context, path string) (*Store, error) {
-	opened, _, err := openMigrating(ctx, path)
+	opened, _, err := openMigrating(ctx, path, false)
 	return opened, err
 }
 
-// openMigrating is Open that also reports the schema migration it applied
-// and the path of the pre-migration backup.
-func openMigrating(ctx context.Context, path string) (*Store, Migration, error) {
+// MigrationRequiredError reports an existing store with an older schema
+// that only the explicit migration entry point may migrate.
+type MigrationRequiredError struct {
+	Version   int
+	Supported int
+}
+
+// Error names the supported migration entry point.
+func (e *MigrationRequiredError) Error() string {
+	return fmt.Sprintf("operational store schema version %d is older than supported version %d; migrate it with factory upgrade migrate-store", e.Version, e.Supported)
+}
+
+// openMigrating opens or creates a store and reports the schema migration
+// it applied and the path of the pre-migration backup. It migrates an
+// existing older store only when migrateExisting is set. An existing store
+// at version 0 has only its metadata, from an initialization that stopped
+// before its first migration, so it is completed like a new store.
+func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Store, Migration, error) {
 	if path == "" {
 		return nil, Migration{}, errors.New("operational store path is required")
 	}
@@ -895,6 +913,9 @@ func openMigrating(ctx context.Context, path string) (*Store, Migration, error) 
 	}
 	if version > CurrentSchemaVersion {
 		return nil, Migration{}, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
+	}
+	if existed && version > 0 && version < CurrentSchemaVersion && !migrateExisting {
+		return nil, Migration{}, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	migration := Migration{FromVersion: version, ToVersion: version}
 	if version < CurrentSchemaVersion {
@@ -948,7 +969,7 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 		return nil, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	if version < CurrentSchemaVersion {
-		return nil, errors.New("operational store schema requires migration")
+		return nil, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	closeOnError = false
 	return &Store{db: database, path: absolutePath, schemaVersion: version}, nil

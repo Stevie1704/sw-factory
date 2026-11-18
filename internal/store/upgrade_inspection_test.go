@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -205,4 +206,38 @@ func TestInspectForUpgradeReportsSessionWork(t *testing.T) {
 	if !slices.Equal(codes, []string{"session_invocation.active", "session_command.queued"}) {
 		t.Fatalf("activity findings = %v, want the active session invocation and the queued command", codes)
 	}
+}
+
+// TestOpenRefusesAnOlderStoreAndNamesTheMigrationEntryPoint verifies that
+// the ordinary opener never migrates an existing store: it refuses an older
+// schema with a typed error, writes no backup, and leaves the schema.
+func TestOpenRefusesAnOlderStoreAndNamesTheMigrationEntryPoint(t *testing.T) {
+	t.Parallel()
+	path := quiescentStore(t, completedRun("run-1", 7))
+	database := openRaw(t, path)
+	if _, err := database.Exec("UPDATE schema_metadata SET version = ?", store.CurrentSchemaVersion-1); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := store.Open(context.Background(), path)
+	var required *store.MigrationRequiredError
+	if !errors.As(err, &required) || required.Version != store.CurrentSchemaVersion-1 || !strings.Contains(err.Error(), "factory upgrade migrate-store") {
+		t.Fatalf("Open(older store) error = %v, want a MigrationRequiredError that names factory upgrade migrate-store", err)
+	}
+	inspection, inspectErr := store.InspectForUpgrade(context.Background(), path)
+	if inspectErr != nil || inspection.SchemaVersion != store.CurrentSchemaVersion-1 || len(inspection.Backups) != 0 {
+		t.Fatalf("store after refusal = %+v, %v; want the older schema and no backup", inspection, inspectErr)
+	}
+}
+
+// openMigrated migrates an older store fixture through the explicit
+// migration entry point, then opens it as every other caller does.
+func openMigrated(ctx context.Context, path string) (*store.Store, error) {
+	if _, err := store.Migrate(ctx, path); err != nil {
+		return nil, err
+	}
+	return store.Open(ctx, path)
 }
