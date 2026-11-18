@@ -37,9 +37,16 @@ type UpgradeInspection struct {
 	// ActiveSessionInvocations counts the session-role invocations that are
 	// still active; each one owns a worker.
 	ActiveSessionInvocations int
+	// UnreleasedSessionInvocations counts the ended session-role
+	// invocations whose worker and snapshot are not proved released: the
+	// role worker can still run.
+	UnreleasedSessionInvocations int
 	// QueuedSessionCommands counts the session commands that the
 	// coordinator has not completed.
 	QueuedSessionCommands int
+	// WorkerProcesses lists every process that the store launched in a
+	// worker; the caller checks with Docker whether one of them still runs.
+	WorkerProcesses []WorkerProcess
 	// Backups lists the pre-migration backups of this exact store.
 	Backups []string
 }
@@ -72,8 +79,8 @@ func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 }
 
 // ActivityFindings returns one finding per kind of active work that the
-// migration gate refuses: runs, invocations, journaled effects, session-role
-// invocations, and queued session commands.
+// migration gate refuses: runs, invocations, journaled effects, active or
+// unreleased session-role invocations, and queued session commands.
 func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	var findings []UpgradeFinding
 	if len(i.ActiveRuns) != 0 {
@@ -87,6 +94,9 @@ func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	}
 	if i.ActiveSessionInvocations != 0 {
 		findings = append(findings, UpgradeFinding{Code: "session_invocation.active", Detail: fmt.Sprintf("%d session-role invocations are active", i.ActiveSessionInvocations)})
+	}
+	if i.UnreleasedSessionInvocations != 0 {
+		findings = append(findings, UpgradeFinding{Code: "session_invocation.unreleased", Detail: fmt.Sprintf("%d ended session-role invocations have no proved resource release", i.UnreleasedSessionInvocations)})
 	}
 	if i.QueuedSessionCommands != 0 {
 		findings = append(findings, UpgradeFinding{Code: "session_command.queued", Detail: fmt.Sprintf("%d session commands are not completed", i.QueuedSessionCommands)})
@@ -137,7 +147,11 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 	if !inspection.Supported() {
 		return inspection, nil
 	}
-	return inspection, readActiveWork(ctx, database, &inspection)
+	if err := readActiveWork(ctx, database, &inspection); err != nil {
+		return inspection, err
+	}
+	inspection.WorkerProcesses, err = ReadWorkerProcesses(ctx, database)
+	return inspection, err
 }
 
 // readActiveWork reads the facts that decide whether the store passes the
@@ -168,6 +182,9 @@ func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeIn
 	}
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_invocations WHERE status = ?", SessionInvocationActive).Scan(&inspection.ActiveSessionInvocations); err != nil {
 		return fmt.Errorf("read active session invocations: %w", err)
+	}
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_invocations WHERE status <> ? AND resources_released_at IS NULL", SessionInvocationActive).Scan(&inspection.UnreleasedSessionInvocations); err != nil {
+		return fmt.Errorf("read unreleased session invocations: %w", err)
 	}
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_commands WHERE state <> ?", IdeationCommandCompleted).Scan(&inspection.QueuedSessionCommands); err != nil {
 		return fmt.Errorf("read queued session commands: %w", err)

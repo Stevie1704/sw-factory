@@ -182,13 +182,17 @@ func (p planner) activityBlockers() []Blocker {
 	}
 	owner := "the binary that claimed it"
 	actions := map[string]string{
-		"run.active":                "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
-		"invocation.active":         "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
-		"effect.pending":            "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
-		"session_invocation.active": "let the coordinator of " + owner + " finish the session role, or cancel the session as factory guide ideation describes",
-		"session_command.queued":    "let the coordinator of " + owner + " complete the queued session commands, then stop it",
+		"run.active":                    "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
+		"invocation.active":             "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
+		"effect.pending":                "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
+		"session_invocation.active":     "let the coordinator of " + owner + " finish the session role, or cancel the session as factory guide ideation describes",
+		"session_invocation.unreleased": "start the coordinator of " + owner + " until it has released the session-role workers, then stop it",
+		"session_command.queued":        "let the coordinator of " + owner + " complete the queued session commands, then stop it",
+		"worker.active":                 "let the coordinator of " + owner + " finish or cancel the harness process; never stop a worker by hand while its process writes",
+		"docker.unreachable":            "start Docker or repair the access to it, then plan again; the plan never passes without proof that no worker process runs",
+		"worker.unobserved":             "check the named worker with docker ps and docker logs, then plan again",
 	}
-	for _, finding := range o.Store.ActivityFindings() {
+	for _, finding := range append(o.Store.ActivityFindings(), o.WorkerActivity...) {
 		blockers = append(blockers, Blocker{Code: finding.Code, Detail: finding.Detail, Action: actions[finding.Code]})
 	}
 	return blockers

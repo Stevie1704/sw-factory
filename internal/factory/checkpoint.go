@@ -51,6 +51,9 @@ type CheckpointRequest struct {
 	Build version.Identity
 	// External reads the state of the external objects.
 	External checkpoint.ExternalReader
+	// Workers reads Docker for the worker-activity condition of full
+	// quiescence.
+	Workers WorkerProbe
 	// Now returns the current time.
 	Now func() time.Time
 	// afterSnapshot runs after VACUUM INTO and before the manifest write. A
@@ -130,6 +133,11 @@ func fillCheckpoint(ctx context.Context, request CheckpointRequest, staging stri
 		if findings, err = store.FullQuiescenceFindings(ctx, view); err != nil {
 			return err
 		}
+		processes, err := store.ReadWorkerProcesses(ctx, view)
+		if err != nil {
+			return err
+		}
+		findings = append(findings, WorkerActivityFindings(ctx, processes, request.Workers)...)
 		if len(findings) != 0 {
 			return errNotQuiescent
 		}

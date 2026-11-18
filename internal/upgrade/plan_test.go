@@ -176,6 +176,8 @@ func TestBuildBlocksActiveWorkWithTheClaimingBinary(t *testing.T) {
 	observation.Store.ActiveInvocations = 1
 	observation.Store.ActiveSessionInvocations = 1
 	observation.Store.QueuedSessionCommands = 1
+	observation.Store.UnreleasedSessionInvocations = 1
+	observation.WorkerActivity = []store.UpgradeFinding{{Code: "worker.active", Detail: "run-7 runs inv-1"}, {Code: "docker.unreachable", Detail: "no daemon"}}
 	plan := upgrade.Build(observation)
 
 	if plan.Result != upgrade.ResultBlocked {
@@ -189,6 +191,20 @@ func TestBuildBlocksActiveWorkWithTheClaimingBinary(t *testing.T) {
 	blocker(t, plan, "invocation.active")
 	blocker(t, plan, "session_invocation.active")
 	blocker(t, plan, "session_command.queued")
+	for _, code := range []string{"session_invocation.unreleased", "worker.active", "docker.unreachable"} {
+		if found := blocker(t, plan, code); found.Action == "" {
+			t.Fatalf("%s = %+v, want an action", code, found)
+		}
+	}
+	unmet := 0
+	for _, condition := range plan.MigrationGate {
+		if (condition.Code == "session_invocations.released" || condition.Code == "workers.idle") && !condition.Satisfied {
+			unmet++
+		}
+	}
+	if unmet != 2 {
+		t.Fatalf("migration gate = %+v, want session_invocations.released and workers.idle unmet", plan.MigrationGate)
+	}
 	for _, step := range plan.Operations {
 		if step.State == upgrade.OperationPending {
 			t.Fatalf("operation %s is pending while the migration gate fails", step.ID)

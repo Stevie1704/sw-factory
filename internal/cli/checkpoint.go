@@ -16,6 +16,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/version"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // checkpointCreateSchema is the version of the checkpoint create document.
@@ -53,6 +54,10 @@ var checkpointExternalForCLI = func(configPath string, registration config.Repos
 		TargetBranch: targetBranch,
 	})
 }
+
+// checkpointWorkersForCLI is the Docker seam of the worker-activity
+// condition, so the CLI contract can be tested without Docker.
+var checkpointWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
 
 // runCheckpoint dispatches the checkpoint subcommands.
 func runCheckpoint(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
@@ -125,6 +130,7 @@ func createCheckpoint(ctx context.Context, configPath, destination string) (fact
 		WorkerImage:  policy.WorkerBuild.Image + "@" + policy.WorkerBuild.Digest,
 		Build:        version.Current(),
 		External:     checkpointExternalForCLI(absoluteConfig, registration, policy.TargetBranch),
+		Workers:      checkpointWorkersForCLI(),
 		Now:          time.Now,
 	})
 }

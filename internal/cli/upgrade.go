@@ -32,6 +32,10 @@ type upgradeImages interface {
 // without Docker.
 var upgradeImagesForCLI = func() upgradeImages { return worker.NewDockerRuntime() }
 
+// upgradeWorkersForCLI is the Docker seam of the worker-activity check, so
+// the CLI contract can be tested without Docker.
+var upgradeWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
+
 // upgradeIdentityForCLI is the build identity seam: the plan runs from the
 // target binary, so its identity is the target release.
 var upgradeIdentityForCLI = version.Current
@@ -131,7 +135,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 	}
 	var result factory.StoreMigrationResult
 	if err == nil {
-		result, err = factory.MigrateStore(ctx, host.Repositories[0])
+		result, err = factory.MigrateStore(ctx, host.Repositories[0], upgradeWorkersForCLI())
 	}
 	if err != nil {
 		document.Outcome, document.Error = "error", newErrorDocument("upgrade.migrate_store_failed", doctor.OriginUnknown, err)
@@ -184,6 +188,8 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources s
 	observation.Store, err = store.InspectForUpgrade(ctx, registration.OperationalDataPath)
 	if err != nil {
 		observation.StoreProblem = err.Error()
+	} else if observation.Store.Supported() {
+		observation.WorkerActivity = factory.WorkerActivityFindings(ctx, observation.Store.WorkerProcesses, upgradeWorkersForCLI())
 	}
 	if record, err := factory.ObserveCoordinatorLock(registration); err != nil {
 		observation.Lock.Problem = err.Error()
