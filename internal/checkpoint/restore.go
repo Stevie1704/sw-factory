@@ -280,6 +280,9 @@ func (r *restorer) replace(context.Context) error {
 	if err := r.at("before replace " + name); err != nil {
 		return err
 	}
+	if err := refuseLiveSidecars(plan.StorePath); err != nil {
+		return err
+	}
 	if err := renameDurably(filepath.Join(plan.WorkDirectory, "new", StoreFile), plan.StorePath); err != nil {
 		return err
 	}
@@ -288,7 +291,33 @@ func (r *restorer) replace(context.Context) error {
 
 // verify checks the replacement at the live path.
 func (r *restorer) verify(ctx context.Context) error {
-	return verifyReplacement(ctx, r.journal.StorePath, r.journal.Replacement)
+	return verifyLive(ctx, r.journal.StorePath, r.journal.Replacement)
+}
+
+// verifyLive checks the replacement at the live store path: no sidecar is
+// beside it, and it verifies against the manifest.
+func verifyLive(ctx context.Context, storePath string, expected Replacement) error {
+	if err := refuseLiveSidecars(storePath); err != nil {
+		return err
+	}
+	return verifyReplacement(ctx, storePath, expected)
+}
+
+// refuseLiveSidecars fails when a -journal, -wal, or -shm file is at the
+// live store path. The replacement is one self-contained file, so such a
+// sidecar belongs to another store, and SQLite could apply it to the
+// replacement. A sidecar that cannot be inspected also fails.
+func refuseLiveSidecars(storePath string) error {
+	for _, suffix := range sidecarSuffixes {
+		_, err := os.Lstat(storePath + suffix)
+		switch {
+		case err == nil:
+			return fmt.Errorf("the sidecar %s is at the live store path; it is not of the replacement, so the replacement does not go live beside it", storePath+suffix)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("inspect the live sidecar %s: %w", storePath+suffix, err)
+		}
+	}
+	return nil
 }
 
 // finish removes the journal of a verified restore and the empty new/. The
@@ -330,7 +359,7 @@ func continueRestore(ctx context.Context, storePath string, crash crashPoint) (R
 		continuation.Result = ContinuationCompleted
 		return continuation, r.finish()
 	case StateVerifying:
-		if verifyReplacement(ctx, journal.StorePath, journal.Replacement) == nil {
+		if verifyLive(ctx, journal.StorePath, journal.Replacement) == nil {
 			if err := r.enter(StateVerified); err != nil {
 				return continuation, err
 			}

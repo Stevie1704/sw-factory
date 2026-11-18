@@ -258,6 +258,11 @@ and `original/`, also after the coordinator lock is released by a crash.
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
 
+The replacement is one file without sidecars. Before the rename into place
+and in each verification, restore refuses a `-journal`, `-wal`, or `-shm`
+file at the live path, so a stale sidecar never applies to the replacement;
+restore then rolls back and does not remove an unlisted sidecar.
+
 Every continuation before `verified` ends with the original live file set
 back in place and unchanged, so it is lossless. After `verified`, the
 original stays in `original/` until the operator removes it. Continuation

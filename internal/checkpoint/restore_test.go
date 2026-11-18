@@ -356,3 +356,70 @@ func TestRestoreContinuationAfterACrashInsideTheRollback(t *testing.T) {
 		}
 	}
 }
+
+// TestApplyRestoreRefusesASidecarThatIsNotOfTheReplacement places a stale
+// sidecar at the live path before and after the replacement moves into
+// place. The replacement is one file without sidecars, so a sidecar at the
+// live path belongs to another store and could apply to the replacement.
+// The restore fails and the original file set is back.
+func TestApplyRestoreRefusesASidecarThatIsNotOfTheReplacement(t *testing.T) {
+	t.Parallel()
+	for _, point := range []string{"journal replacing", "after replace factory.db"} {
+		for _, suffix := range liveSidecars {
+			fixture := newRestoreFixture(t)
+			err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(current string) error {
+				if current == point {
+					return os.WriteFile(fixture.storePath+suffix, []byte("a stale sidecar"), 0o600)
+				}
+				return nil
+			})
+			if err == nil {
+				t.Fatalf("%s, %s: ApplyRestore() with a stale sidecar succeeded", point, suffix)
+			}
+			fixture.assertOriginal(t, point+", "+suffix)
+		}
+	}
+}
+
+// TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement verifies a
+// sidecar that appears after the plan listed the live files: the
+// replacement never goes live beside it, and restore does not remove it.
+func TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	for _, suffix := range liveSidecars {
+		if err := os.Remove(fixture.storePath + suffix); err != nil {
+			t.Fatal(err)
+		}
+		delete(fixture.original, "factory.db"+suffix)
+	}
+	plan := fixture.plan(t)
+	stale := []byte("a stale write-ahead log")
+	if err := os.WriteFile(fixture.storePath+"-wal", stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
+		t.Fatal("ApplyRestore() beside an unlisted sidecar succeeded")
+	}
+	fixture.original["factory.db-wal"] = stale
+	fixture.assertOriginal(t, "unlisted sidecar")
+}
+
+// TestRestoreContinuationRefusesASidecarThatIsNotOfTheReplacement crashes
+// a restore in the verifying state, places a stale sidecar at the live
+// path, and verifies that the continuation rolls back.
+func TestRestoreContinuationRefusesASidecarThatIsNotOfTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	if err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, crashAt("journal verifying")); !errors.Is(err, errCrash) {
+		t.Fatalf("ApplyRestore() = %v, want the simulated crash", err)
+	}
+	if err := os.WriteFile(fixture.storePath+"-shm", []byte("a stale shared memory index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := checkpoint.ContinueRestore(context.Background(), fixture.storePath)
+	if err != nil || continuation.Result != checkpoint.ContinuationRolledBack {
+		t.Fatalf("ContinueRestore() = %+v, %v; want rolled back", continuation, err)
+	}
+	fixture.assertOriginal(t, "stale sidecar while verifying")
+}
