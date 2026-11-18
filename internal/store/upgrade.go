@@ -34,6 +34,12 @@ type UpgradeInspection struct {
 	ActiveInvocations int
 	// PendingEffects counts the journaled external effects.
 	PendingEffects int
+	// ActiveSessionInvocations counts the session-role invocations that are
+	// still active; each one owns a worker.
+	ActiveSessionInvocations int
+	// QueuedSessionCommands counts the session commands that the
+	// coordinator has not completed.
+	QueuedSessionCommands int
 	// Backups lists the pre-migration backups of this exact store.
 	Backups []string
 }
@@ -64,8 +70,9 @@ func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 	return nil
 }
 
-// ActivityFindings returns one finding per kind of active work: runs,
-// invocations, and journaled effects.
+// ActivityFindings returns one finding per kind of active work that the
+// migration gate refuses: runs, invocations, journaled effects, session-role
+// invocations, and queued session commands.
 func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	var findings []UpgradeFinding
 	if len(i.ActiveRuns) != 0 {
@@ -76,6 +83,12 @@ func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	}
 	if i.PendingEffects != 0 {
 		findings = append(findings, UpgradeFinding{Code: "effect.pending", Detail: fmt.Sprintf("%d external effects are journaled", i.PendingEffects)})
+	}
+	if i.ActiveSessionInvocations != 0 {
+		findings = append(findings, UpgradeFinding{Code: "session_invocation.active", Detail: fmt.Sprintf("%d session-role invocations are active", i.ActiveSessionInvocations)})
+	}
+	if i.QueuedSessionCommands != 0 {
+		findings = append(findings, UpgradeFinding{Code: "session_command.queued", Detail: fmt.Sprintf("%d session commands are not completed", i.QueuedSessionCommands)})
 	}
 	return findings
 }
@@ -150,7 +163,25 @@ func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeIn
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_effects").Scan(&inspection.PendingEffects); err != nil {
 		return fmt.Errorf("read pending effects: %w", err)
 	}
+	if inspection.ActiveSessionInvocations, err = countIfTable(ctx, database, "ideation_invocations", "SELECT COUNT(*) FROM ideation_invocations WHERE status = ?", SessionInvocationActive); err != nil {
+		return fmt.Errorf("read active session invocations: %w", err)
+	}
+	if inspection.QueuedSessionCommands, err = countIfTable(ctx, database, "ideation_commands", "SELECT COUNT(*) FROM ideation_commands WHERE state <> ?", IdeationCommandCompleted); err != nil {
+		return fmt.Errorf("read queued session commands: %w", err)
+	}
 	return nil
+}
+
+// countIfTable runs a count query when its table exists, and returns zero
+// for an older schema that has no such table.
+func countIfTable(ctx context.Context, database *sql.DB, table, query string, args ...any) (int, error) {
+	var tables int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&tables); err != nil || tables == 0 {
+		return 0, err
+	}
+	var count int
+	err := database.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
 }
 
 // migrationBackups lists the pre-migration backups whose name proves they

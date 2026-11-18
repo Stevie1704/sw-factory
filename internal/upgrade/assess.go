@@ -178,9 +178,11 @@ func (p planner) activityBlockers() []Blocker {
 	}
 	owner := p.storeOwner()
 	actions := map[string]string{
-		"run.active":        "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
-		"invocation.active": "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
-		"effect.pending":    "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
+		"run.active":                "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
+		"invocation.active":         "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
+		"effect.pending":            "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
+		"session_invocation.active": "let the coordinator of " + owner + " finish the session role, or cancel the session as factory guide ideation describes",
+		"session_command.queued":    "let the coordinator of " + owner + " complete the queued session commands, then stop it",
 	}
 	for _, finding := range o.Store.ActivityFindings() {
 		blockers = append(blockers, Blocker{Code: finding.Code, Detail: finding.Detail, Action: actions[finding.Code]})

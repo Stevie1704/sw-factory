@@ -164,6 +164,8 @@ func TestBuildBlocksActiveWorkWithTheOldBinary(t *testing.T) {
 	observation.Store.ActiveRuns = []string{"run-7"}
 	observation.Store.PendingEffects = 1
 	observation.Store.ActiveInvocations = 1
+	observation.Store.ActiveSessionInvocations = 1
+	observation.Store.QueuedSessionCommands = 1
 	plan := upgrade.Build(observation)
 
 	if plan.Result != upgrade.ResultBlocked {
@@ -175,6 +177,8 @@ func TestBuildBlocksActiveWorkWithTheOldBinary(t *testing.T) {
 	}
 	blocker(t, plan, "effect.pending")
 	blocker(t, plan, "invocation.active")
+	blocker(t, plan, "session_invocation.active")
+	blocker(t, plan, "session_command.queued")
 	for _, step := range plan.Operations {
 		if step.State == upgrade.OperationPending {
 			t.Fatalf("operation %s is pending while the installation is not quiescent", step.ID)

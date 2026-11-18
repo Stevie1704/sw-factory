@@ -180,3 +180,29 @@ func TestRollBackInterruptedWriteClearsTheJournal(t *testing.T) {
 		t.Fatalf("inspection after rollback = %+v, %v; want a readable current store", inspection, err)
 	}
 }
+
+// TestInspectForUpgradeReportsSessionWork verifies that an active
+// session-role invocation and a queued session command of a schema-51
+// store fail the migration gate even without an active run.
+func TestInspectForUpgradeReportsSessionWork(t *testing.T) {
+	t.Parallel()
+	path := olderStoreFixture(t, 51,
+		"CREATE TABLE ideation_invocations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL)",
+		"CREATE TABLE ideation_commands (sequence INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL)",
+		"INSERT INTO operational_runs (id, status) VALUES ('run-done', 'complete')",
+		"INSERT INTO ideation_invocations (id, session_id, status) VALUES ('session-inv-1', 'session-1', 'active'), ('session-inv-0', 'session-0', 'accepted')",
+		"INSERT INTO ideation_commands (state) VALUES ('accepted'), ('completed')",
+	)
+
+	inspection, err := store.InspectForUpgrade(context.Background(), path)
+	if err != nil {
+		t.Fatalf("InspectForUpgrade() error = %v", err)
+	}
+	var codes []string
+	for _, finding := range inspection.ActivityFindings() {
+		codes = append(codes, finding.Code)
+	}
+	if !slices.Equal(codes, []string{"session_invocation.active", "session_command.queued"}) {
+		t.Fatalf("activity findings = %v, want the active session invocation and the queued command", codes)
+	}
+}

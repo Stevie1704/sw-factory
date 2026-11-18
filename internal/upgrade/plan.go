@@ -464,5 +464,7 @@ func (p planner) quiescence() []Quiescence {
 		{Code: "runs.terminal", Description: "every run is complete, cancelled, or failed", Satisfied: readable && len(o.Store.ActiveRuns) == 0},
 		{Code: "invocations.inactive", Description: "no invocation is active", Satisfied: readable && o.Store.ActiveInvocations == 0},
 		{Code: "effects.empty", Description: "the pending-effect journal is empty", Satisfied: readable && o.Store.PendingEffects == 0},
+		{Code: "session_invocations.inactive", Description: "no session-role invocation is active", Satisfied: readable && o.Store.ActiveSessionInvocations == 0},
+		{Code: "session_commands.completed", Description: "every session command is completed", Satisfied: readable && o.Store.QueuedSessionCommands == 0},
 	}
 }

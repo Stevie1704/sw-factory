@@ -111,3 +111,29 @@ func setSchemaVersion(path string, version int) error {
 	_, err = opened.Exec("UPDATE schema_metadata SET version = ?", version)
 	return err
 }
+
+// TestMigrateStoreRefusesAnActiveSessionRole verifies that a session-role
+// invocation that the previous release still owns stops the migration even
+// when no run is active.
+func TestMigrateStoreRefusesAnActiveSessionRole(t *testing.T) {
+	t.Parallel()
+	registration := migrationRegistration(t, store.StatusComplete)
+	database, err := sql.Open("sqlite", registration.OperationalDataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(`INSERT INTO ideation_invocations (session_id, id, role, trigger_id, session_revision, context_revision, harness, prompt_version, prompt_sha256, worker_id, status, created_at, updated_at)
+		VALUES ('session-1', 'session-inv-1', 'ideation', 'turn-1', 1, 'context-1', 'codex', 'ideation-v1', 'digest', 'worker-1', 'active', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`)
+	if closeErr := database.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := MigrateStore(context.Background(), registration)
+	if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != "session_invocation.active" {
+		t.Fatalf("result = %+v, %v; want a session_invocation.active refusal", result, err)
+	}
+	assertSchema(t, registration.OperationalDataPath, store.CurrentSchemaVersion-1)
+}
