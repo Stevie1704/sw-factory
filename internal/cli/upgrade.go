@@ -37,6 +37,11 @@ var upgradeImagesForCLI = func() upgradeImages { return worker.NewDockerRuntime(
 // the CLI contract can be tested without Docker.
 var upgradeWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
 
+// upgradeMigrateStoreForCLI is the store migration seam, so the CLI
+// contract of a migration can be tested while this release accepts only its
+// own schema.
+var upgradeMigrateStoreForCLI = factory.MigrateStore
+
 // upgradeIdentityForCLI is the build identity seam: the plan runs from the
 // target binary, so its identity is the target release.
 var upgradeIdentityForCLI = version.Current
@@ -137,7 +142,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 	}
 	var result factory.StoreMigrationResult
 	if err == nil {
-		result, err = factory.MigrateStore(ctx, host.Repositories[0], upgradeWorkersForCLI())
+		result, err = upgradeMigrateStoreForCLI(ctx, host.Repositories[0], upgradeWorkersForCLI())
 	}
 	if err != nil {
 		document.Outcome, document.Error = "error", newErrorDocument("upgrade.migrate_store_failed", doctor.OriginUnknown, err)
