@@ -193,10 +193,13 @@ Restore refuses unless every precondition is proved:
 3. The current registration identity equals `registration_identity`.
 4. Restore acquires the coordinator lock and holds it to the end.
 5. No worker container or role session of this installation runs.
-6. The live store, when it is readable, has no pending effect, no
-   non-terminal run, and nothing newer than the watermarks: no run,
-   invocation, ledger entry, or local issue identity that the snapshot does
-   not have.
+6. The live store has no pending effect, no non-terminal run, and nothing
+   newer than the watermarks: no run, invocation, ledger entry, or local
+   issue identity that the snapshot does not have. Only a missing store or a
+   damaged one (empty, corrupt, or not a database) skips this precondition,
+   and the preview names the damage. A store that exists but does not open
+   for another reason, for example busy, not private, or of another schema,
+   refuses with `restore.not_quiescent` (`store.unreadable`).
 7. Every known external object in `external_state` has exactly its recorded
    state: each known branch has the recorded remote head SHA, each known pull
    request has the recorded head SHA, state, and draft flag, each known issue

@@ -256,7 +256,7 @@ effect. Afterwards run `factory doctor`, then `factory start`.
 | `restore.registration_changed` | The registration or the host configuration path differs from the checkpoint. |
 | `restore.coordinator_running` | A coordinator or another maintenance command holds the repository lock. |
 | `restore.worker_active` | A harness runs in a worker of this store, a role session has no proved resource release, or Docker cannot prove that none runs. |
-| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. |
+| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. With `store.unreadable`, the live store exists but does not open, for example because it is busy, not private, or of another schema; repair that first. Only a missing or damaged (empty, corrupt, or not a database) store is replaced without this check, and the preview names the damage. |
 | `restore.external_divergence` | A known branch, pull request, issue, or status comment changed after the checkpoint, or a `factory/*` branch, a pull request from one, or an issue with a run-state label is unknown to it; `detail` names each object. |
 | `restore.divergence_unverified` | A known object or a listing cannot be read. Unknown evidence never passes. |
 | `restore.plan_stale` | The `--confirm` digest is not the digest of the current plan. |

@@ -132,10 +132,14 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 		return RestoreResult{}, err
 	}
 	defer func() { _ = lock.release() }()
-	if refusals, err = restoreRefusals(ctx, request, storePath, manifest); err != nil || len(refusals) != 0 {
+	facts, err := store.InspectForRestore(ctx, storePath)
+	if err != nil {
+		return RestoreResult{}, err
+	}
+	if refusals, err = restoreRefusals(ctx, request, storePath, manifest, facts); err != nil || len(refusals) != 0 {
 		return refusedRestore(refusals), err
 	}
-	plan, err := newRestorePlan(request, storePath, manifest)
+	plan, err := newRestorePlan(request, storePath, manifest, facts)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -228,14 +232,14 @@ func releaseRefusal(manifest checkpoint.Manifest, build version.Identity) *store
 }
 
 // restoreRefusals checks preconditions 5 to 8 under the coordinator lock and
-// the unused work directory.
-func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest) ([]store.UpgradeFinding, error) {
+// the unused work directory. facts are the restore facts of the live store.
+func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
 	var refusals []store.UpgradeFinding
 	workDirectory := filepath.Join(filepath.Dir(storePath), ".restore-"+manifest.CheckpointID)
 	if _, err := os.Lstat(workDirectory); !errors.Is(err, os.ErrNotExist) {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreWorkDirectoryExists, Detail: workDirectory + " exists; it can hold the original of an earlier restore; move it away after you review it"})
 	}
-	local, err := liveStoreRefusals(ctx, request, storePath, manifest)
+	local, err := liveStoreRefusals(ctx, request, manifest, facts)
 	if err != nil {
 		return nil, err
 	}
@@ -252,13 +256,10 @@ func restoreRefusals(ctx context.Context, request RestoreRequest, storePath stri
 
 // liveStoreRefusals checks preconditions 5 and 6. The workers come from the
 // live store, or from the snapshot when the live store is not readable.
-func liveStoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest) ([]store.UpgradeFinding, error) {
-	facts, err := store.InspectForRestore(ctx, storePath)
-	if err != nil {
-		return nil, err
-	}
+func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
 	processes := facts.WorkerProcesses
 	if !facts.Readable {
+		var err error
 		if processes, err = store.ReadSnapshotWorkerProcesses(ctx, filepath.Join(request.Path, checkpoint.StoreFile)); err != nil {
 			return nil, err
 		}
@@ -284,8 +285,9 @@ func liveStoreRefusals(ctx context.Context, request RestoreRequest, storePath st
 
 // newRestorePlan returns the plan with its steps and its digest. The digest
 // covers the file plan and the size and SHA-256 of each live file, so any
-// change after the preview needs a new preview.
-func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest) (RestorePlan, error) {
+// change after the preview needs a new preview. A damaged live store gets a
+// step that says why precondition 6 is not checked.
+func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) (RestorePlan, error) {
 	files, err := checkpoint.NewRestorePlan(request.Path, manifest, storePath)
 	if err != nil {
 		return RestorePlan{}, err
@@ -294,6 +296,9 @@ func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoin
 	directory := filepath.Dir(storePath)
 	if _, err := os.Stat(directory); errors.Is(err, os.ErrNotExist) {
 		plan.Steps = append(plan.Steps, "create the missing store directory "+directory+" with mode 0700; the registration must be the one of the checkpoint")
+	}
+	if facts.Damaged {
+		plan.Steps = append(plan.Steps, "replace the damaged live store "+storePath+" without the check for newer records, because it does not open: "+facts.Unreadable)
 	}
 	journal := store.RestoreJournalPath(storePath)
 	plan.Steps = append(plan.Steps,

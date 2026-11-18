@@ -241,18 +241,40 @@ func TestRestoreCheckpointPreviewThenConfirm(t *testing.T) {
 	}
 }
 
-// TestRestoreCheckpointOfAnUnreadableLiveStore verifies that a live store
-// that cannot be read, such as a damaged one, is replaced.
-func TestRestoreCheckpointOfAnUnreadableLiveStore(t *testing.T) {
+// TestRestoreCheckpointOfADamagedLiveStore verifies that a damaged live
+// store is replaced, and that the preview says that precondition 6 is not
+// checked and why.
+func TestRestoreCheckpointOfADamagedLiveStore(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
 	if err := os.WriteFile(fixture.registration.OperationalDataPath, []byte("damaged"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	request := fixture.restoreRequest()
-	request.Confirm = preview(t, request).Digest
+	plan := preview(t, request)
+	if !slices.ContainsFunc(plan.Steps, func(step string) bool { return strings.Contains(step, "damaged") && strings.Contains(step, "not a database") }) {
+		t.Fatalf("steps = %v, want a step that names the damaged live store and why", plan.Steps)
+	}
+	request.Confirm = plan.Digest
 	if result, err := RestoreCheckpoint(context.Background(), request); err != nil || result.Outcome != RestoreOutcomeRestored {
 		t.Fatalf("confirm = %+v, %v; want restored", result, err)
+	}
+}
+
+// TestRestoreCheckpointRefusesALiveStoreThatDoesNotOpen verifies that a
+// live store that exists but does not open, and is not damaged, refuses:
+// its state is unknown evidence, so precondition 6 is not proved.
+func TestRestoreCheckpointRefusesALiveStoreThatDoesNotOpen(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	if err := os.Chmod(fixture.registration.OperationalDataPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := fixture.storeBytes(t)
+	result, err := RestoreCheckpoint(context.Background(), fixture.restoreRequest())
+	assertRestoreRefusal(t, fixture, before, result, err, RestoreNotQuiescent)
+	if !strings.HasPrefix(result.Refusals[0].Detail, "store.unreadable: ") {
+		t.Fatalf("refusal = %+v, want store.unreadable", result.Refusals[0])
 	}
 }
 
