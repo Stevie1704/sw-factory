@@ -27,6 +27,8 @@ const (
 	LockHolderStoreMigration LockHolder = "store_migration"
 	// LockHolderReset is a confirmed factory reset.
 	LockHolderReset LockHolder = "reset"
+	// LockHolderCheckpoint is factory checkpoint create.
+	LockHolderCheckpoint LockHolder = "checkpoint"
 )
 
 // lockRecord is the content of the lock file: one JSON record with the

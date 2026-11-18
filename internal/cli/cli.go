@@ -74,6 +74,7 @@ var commandTable = []commandDefinition{
 	{name: "cleanup", handler: runCleanup},
 	{name: "reset", handler: runReset},
 	{name: "upgrade", handler: runUpgrade},
+	{name: "checkpoint", handler: runCheckpoint},
 }
 
 // Run dispatches the requested CLI command and returns its exit status.

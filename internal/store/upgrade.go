@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -142,8 +141,10 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 }
 
 // readActiveWork reads the facts that decide whether the store passes the
-// migration gate.
-func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeInspection) error {
+// migration gate. It reads through any Querier, so the same facts serve the
+// read-only upgrade inspection and the full-quiescence check under the
+// snapshot write lock.
+func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeInspection) error {
 	rows, err := database.QueryContext(ctx, "SELECT id FROM operational_runs WHERE status NOT IN (?, ?, ?) ORDER BY id", StatusComplete, StatusCancelled, StatusFailed)
 	if err != nil {
 		return fmt.Errorf("read active runs: %w", err)

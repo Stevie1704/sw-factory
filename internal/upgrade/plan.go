@@ -131,7 +131,7 @@ const LockHolderCoordinator = "coordinator"
 // holder recorded it.
 type LockObservation struct {
 	Held bool
-	// Holder is coordinator, store_migration, or reset.
+	// Holder is coordinator, store_migration, reset, or checkpoint.
 	Holder   string
 	Version  string
 	Revision string
