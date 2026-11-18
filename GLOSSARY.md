@@ -475,6 +475,15 @@ factory prompt version, frozen repository role-craft source and SHA-256 identity
 when configured, and native session identifier when known.
 _Avoid_: Process transcript
 
+**Launch rollback**:
+The close of an invocation launch that failed before a native session or a
+structured report made it recoverable. The invocation stays active and a
+`launch_rollback` pending effect stays journaled until the worker stop
+succeeds; only then does the invocation become terminal, and reconcile replays
+the effect after a crash. It changes no operational store file and is never a
+checkpoint restore.
+_Avoid_: Restore, undo, launch revert
+
 **Harness**:
 A configured coding tool, such as Codex, Claude Code, or Copilot CLI, launched
 through the headless harness seam with a role-specific prompt and native resume
@@ -644,7 +653,8 @@ maintenance checkpoint of the same host, registration, and release. It
 refuses unless every precondition is proved, including that no known external
 object changed and no unknown factory-owned object exists. The confirm binds
 the digest of the previewed plan. The original store stays in the restore
-work directory until the operator removes it.
+work directory until the operator removes it. It is not a launch rollback,
+which only closes one failed invocation launch.
 _Avoid_: Rollback, recovery, copy back
 
 **Restore journal**:
