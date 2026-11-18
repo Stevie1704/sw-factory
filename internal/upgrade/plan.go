@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/onboarding"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -192,6 +193,10 @@ type Observation struct {
 	// registration; its evidence and commands are then not used.
 	OnboardingPlanForeign string
 	Onboarding            []onboarding.StepStatus
+	// Checkpoint is the newest verified checkpoint of this registration and
+	// target release in the directory that --checkpoints named, or nil when
+	// none was named or none matches.
+	Checkpoint *checkpoint.Listed
 }
 
 // ComponentStatus is the state of one component.
@@ -255,6 +260,10 @@ type Plan struct {
 	Operations     []Operation       `json:"operations"`
 	Verification   []Verification    `json:"verification"`
 	RecoveryLimits []string          `json:"recovery_limits"`
+	// Checkpoint is the newest matching maintenance checkpoint, or null. It
+	// is optional guidance: no operation depends on it (see the maintenance
+	// guide).
+	Checkpoint *checkpoint.Listed `json:"checkpoint"`
 }
 
 // RecoveryLimits states what an upgrade cannot undo. ADR 0032 owns the
@@ -284,6 +293,7 @@ func Build(observation Observation) Plan {
 		Operations:     operations,
 		Verification:   planner.verification(),
 		RecoveryLimits: RecoveryLimits,
+		Checkpoint:     observation.Checkpoint,
 	}
 	if plan.Blockers == nil {
 		plan.Blockers = []Blocker{}
