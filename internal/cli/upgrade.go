@@ -185,8 +185,10 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources s
 	if err != nil {
 		observation.StoreProblem = err.Error()
 	}
-	if observation.CoordinatorRunning, err = factory.CoordinatorLockHeld(registration); err != nil {
-		observation.CoordinatorProblem = err.Error()
+	if record, err := factory.ObserveCoordinatorLock(registration); err != nil {
+		observation.Lock.Problem = err.Error()
+	} else {
+		observation.Lock = upgrade.LockObservation{Held: record.Held, Holder: string(record.Holder), Version: record.Version, Revision: record.Revision}
 	}
 	images := upgradeImagesForCLI()
 	policy := observePolicy(registration, &observation)

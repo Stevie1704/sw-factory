@@ -46,8 +46,13 @@ func upgradedAndRunning() upgrade.Observation {
 	observation.Store.SchemaVersion = store.CurrentSchemaVersion
 	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
 	observation.Onboarding = verifiedOnboarding()
-	observation.CoordinatorRunning = true
+	observation.Lock = targetCoordinator()
 	return observation
+}
+
+// targetCoordinator is the lock record of a coordinator of the target.
+func targetCoordinator() upgrade.LockObservation {
+	return upgrade.LockObservation{Held: true, Holder: "coordinator", Version: targetRelease, Revision: "abc123"}
 }
 
 // verifiedOnboarding is an onboarding status whose evidence all matches the
@@ -196,9 +201,17 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 		"newer schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion + 1 }, "store.schema_newer"},
 		"schema too old":     {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.MinimumUpgradeSchemaVersion - 1 }, "store.schema_unsupported"},
 		"missing base image": {func(o *upgrade.Observation) { o.BaseImage.Present = false }, "worker.base_image_missing"},
-		"live coordinator":   {func(o *upgrade.Observation) { o.CoordinatorRunning = true }, "coordinator.running"},
+		"previous coordinator": {func(o *upgrade.Observation) {
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
+		}, "coordinator.worker_mismatch"},
+		"coordinator without identity": {func(o *upgrade.Observation) { o.Lock = upgrade.LockObservation{Held: true} }, "coordinator.worker_mismatch"},
+		"target coordinator too early": {func(o *upgrade.Observation) { o.Lock = targetCoordinator() }, "coordinator.running"},
+		"store migration holds the lock": {func(o *upgrade.Observation) {
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "store_migration", Version: targetRelease, Revision: "abc123"}
+		}, "maintenance.running"},
 		"old coordinator with new worker": {func(o *upgrade.Observation) {
-			o.CoordinatorRunning, o.Worker.Release = true, targetRelease
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
+			o.Worker.Release = targetRelease
 		}, "coordinator.worker_mismatch"},
 		"no registration": {func(o *upgrade.Observation) { o.Registered = false; o.RegistrationProblem = "no host configuration" }, "registration.missing"},
 	} {
@@ -224,7 +237,7 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 // migration is the supported continuation.
 func TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls(t *testing.T) {
 	observation := upgradedAndRunning()
-	observation.CoordinatorRunning = false
+	observation.Lock = upgrade.LockObservation{}
 	observation.Store.SchemaVersion = store.CurrentSchemaVersion - 1
 	observation.Onboarding = withStep(verifiedOnboarding(), onboarding.StepDoctor, onboarding.StatePending, "run doctor")
 	plan := upgrade.Build(observation)
@@ -244,7 +257,7 @@ func TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls(t *testing.T) {
 // smoke of the new worker asks only for the missing paid calls.
 func TestBuildReportsPartialSmokeAsIncomplete(t *testing.T) {
 	observation := upgradedAndRunning()
-	observation.CoordinatorRunning = false
+	observation.Lock = upgrade.LockObservation{}
 	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd", "review"}, Verified: []string{"tdd"}, Missing: []string{"review"}}}
 	observation.Onboarding = withStep(verifiedOnboarding(), onboarding.StepSkillSmoke, onboarding.StatePending, "run these paid smoke calls: MANDATORY_SKILLS=review")
 	plan := upgrade.Build(observation)
@@ -377,7 +390,7 @@ func TestBuildAdvancesOnPreparedResourcesAlone(t *testing.T) {
 // reused nor named in a command.
 func TestBuildRefusesAnOnboardingPlanOfAnotherRegistration(t *testing.T) {
 	observation := upgradedAndRunning()
-	observation.CoordinatorRunning = false
+	observation.Lock = upgrade.LockObservation{}
 	observation.Onboarding = nil
 	observation.OnboardingPlanForeign = "the onboarding plan uses the host configuration /other/config.yaml"
 	plan := upgrade.Build(observation)
@@ -398,5 +411,34 @@ func TestBuildMarksPlanWritesAsLocalMutations(t *testing.T) {
 		if step := operation(t, plan, id); step.Effect != "local_mutation" {
 			t.Fatalf("%s effect = %s, want local_mutation", id, step.Effect)
 		}
+	}
+}
+
+// TestBuildVerifiesTheObservedCoordinatorIdentity verifies that only a
+// coordinator of the target release completes the upgrade: a lock that a
+// store migration holds, or a coordinator of another release, does not.
+func TestBuildVerifiesTheObservedCoordinatorIdentity(t *testing.T) {
+	for name, test := range map[string]struct {
+		lock upgrade.LockObservation
+		code string
+	}{
+		"store migration":  {upgrade.LockObservation{Held: true, Holder: "store_migration", Version: targetRelease, Revision: "abc123"}, "maintenance.running"},
+		"reset":            {upgrade.LockObservation{Held: true, Holder: "reset", Version: targetRelease, Revision: "abc123"}, "maintenance.running"},
+		"previous release": {upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}, "coordinator.worker_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := upgradedAndRunning()
+			observation.Lock = test.lock
+			plan := upgrade.Build(observation)
+			blocker(t, plan, test.code)
+			if plan.Result == upgrade.ResultComplete || operation(t, plan, upgrade.OperationStartCoordinator).State == upgrade.OperationDone {
+				t.Fatalf("plan = %s, want the upgrade not complete", plan.Result)
+			}
+			for _, check := range plan.Verification {
+				if check.Code == "supervisor.running" && check.Satisfied {
+					t.Fatal("supervisor.running is satisfied by a lock that no target coordinator holds")
+				}
+			}
+		})
 	}
 }

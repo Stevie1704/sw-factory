@@ -113,7 +113,7 @@ func (s *Service) Start(ctx context.Context, eventSinks ...EventSink) error {
 	if err != nil {
 		return err
 	}
-	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration))
+	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderCoordinator)
 	if err != nil {
 		return err
 	}

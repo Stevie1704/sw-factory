@@ -124,6 +124,9 @@ func (p planner) blockers() []Blocker {
 	}
 	var blockers []Blocker
 	blockers = append(blockers, p.storeBlockers()...)
+	if coordinator := p.coordinatorBlocker(); coordinator != nil {
+		blockers = append(blockers, *coordinator)
+	}
 	if !p.laterOperationsDone() {
 		blockers = append(blockers, p.activityBlockers()...)
 	}
@@ -169,14 +172,11 @@ func (p planner) storeBlockers() []Blocker {
 	return nil
 }
 
-// activityBlockers lists the live coordinator and the active work. Active
-// work is finished with the binary that can read the store schema.
+// activityBlockers lists the active work that fails the migration gate.
+// Active work is finished with the binary that can read the store schema.
 func (p planner) activityBlockers() []Blocker {
 	o := p.observation
 	var blockers []Blocker
-	if coordinator := p.coordinatorBlocker(); coordinator != nil {
-		blockers = append(blockers, *coordinator)
-	}
 	if !o.Store.Supported() || o.Store.InterruptedWrite {
 		return blockers
 	}
@@ -194,24 +194,37 @@ func (p planner) activityBlockers() []Blocker {
 	return blockers
 }
 
-// coordinatorBlocker returns the blocker of a live or unobservable
-// coordinator, or nil. A live coordinator started before the upgrade keeps
-// the previous release; when the worker or the store already belongs to the
-// target, the two releases are combined, which is a mismatch.
+// coordinatorBlocker returns the blocker of the process that holds the
+// coordinator lock, or nil. It uses the identity that the holder recorded:
+// a store migration or a reset is maintenance, a coordinator of another
+// release (or of a previous release that records no identity) mismatches
+// the target worker and store, and a target coordinator is a blocker only
+// before the upgrade is done.
 func (p planner) coordinatorBlocker() *Blocker {
-	o := p.observation
+	lock := p.observation.Lock
 	stop := "stop it with Ctrl-C in its terminal, or run factory stop " + p.configFlag() + " with the binary that started it"
 	switch {
-	case o.CoordinatorProblem != "":
-		return &Blocker{Code: "coordinator.unobserved", Detail: o.CoordinatorProblem, Action: "repair the access to the coordinator lock directory, then plan again"}
-	case !o.CoordinatorRunning:
+	case lock.Problem != "":
+		return &Blocker{Code: "coordinator.unobserved", Detail: lock.Problem, Action: "repair the access to the coordinator lock directory, then plan again"}
+	case !lock.Held:
 		return nil
-	case p.states[ComponentWorker] == StateNew || p.states[ComponentStore] == StateNew:
-		return &Blocker{Code: "coordinator.worker_mismatch", Detail: "a live coordinator started before the upgrade completed runs with a worker or store of the target release",
-			Action: stop + "; start the target coordinator only after the doctor operation"}
-	default:
-		return &Blocker{Code: "coordinator.running", Detail: "a live coordinator keeps its own release and would combine it with a worker or store of another release", Action: stop}
+	case lock.Holder != "" && lock.Holder != LockHolderCoordinator:
+		return &Blocker{Code: "maintenance.running", Detail: "the repository lock is held by " + lock.Holder + " of release " + lock.Version,
+			Action: "wait until that command ends, then plan again"}
+	case !p.targetCoordinator():
+		return &Blocker{Code: "coordinator.worker_mismatch", Detail: fmt.Sprintf("a coordinator of release %q (revision %q) runs; the target worker and store need %s (revision %s)", lock.Version, lock.Revision, p.observation.Target.Version, p.observation.Target.Revision),
+			Action: stop + "; start the target coordinator only at start_coordinator"}
+	case !p.laterOperationsDone():
+		return &Blocker{Code: "coordinator.running", Detail: "a coordinator of the target runs before the upgrade is done", Action: stop}
 	}
+	return nil
+}
+
+// targetCoordinator reports whether the lock holder is a coordinator of the
+// target build.
+func (p planner) targetCoordinator() bool {
+	lock, target := p.observation.Lock, p.observation.Target
+	return lock.Held && lock.Holder == LockHolderCoordinator && lock.Version == target.Version && lock.Revision == target.Revision
 }
 
 // storeOwner names the binary that reads the current store schema. Before
@@ -244,9 +257,7 @@ func (p planner) validateCommand() string {
 	return p.command() + " config validate --file " + onboarding.Quote(p.observation.RepositoryPath+"/factory.yaml") + " --json"
 }
 
-// verification lists the checks of the final state. The plan cannot read
-// the release of a running coordinator, so supervisor.running proves only
-// that a coordinator runs after every other check holds.
+// verification lists the checks of the final state.
 func (p planner) verification() []Verification {
 	o := p.observation
 	return []Verification{
@@ -256,6 +267,6 @@ func (p planner) verification() []Verification {
 		{Code: "smoke.complete", Description: "every required skill has a smoke record for the pinned digest", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.proved[OperationSkillSmoke]},
 		{Code: "store.ready", Description: fmt.Sprintf("the operational store has schema %d", store.CurrentSchemaVersion), Command: p.command() + " doctor " + p.configFlag() + " --json", Satisfied: p.proved[OperationMigrateStore]},
 		{Code: "doctor.ready", Description: "the onboarding plan records a passed doctor of the target release", Command: p.command() + " onboard status --plan " + p.planFile() + " --json", Satisfied: p.proved[OperationDoctor]},
-		{Code: "supervisor.running", Description: "a coordinator runs in the foreground after every other check holds; the plan cannot read its release, so start it with the target binary", Command: p.command() + " status " + p.configFlag() + " --json", Satisfied: o.CoordinatorRunning && p.laterOperationsDone()},
+		{Code: "supervisor.running", Description: "the repository lock is held by a coordinator that records the target release and revision, after every other check holds", Command: p.command() + " status " + p.configFlag() + " --json", Satisfied: p.targetCoordinator() && p.laterOperationsDone()},
 	}
 }

@@ -2,6 +2,7 @@ package factory
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,7 +15,39 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/version"
 )
+
+// LockHolder names the kind of command that holds the coordinator lock.
+type LockHolder string
+
+const (
+	// LockHolderCoordinator is a polling coordinator started by factory start.
+	LockHolderCoordinator LockHolder = "coordinator"
+	// LockHolderStoreMigration is factory upgrade migrate-store.
+	LockHolderStoreMigration LockHolder = "store_migration"
+	// LockHolderReset is a confirmed factory reset.
+	LockHolderReset LockHolder = "reset"
+)
+
+// lockIdentity is the second line of the lock record: what holds the lock
+// and the build that runs it. A previous release writes only the PID line.
+type lockIdentity struct {
+	Holder   LockHolder `json:"holder"`
+	Version  string     `json:"version"`
+	Revision string     `json:"revision"`
+}
+
+// CoordinatorLockRecord is the observed state of one coordinator lock.
+type CoordinatorLockRecord struct {
+	// Held reports that a live process holds the lock.
+	Held bool
+	// Holder, Version, and Revision identify the holder; they are empty for
+	// a record of a previous release.
+	Holder   LockHolder
+	Version  string
+	Revision string
+}
 
 // ErrCoordinatorAlreadyRunning reports that another process owns the
 // repository's host lock.
@@ -55,8 +88,9 @@ func coordinatorLockPath(registration config.RepositoryRegistration) string {
 }
 
 // acquireCoordinatorLock takes a non-blocking advisory lock and records the
-// owning PID for a separate factory stop command to signal.
-func acquireCoordinatorLock(path string) (*coordinatorLock, error) {
+// owning PID for a separate factory stop command to signal, and the holder
+// identity for an upgrade plan to observe.
+func acquireCoordinatorLock(path string, holder LockHolder) (*coordinatorLock, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("coordinator lock path is required")
 	}
@@ -82,7 +116,7 @@ func acquireCoordinatorLock(path string) (*coordinatorLock, error) {
 		_ = releaseCoordinatorFile(file)
 		return nil, fmt.Errorf("seek coordinator lock owner: %w", err)
 	}
-	if _, err := io.WriteString(file, strconv.Itoa(os.Getpid())+"\n"); err != nil {
+	if _, err := io.WriteString(file, lockRecord(holder)); err != nil {
 		_ = releaseCoordinatorFile(file)
 		return nil, fmt.Errorf("write coordinator lock owner: %w", err)
 	}
@@ -91,6 +125,65 @@ func acquireCoordinatorLock(path string) (*coordinatorLock, error) {
 		return nil, fmt.Errorf("sync coordinator lock owner: %w", err)
 	}
 	return &coordinatorLock{file: file}, nil
+}
+
+// lockRecord returns the lock file content: the owner PID on the first line
+// and the holder identity as JSON on the second.
+func lockRecord(holder LockHolder) string {
+	build := version.Current()
+	identity, _ := json.Marshal(lockIdentity{Holder: holder, Version: build.Version, Revision: build.Revision})
+	return strconv.Itoa(os.Getpid()) + "\n" + string(identity) + "\n"
+}
+
+// ObserveCoordinatorLock reports, without taking or changing the lock,
+// whether a live process holds the coordinator lock of one registration and
+// what that process is.
+func ObserveCoordinatorLock(registration config.RepositoryRegistration) (CoordinatorLockRecord, error) {
+	path := coordinatorLockPath(registration)
+	held, err := coordinatorLockHeld(path)
+	if err != nil || !held {
+		return CoordinatorLockRecord{}, err
+	}
+	content, err := readLockRecord(path)
+	if err != nil {
+		return CoordinatorLockRecord{}, err
+	}
+	record := CoordinatorLockRecord{Held: true}
+	_, second, _ := strings.Cut(content, "\n")
+	var identity lockIdentity
+	if json.Unmarshal([]byte(strings.TrimSpace(second)), &identity) == nil {
+		record.Holder, record.Version, record.Revision = identity.Holder, identity.Version, identity.Revision
+	}
+	return record, nil
+}
+
+// readLockRecord reads the content of an existing lock file without taking
+// the lock.
+func readLockRecord(path string) (string, error) {
+	file, err := openPrivateLockFile(path, false)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("read coordinator lock owner: %w", err)
+	}
+	return string(data), nil
+}
+
+// lockOwnerPID reads the owner PID from the first line of a lock record.
+func lockOwnerPID(path string) (int, error) {
+	content, err := readLockRecord(path)
+	if err != nil {
+		return 0, err
+	}
+	first, _, _ := strings.Cut(content, "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(first))
+	if err != nil || pid <= 0 {
+		return 0, errors.New("coordinator lock has no valid owner PID")
+	}
+	return pid, nil
 }
 
 // release unlocks and closes one coordinator lock, retaining its path as a
@@ -124,16 +217,9 @@ func requestCoordinatorStop(path string) (StopResult, error) {
 	} else if !lockWouldBlock(err) {
 		return StopResult{}, fmt.Errorf("inspect coordinator lock: %w", err)
 	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return StopResult{}, fmt.Errorf("read coordinator lock owner: %w", err)
-	}
-	data, err := io.ReadAll(file)
+	pid, err := lockOwnerPID(path)
 	if err != nil {
-		return StopResult{}, fmt.Errorf("read coordinator lock owner: %w", err)
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return StopResult{}, errors.New("coordinator lock has no valid owner PID")
+		return StopResult{}, err
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {

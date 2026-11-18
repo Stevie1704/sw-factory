@@ -66,7 +66,7 @@ func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 	assertSchema(t, active.OperationalDataPath, store.CurrentSchemaVersion-1)
 
 	idle := migrationRegistration(t, store.StatusComplete)
-	owner, err := acquireCoordinatorLock(coordinatorLockPath(idle))
+	owner, err := acquireCoordinatorLock(coordinatorLockPath(idle), LockHolderCoordinator)
 	if err != nil {
 		t.Fatal(err)
 	}

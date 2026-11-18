@@ -124,6 +124,22 @@ type WorkerObservation struct {
 	Problem string
 }
 
+// LockHolderCoordinator is the lock holder name of a polling coordinator.
+const LockHolderCoordinator = "coordinator"
+
+// LockObservation is the observed holder of the coordinator lock, as the
+// holder recorded it.
+type LockObservation struct {
+	Held bool
+	// Holder is coordinator, store_migration, or reset; it is empty for a
+	// holder of a previous release that records no identity.
+	Holder   string
+	Version  string
+	Revision string
+	// Problem tells why the lock could not be observed.
+	Problem string
+}
+
 // ResourcesObservation is the prepared release resource directory.
 type ResourcesObservation struct {
 	// Directory is the prepared directory, or empty when none is known.
@@ -148,9 +164,9 @@ type Observation struct {
 	RepositoryPath      string
 	Store               store.UpgradeInspection
 	// StoreProblem tells why the store could not be inspected.
-	StoreProblem       string
-	CoordinatorRunning bool
-	CoordinatorProblem string
+	StoreProblem string
+	// Lock is the observed holder of the coordinator lock.
+	Lock LockObservation
 	// InstalledBinary is the factory command that PATH names, or empty.
 	InstalledBinary   string
 	InstalledIsTarget bool
@@ -429,7 +445,7 @@ func (p planner) operations() []Operation {
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
 			Command:         p.onboardingAction(onboarding.StepDoctor, p.command()+" onboard record --plan "+p.planFile()+" doctor --json"),
 			ExpectedEffects: []string{"a doctor record written to the onboarding plan file under its lock"}},
-		{ID: OperationStartCoordinator, State: provedState(o.CoordinatorRunning && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
+		{ID: OperationStartCoordinator, State: provedState(p.targetCoordinator() && p.laterOperationsDone()), Effect: doctor.EffectExternalMutation,
 			Description:     "start the coordinator of the target in the foreground and keep its terminal open; a supervised service is not supported yet",
 			Command:         p.command() + " start " + p.configFlag(),
 			ExpectedEffects: []string{"the coordinator claims eligible issues and continues runs"}},
@@ -464,7 +480,7 @@ func (p planner) quiescence() []Quiescence {
 	o := p.observation
 	readable := o.Store.Supported() && !o.Store.InterruptedWrite && o.StoreProblem == ""
 	return []Quiescence{
-		{Code: "coordinator.stopped", Description: "no coordinator holds the repository lock", Satisfied: !o.CoordinatorRunning && o.CoordinatorProblem == ""},
+		{Code: "coordinator.stopped", Description: "no process holds the repository lock", Satisfied: !o.Lock.Held && o.Lock.Problem == ""},
 		{Code: "runs.terminal", Description: "every run is complete, cancelled, or failed", Satisfied: readable && len(o.Store.ActiveRuns) == 0},
 		{Code: "invocations.inactive", Description: "no invocation is active", Satisfied: readable && o.Store.ActiveInvocations == 0},
 		{Code: "effects.empty", Description: "the pending-effect journal is empty", Satisfied: readable && o.Store.PendingEffects == 0},
