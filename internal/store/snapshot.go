@@ -64,12 +64,14 @@ type vacuumInto func(ctx context.Context, conn *sql.Conn, destination string) er
 // error, the destination does not exist. The caller holds the coordinator
 // lock, and the destination directory must be private.
 func Snapshot(ctx context.Context, source, destination string, check SnapshotCheck) (SnapshotInspection, error) {
-	return snapshot(ctx, source, destination, check, vacuumOnConnection)
+	return snapshot(ctx, source, destination, check, false, vacuumOnConnection)
 }
 
-// snapshot is Snapshot with an exchangeable VACUUM INTO step.
-func snapshot(ctx context.Context, source, destination string, check SnapshotCheck, vacuum vacuumInto) (SnapshotInspection, error) {
-	path, err := checkSnapshotSource(ctx, source)
+// snapshot is Snapshot with an exchangeable VACUUM INTO step. allowOlderSchema
+// lets the pre-migration backup copy a store that is older than this build
+// with the same online sequence; no other caller sets it.
+func snapshot(ctx context.Context, source, destination string, check SnapshotCheck, allowOlderSchema bool, vacuum vacuumInto) (SnapshotInspection, error) {
+	path, err := checkSnapshotSource(ctx, source, allowOlderSchema)
 	if err != nil {
 		return SnapshotInspection{}, err
 	}
@@ -88,9 +90,10 @@ func snapshot(ctx context.Context, source, destination string, check SnapshotChe
 	return inspection, nil
 }
 
-// checkSnapshotSource returns the absolute path of a current store, read
-// through the read-only path so an older store is never opened read-write.
-func checkSnapshotSource(ctx context.Context, source string) (string, error) {
+// checkSnapshotSource returns the absolute path of a store, read through the
+// read-only path so an older store is never opened read-write. An older schema
+// is refused unless allowOlderSchema is set; a newer one is always refused.
+func checkSnapshotSource(ctx context.Context, source string, allowOlderSchema bool) (string, error) {
 	path, err := checkExistingStoreFile(source)
 	if err != nil {
 		return "", err
@@ -109,7 +112,7 @@ func checkSnapshotSource(ctx context.Context, source string) (string, error) {
 	if version > CurrentSchemaVersion {
 		return "", &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
-	if version < CurrentSchemaVersion {
+	if version < CurrentSchemaVersion && !allowOlderSchema {
 		return "", &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	return path, nil
