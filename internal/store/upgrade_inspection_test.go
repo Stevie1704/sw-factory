@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -209,11 +210,39 @@ func TestOpenRefusesAnOlderStoreAndNamesTheMigrationEntryPoint(t *testing.T) {
 	}
 }
 
-// openMigrated migrates an older store fixture through the explicit
-// migration entry point, then opens it as every other caller does.
-func openMigrated(ctx context.Context, path string) (*store.Store, error) {
-	if _, err := store.Migrate(ctx, path); err != nil {
-		return nil, err
+// TestStoreRefusesPreBaselineSchemas verifies every opener refuses stores from
+// before the supported baseline, including interrupted initialization metadata.
+func TestStoreRefusesPreBaselineSchemas(t *testing.T) {
+	t.Parallel()
+	for _, version := range []int{0, 1, 51, 52} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			path := storeFixture(t, version)
+			for name, open := range map[string]func() error{
+				"open": func() error {
+					s, err := store.Open(t.Context(), path)
+					if s != nil {
+						_ = s.Close()
+					}
+					return err
+				},
+				"read-only": func() error {
+					s, err := store.OpenReadOnly(t.Context(), path)
+					if s != nil {
+						_ = s.Close()
+					}
+					return err
+				},
+				"migrate": func() error { _, err := store.Migrate(t.Context(), path); return err },
+			} {
+				var required *store.MigrationRequiredError
+				if err := open(); !errors.As(err, &required) || required.Version != version {
+					t.Fatalf("%s(schema %d) = %v, want MigrationRequiredError", name, version, err)
+				}
+			}
+			inspection, err := store.InspectForUpgrade(t.Context(), path)
+			if err != nil || inspection.Supported() || inspection.SchemaVersion != version || len(inspection.Backups) != 0 {
+				t.Fatalf("inspection after refusal = %+v, %v", inspection, err)
+			}
+		})
 	}
-	return store.Open(ctx, path)
 }

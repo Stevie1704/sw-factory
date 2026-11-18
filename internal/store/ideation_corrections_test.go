@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"database/sql"
 	"errors"
 	"testing"
 
@@ -57,41 +56,5 @@ func TestCorrectionTurnLinksAnEarlierUserAnswer(t *testing.T) {
 	}
 	if len(history.Turns) != 3 || history.Turns[2].Corrects != "turn-a" || history.Turns[0].Corrects != "" {
 		t.Fatalf("turns = %#v, want turn-c linked to turn-a", history.Turns)
-	}
-}
-
-// TestSchema46MigrationAddsTheCorrectionLink verifies that a store at schema
-// 45 keeps its turns and gains an empty correction link.
-func TestSchema46MigrationAddsTheCorrectionLink(t *testing.T) {
-	t.Parallel()
-
-	opened, path := openIdeationStoreForTest(t)
-	session := createIdeationSessionForTest(t, opened, "session-1")
-	appendUserTurnForTest(t, opened, session, "turn-a", "Only admins onboard.")
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), "ALTER TABLE ideation_turns DROP COLUMN corrects; UPDATE schema_metadata SET version = 45 WHERE singleton = 1"); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	history, err := migrated.IdeationHistory(t.Context(), "session-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated.SchemaVersion() != store.CurrentSchemaVersion || len(history.Turns) != 1 || history.Turns[0].Corrects != "" {
-		t.Fatalf("schema %d, turns %#v; want the current schema and the kept turn", migrated.SchemaVersion(), history.Turns)
 	}
 }

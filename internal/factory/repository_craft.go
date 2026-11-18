@@ -233,8 +233,8 @@ func craftMetadataForInvocation(document *RepositoryCraftDocument) (string, stri
 }
 
 // validatePersistedRepositoryCraft verifies the invocation packet's recorded
-// craft identity before recovery can rebuild a prompt. Legacy packets without
-// repository craft remain compatible and skip this check.
+// craft identity before recovery can rebuild a prompt. Embedded craft has no
+// repository document to verify.
 func validatePersistedRepositoryCraft(run store.Run, invocation store.Invocation) error {
 	packet, err := decodeSpecificationPacket(run.SpecificationPacket)
 	if err != nil {
@@ -250,9 +250,6 @@ func validatePersistedRepositoryCraft(run store.Run, invocation store.Invocation
 	persisted, err := decodePersistedInvocationPacket(data)
 	if err != nil {
 		return fmt.Errorf("decode persisted invocation packet for repository craft verification: %w", err)
-	}
-	if persisted.SchemaVersion < 9 {
-		return fmt.Errorf("persisted invocation packet schema version %d has no repository craft identity", persisted.SchemaVersion)
 	}
 	_, err = validateInvocationCraftIdentity(packet, persisted, invocation)
 	return err

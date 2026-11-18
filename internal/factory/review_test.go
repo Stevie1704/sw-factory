@@ -66,7 +66,7 @@ func TestSpecificationReviewUsesAnImmutablePacketAndRoutesAdvisories(t *testing.
 	}
 	diff := fixture.worktree.diff
 	digest := sha256.Sum256([]byte(diff))
-	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) || packet.ReviewContext.CurrentDiff != "" || packet.ReviewContext.OmittedDiffBytes != 0 || packet.ReviewContext.ChangedPathsCommand != "" || packet.ReviewContext.DiffPathCommand != "" || packet.ReviewContext.ImplementationHandoff != nil || packet.ReviewContext.TestHandoff != nil || len(packet.ReviewContext.ProtectedTestPaths) != 0 || packet.ReviewContext.TestExemption != nil {
+	if packet.ReviewContext == nil || packet.ReviewContext.CheckpointSHA != reviewCheckpoint || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) || packet.ReviewContext.TestExemption != nil {
 		t.Fatalf("review context = %#v, want artifact identity without historical or implementation/test context", packet.ReviewContext)
 	}
 	artifactPath := filepath.Join(launch.Invocation.InvocationDirectory, "review.diff")
@@ -159,7 +159,7 @@ func TestSpecificationReviewStreamsAnOversizedDiff(t *testing.T) {
 	}
 	diff := fixture.worktree.diff
 	digest := sha256.Sum256([]byte(diff))
-	if packet.ReviewContext == nil || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) || packet.ReviewContext.CurrentDiff != "" || packet.ReviewContext.OmittedDiffBytes != 0 || packet.ReviewContext.ChangedPathsCommand != "" || packet.ReviewContext.DiffPathCommand != "" {
+	if packet.ReviewContext == nil || packet.ReviewContext.DiffPath != prompt.WorkerReviewDiffPath || packet.ReviewContext.DiffBytes != int64(len(diff)) || packet.ReviewContext.DiffSHA256 != hex.EncodeToString(digest[:]) {
 		t.Fatalf("packet review context = %#v, want only streamed artifact metadata", packet.ReviewContext)
 	}
 	artifact, err := os.ReadFile(filepath.Join(launch.Invocation.InvocationDirectory, "review.diff"))
@@ -415,7 +415,7 @@ func TestConcurrentReviewRolesUseIndependentCheckpointSessions(t *testing.T) {
 	if err := json.Unmarshal(standardsPacketData, &standardsPacket); err != nil {
 		t.Fatalf("decode standards packet: %v", err)
 	}
-	if standardsPacket.ReviewContext == nil || standardsPacket.ReviewContext.ImplementationHandoff != nil || standardsPacket.ReviewContext.TestHandoff != nil || len(standardsPacket.ReviewContext.ProtectedTestPaths) != 0 || standardsPacket.ReviewContext.TestExemption == nil {
+	if standardsPacket.ReviewContext == nil || standardsPacket.ReviewContext.TestExemption == nil {
 		t.Fatalf("standards review context = %#v, want only deliberate exemption among upstream test signals", standardsPacket.ReviewContext)
 	}
 	if standardsPacket.TestHandoff != nil || standardsPacket.TestObjection != nil || standardsPacket.TestExemption != nil || len(standardsPacket.ProtectedTestPaths) != 0 {

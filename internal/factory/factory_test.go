@@ -214,9 +214,9 @@ func TestFactoryRefusesAnInvalidRepositoryConfigurationBeforePersistingRegistrat
 		AuthorizedUsers:     []string{"alice"},
 		OperationalDataPath: operationalPath,
 	})
-	var schemaErr *config.UnknownSchemaVersionError
+	var schemaErr *config.UnsupportedSchemaVersionError
 	if !errors.As(err, &schemaErr) {
-		t.Fatalf("error = %v, want UnknownSchemaVersionError", err)
+		t.Fatalf("error = %v, want UnsupportedSchemaVersionError", err)
 	}
 	if _, err := os.Stat(operationalPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("operational store exists after invalid registration: %v", err)

@@ -330,34 +330,6 @@ func TestCheckRepairLaunchFailurePausesForACheckRetry(t *testing.T) {
 	}
 }
 
-// TestLegacyCheckInfrastructureWaitResumesThroughGateEvaluation verifies a
-// run persisted by an older coordinator in check / waiting_for_harness is
-// recovered by resume instead of being refused as an agent launch from check.
-func TestLegacyCheckInfrastructureWaitResumesThroughGateEvaluation(t *testing.T) {
-	t.Parallel()
-	fixture := newCheckRecoveryFixture(t, "run-legacy-wait", true)
-	fixture.runtime.nextCommandErr = errors.New("worker container is not running")
-	paused, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID})
-	if err != nil {
-		t.Fatalf("CreateDraftPullRequest() fixture error = %v", err)
-	}
-	legacy := paused.Run
-	legacy.Status = store.StatusWaitingForHarness
-	legacy.LifecycleReason = "check repair waiting for infrastructure: setup execution failed: worker container is not running"
-	if err := fixture.runStore.SaveRun(context.Background(), legacy); err != nil {
-		t.Fatalf("save legacy wait: %v", err)
-	}
-
-	resumed, err := fixture.service.Resume(context.Background(), factory.ResumeRequest{RunID: fixture.run.ID})
-
-	if err != nil {
-		t.Fatalf("Resume() error = %v", err)
-	}
-	if resumed.Run.Stage != store.StageCheck || resumed.Run.Status != store.StatusActive || resumed.Run.CheckRepairAttempts != 0 || len(fixture.harness.resumes) != 0 {
-		t.Fatalf("Resume() = %#v, want active check without a repair or agent launch", resumed)
-	}
-}
-
 // assertCheckInfrastructurePause verifies the run is in the recoverable
 // check-infrastructure pause and has not spent a repair attempt.
 func assertCheckInfrastructurePause(t *testing.T, run store.Run) {

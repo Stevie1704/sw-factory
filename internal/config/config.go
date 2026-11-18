@@ -34,7 +34,7 @@ type HostConfig struct {
 
 // RepositoryRegistration selects the host-owned repository identity and adapters.
 type RepositoryRegistration struct {
-	// Tracker selects the work tracker independently; omission retains legacy behavior.
+	// Tracker selects the work tracker independently; omission follows the code host.
 	Tracker Provider `yaml:"tracker,omitempty"`
 	// CodeHost selects the PR/status host; omission derives it from existing metadata.
 	CodeHost Provider `yaml:"code_host,omitempty"`
@@ -369,9 +369,9 @@ const (
 	HarnessCopilot Harness = "copilot"
 )
 
-// legacyHarnessOverrideTargets are the harnesses an allowed harness override
-// reached before the repository could name its override targets.
-var legacyHarnessOverrideTargets = []Harness{HarnessCodex, HarnessClaude}
+// defaultHarnessOverrideTargets keep omitted target lists narrow when new
+// harness adapters are added (ADR 0027).
+var defaultHarnessOverrideTargets = []Harness{HarnessCodex, HarnessClaude}
 
 // harnessReasoningEfforts holds the closed effort value set of each harness
 // whose CLI rejects other values. Codex has no closed set.
@@ -444,7 +444,7 @@ func joinAlternatives(values []string) string {
 // An omitted override_harnesses list keeps the original Codex and Claude set.
 func (c RepositoryConfig) HarnessOverrideTargets() []Harness {
 	if c.OverrideHarnesses == nil {
-		return append([]Harness(nil), legacyHarnessOverrideTargets...)
+		return append([]Harness(nil), defaultHarnessOverrideTargets...)
 	}
 	return append([]Harness(nil), c.OverrideHarnesses...)
 }
@@ -495,33 +495,26 @@ func (e *PolicyError) Error() string {
 	return fmt.Sprintf("repository policy rejected: %s: %s", e.Field, e.Message)
 }
 
-// RepositoryPolicyError is the descriptive compatibility name for PolicyError.
-type RepositoryPolicyError = PolicyError
-
-type UnknownSchemaVersionError struct {
+// UnsupportedSchemaVersionError refuses a configuration version outside the
+// single supported host or repository schema, whether newer or older.
+type UnsupportedSchemaVersionError struct {
 	Kind      string
 	Field     string
 	Version   int
 	Supported int
 }
 
-// PreviousHostSchemaError refuses the deliberate drained-run migration from
-// a schema-one local-UI registration before decoding or mutating its state.
-type PreviousHostSchemaError struct {
-	Version int
-}
-
-// Error gives the complete safe upgrade sequence for a previous registration.
-func (e *PreviousHostSchemaError) Error() string {
-	return fmt.Sprintf("host configuration schema_version %d requires a drained upgrade: finish or cancel every non-terminal run using the previous binary, stop the coordinator, then re-register with this binary", e.Version)
-}
-
-func (e *UnknownSchemaVersionError) Error() string {
+// Error identifies the unsupported version and the supported schema.
+func (e *UnsupportedSchemaVersionError) Error() string {
 	field := e.Field
 	if field == "" {
 		field = "schema_version"
 	}
-	return fmt.Sprintf("%s configuration invalid: %s %d is newer than supported version %d", e.Kind, field, e.Version, e.Supported)
+	relation := "newer"
+	if e.Version < e.Supported {
+		relation = "older"
+	}
+	return fmt.Sprintf("%s configuration invalid: %s %d is %s than supported version %d", e.Kind, field, e.Version, relation, e.Supported)
 }
 
 type ConfigFileError struct {
@@ -571,8 +564,8 @@ func LoadHost(path string) (HostConfig, error) {
 	if err != nil {
 		return HostConfig{}, err
 	}
-	if version > 0 && version < CurrentHostSchemaVersion {
-		return HostConfig{}, &PreviousHostSchemaError{Version: version}
+	if err := validateSchema("host", version, CurrentHostSchemaVersion); err != nil {
+		return HostConfig{}, err
 	}
 	var config HostConfig
 	if err := loadYAML(path, &config); err != nil {
@@ -594,7 +587,7 @@ func LoadRepository(path string) (RepositoryConfig, error) {
 		return RepositoryConfig{}, err
 	}
 	if version > CurrentRepositorySchemaVersion {
-		return RepositoryConfig{}, &UnknownSchemaVersionError{Kind: "repository", Field: "schema_version", Version: version, Supported: CurrentRepositorySchemaVersion}
+		return RepositoryConfig{}, &UnsupportedSchemaVersionError{Kind: "repository", Field: "schema_version", Version: version, Supported: CurrentRepositorySchemaVersion}
 	}
 	if err := rejectFactoryOwnedWorkflowFields(path); err != nil {
 		return RepositoryConfig{}, err
@@ -664,9 +657,6 @@ func CreateHost(path string) (HostConfig, error) {
 
 // ValidateHost validates a host configuration, including its schema version and repository registrations.
 func ValidateHost(config HostConfig) error {
-	if config.SchemaVersion > 0 && config.SchemaVersion < CurrentHostSchemaVersion {
-		return &PreviousHostSchemaError{Version: config.SchemaVersion}
-	}
 	if err := validateSchema("host", config.SchemaVersion, CurrentHostSchemaVersion); err != nil {
 		return err
 	}
@@ -991,10 +981,10 @@ func validateTestPolicyPaths(field string, values []string) error {
 	return nil
 }
 
-// validateLegacyProvider requires exactly one tracker and code-host identity: the
+// validateRepositoryIdentity requires exactly one tracker and code-host identity: the
 // GitHub owner and repository, or the Azure DevOps organization, project, and
 // repository.
-func validateLegacyProvider(prefix string, repository RepositoryRegistration) error {
+func validateRepositoryIdentity(prefix string, repository RepositoryRegistration) error {
 	if repository.AzureDevOps.IsZero() {
 		if strings.TrimSpace(repository.GitHub.Owner) == "" {
 			return validation(prefix+".github.owner", "is required")
@@ -1176,8 +1166,8 @@ func validateSchema(kind string, version, supported int) error {
 	if version == 0 {
 		return validation("schema_version", "is required")
 	}
-	if version > supported {
-		return &UnknownSchemaVersionError{Kind: kind, Field: "schema_version", Version: version, Supported: supported}
+	if version > 0 && version != supported {
+		return &UnsupportedSchemaVersionError{Kind: kind, Field: "schema_version", Version: version, Supported: supported}
 	}
 	if version < 1 {
 		return validation("schema_version", "must be positive")
@@ -1185,8 +1175,8 @@ func validateSchema(kind string, version, supported int) error {
 	return nil
 }
 
-// loadSchemaVersion reads only the common version field so obsolete host
-// schemas fail with migration guidance before strict decoding sees retired keys.
+// loadSchemaVersion reads the version before strict decoding so unsupported
+// configurations are refused without interpreting their fields.
 func loadSchemaVersion(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

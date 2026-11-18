@@ -150,7 +150,7 @@ func TestStatusCommentPublishesTheUnbudgetedHumanRepair(t *testing.T) {
 		ID:                 "run-human",
 		ReviewRepairBudget: 2,
 		ReviewRepairPacket: &store.ReviewRepairPacket{
-			Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001",
+			Version: 1, Source: store.ReviewRepairSourceHuman, SourceEventKind: store.ReviewRepairEventPullRequestReview, SourceEventID: "4001",
 			RunID: "run-human", Budget: 2,
 		},
 	}
@@ -170,8 +170,8 @@ func TestStatusCommentPublishesTheUnbudgetedHumanRepair(t *testing.T) {
 func TestConsumesBoundedRepairRoundExcludesHumanRequestedRepair(t *testing.T) {
 	t.Parallel()
 
-	factoryPacket := &store.ReviewRepairPacket{Version: 1, Attempt: 2, Budget: 2}
-	humanPacket := &store.ReviewRepairPacket{Version: 1, Source: store.ReviewRepairSourceHuman, ReviewID: "4001", Budget: 2}
+	factoryPacket := &store.ReviewRepairPacket{Source: "factory", Version: 1, Attempt: 2, Budget: 2}
+	humanPacket := &store.ReviewRepairPacket{Version: 1, Source: store.ReviewRepairSourceHuman, SourceEventKind: store.ReviewRepairEventPullRequestReview, SourceEventID: "4001", Budget: 2}
 	tests := []struct {
 		name         string
 		reviewRepair bool
@@ -179,7 +179,7 @@ func TestConsumesBoundedRepairRoundExcludesHumanRequestedRepair(t *testing.T) {
 		want         bool
 	}{
 		{name: "factory packet on a repair launch", reviewRepair: true, packet: factoryPacket, want: true},
-		{name: "legacy packet without a source", reviewRepair: true, packet: &store.ReviewRepairPacket{Version: 1, Attempt: 1, Budget: 2}, want: true},
+
 		{name: "human packet on a repair launch", reviewRepair: true, packet: humanPacket},
 		{name: "factory packet on an ordinary launch", packet: factoryPacket},
 		{name: "no packet", reviewRepair: true},
@@ -225,8 +225,7 @@ func TestHumanReviewEligibleCoversOnlyRunsWithAPendingPullRequestDecision(t *tes
 
 // TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt proves both
 // disposition surfaces write their own provenance, and that a review-sourced
-// packet keeps mirroring the legacy review field so a coordinator built before
-// source events existed still reads it.
+// packet records the explicit event identity.
 func TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt(t *testing.T) {
 	t.Parallel()
 
@@ -238,17 +237,11 @@ func TestHumanRepairProjectionRecordsTheSurfaceThatRequestedIt(t *testing.T) {
 	if kind != store.ReviewRepairEventPullRequestReview || identity != "4001" {
 		t.Fatalf("review SourceEvent() = %q/%q, want the pull-request review provenance", kind, identity)
 	}
-	if review.ReviewRepairPacket.ReviewID != "4001" {
-		t.Fatalf("review ReviewID = %q, want the legacy field mirrored", review.ReviewRepairPacket.ReviewID)
-	}
 
 	command := humanRepairProjection(run, store.ReviewRepairEventSupervisionCommand, "21", "comment requested changes", []store.ReviewRepairFinding{finding})
 	kind, identity = command.ReviewRepairPacket.SourceEvent()
 	if kind != store.ReviewRepairEventSupervisionCommand || identity != "21" {
 		t.Fatalf("command SourceEvent() = %q/%q, want the supervision command provenance", kind, identity)
-	}
-	if command.ReviewRepairPacket.ReviewID != "" {
-		t.Fatalf("command ReviewID = %q, want the legacy review field left empty", command.ReviewRepairPacket.ReviewID)
 	}
 	if command.Stage != store.StageImplementation || command.Status != store.StatusActive {
 		t.Fatalf("command projection = %s/%s, want implementation/active", command.Stage, command.Status)

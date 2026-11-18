@@ -203,7 +203,7 @@ func describeRepositoryLoadFailure(err error) string {
 		fileError       *ConfigFileError
 		validationError *ValidationError
 		policyError     *PolicyError
-		schemaError     *UnknownSchemaVersionError
+		schemaError     *UnsupportedSchemaVersionError
 	)
 	switch {
 	case errors.As(err, &fileError):

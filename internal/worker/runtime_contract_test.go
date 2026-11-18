@@ -320,7 +320,6 @@ func TestDockerRuntimeRemovesCredentialStorageFromThePersistedRepositoryIdentity
 	repositoryPath := filepath.Join(t.TempDir(), "registered repository")
 
 	if err := runtime.RemoveCredentialStore(context.Background(), worker.RemoveCredentialStoreRequest{
-		RunID:             "run-credential-reset",
 		CredentialStoreID: repositoryPath,
 	}); err != nil {
 		t.Fatalf("RemoveCredentialStore() error = %v", err)
@@ -333,11 +332,21 @@ func TestDockerRuntimeRemovesCredentialStorageFromThePersistedRepositoryIdentity
 		t.Fatalf("credential cleanup leaked persisted identity in Docker arguments: %q", lines[0])
 	}
 	if err := runtime.RemoveCredentialStore(context.Background(), worker.RemoveCredentialStoreRequest{
-		RunID:             "run-credential-reset",
 		CredentialStoreID: repositoryPath + "\nunsafe",
 	}); err == nil {
 		t.Fatal("RemoveCredentialStore() accepted a control character")
 	}
+	for _, storeID := range []string{"", "  "} {
+		before := len(readStubLog(t, logPath))
+		err := runtime.RemoveCredentialStore(t.Context(), worker.RemoveCredentialStoreRequest{CredentialStoreID: storeID})
+		if err == nil {
+			t.Fatalf("RemoveCredentialStore(%q) accepted a missing credential identity", storeID)
+		}
+		if got := len(readStubLog(t, logPath)); got != before {
+			t.Fatalf("Docker calls = %d, want %d after refusing missing credential identity", got, before)
+		}
+	}
+
 }
 
 // TestDockerRuntimeRejectsMutableImagesAndCredentialEnvironment verifies the

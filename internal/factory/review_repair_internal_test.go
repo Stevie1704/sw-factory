@@ -167,7 +167,7 @@ func TestReviewRepairTestOwnerRequiresStructuredObjection(t *testing.T) {
 	t.Parallel()
 
 	packet := SpecificationPacket{RepositoryConfig: configForRequiredTestReviewRepair()}
-	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{Findings: []store.ReviewRepairFinding{{
+	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory", Findings: []store.ReviewRepairFinding{{
 		ReviewerRole: workflow.RoleStandardsReview,
 		Finding:      store.ReviewFinding{Location: "tests/ready_test.go:12", Claim: "the ready behavior is untested", Category: "correctness", SuggestedOwner: workflow.RoleTest},
 	}}}}
@@ -189,7 +189,7 @@ func TestReviewRepairTestOwnerRoutesOneStructuredObjectionPerCycle(t *testing.T)
 		{Finding: store.ReviewFinding{Location: "tests/merge_test.go:24", Claim: "the merge behavior is untested", SuggestedOwner: workflow.RoleTest}},
 	}
 	packet := SpecificationPacket{RepositoryConfig: configForRequiredTestReviewRepair()}
-	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{Findings: findings}}
+	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory", Findings: findings}}
 	value := report.Report{Outcome: report.OutcomeCompleted, Handoff: &report.Handoff{
 		TestObjections: []report.TestObjection{{Test: findings[0].Finding.Location, Claim: findings[0].Finding.Claim}},
 	}}
@@ -220,7 +220,7 @@ func TestReviewRepairTestOwnerAllowsAcceptedObjectionResolution(t *testing.T) {
 		},
 	}
 	packet := SpecificationPacket{RepositoryConfig: configForRequiredTestReviewRepair()}
-	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{
+	run := store.Run{ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory",
 		Findings:                     []store.ReviewRepairFinding{finding},
 		ResolvedTestOwnerFindingKeys: []string{reviewRepairTestOwnerFindingKey(finding)},
 	}}
@@ -252,7 +252,7 @@ func TestRecordReviewRepairTestOwnerResolutionTracksTheAcceptedFinding(t *testin
 		SuggestedOwner: workflow.RoleTest,
 	}}
 	run := store.Run{
-		ReviewRepairPacket: &store.ReviewRepairPacket{Findings: []store.ReviewRepairFinding{finding}},
+		ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory", Findings: []store.ReviewRepairFinding{finding}},
 		TestObjection:      &store.TestObjection{Test: "tests/ready_test.go:12", Claim: "the ready behavior is untested"},
 	}
 	if err := recordReviewRepairTestOwnerResolution(&run); err != nil {
@@ -270,7 +270,7 @@ func TestRecordReviewRepairTestOwnerResolutionIgnoresObjectionWithoutFindings(t 
 	t.Parallel()
 
 	run := store.Run{
-		ReviewRepairPacket: &store.ReviewRepairPacket{},
+		ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory"},
 		TestObjection:      &store.TestObjection{Test: "tests/ready_test.go:12", Claim: "the ready behavior is untested"},
 	}
 	if err := recordReviewRepairTestOwnerResolution(&run); err != nil {
@@ -284,7 +284,7 @@ func TestRecordReviewRepairTestOwnerResolutionRejectsUnmatchedObjection(t *testi
 	t.Parallel()
 
 	run := store.Run{
-		ReviewRepairPacket: &store.ReviewRepairPacket{Findings: []store.ReviewRepairFinding{{
+		ReviewRepairPacket: &store.ReviewRepairPacket{Source: "factory", Findings: []store.ReviewRepairFinding{{
 			Finding: store.ReviewFinding{Location: "tests/ready_test.go:12", Claim: "the ready behavior is untested", SuggestedOwner: workflow.RoleTest},
 		}}},
 		TestObjection: &store.TestObjection{Test: "tests/merge_test.go:24", Claim: "the merge behavior is untested"},
@@ -344,8 +344,8 @@ func TestBlockingReviewFindingsIgnoreUnconfiguredReviewerResults(t *testing.T) {
 	run := store.Run{
 		CheckpointSHA:       checkpoint,
 		SpecificationPacket: string(packetData),
-		SpecificationReview: &store.ReviewResult{CheckpointSHA: checkpoint},
-		StandardsReview: &store.ReviewResult{CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
+		SpecificationReview: &store.ReviewResult{Outcome: "completed", CheckpointSHA: checkpoint},
+		StandardsReview: &store.ReviewResult{Outcome: "completed", CheckpointSHA: checkpoint, Findings: []store.ReviewFinding{{
 			Claim: "unconfigured standards blocker", Severity: "blocker", Category: "standards",
 		}}},
 	}

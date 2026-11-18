@@ -54,9 +54,9 @@ func (h harnessResumeHandler) resume(ctx context.Context, runStore RunStore, inv
 	reserved.RecoveryResumeCount = targetCount
 	reserved.UpdatedAt = h.now().UTC()
 	if _, journaled := runStore.(PendingEffectStore); !journaled {
-		// Keep the compatibility behavior of older embedding stores: they do
-		// not expose a restart journal, so their historical resume boundary is
-		// the native command followed by invocation persistence.
+		// An injected store without a journal resumes the native session and
+		// then persists the invocation. Production SQLite reserves the durable
+		// effect before crossing the harness boundary.
 		session, err := runtime.ResumeHeadless(ctx, request)
 		if err != nil {
 			return invocation, fmt.Errorf("resume native harness session: %w", classifyHarnessRuntimeError(runtime, err))
@@ -184,7 +184,7 @@ func (h harnessResumeHandler) resumeManually(ctx context.Context, runStore RunSt
 	return updated, nil
 }
 
-// resumeManuallyWithoutJournal executes the compatibility path for stores
+// resumeManuallyWithoutJournal resumes through an injected invocation store
 // without a pending-effect journal.
 func (h harnessResumeHandler) resumeManuallyWithoutJournal(ctx context.Context, invocationStore InvocationStore, operation HarnessResume) (store.Invocation, error) {
 	runtime, invocation, request := operation.Runtime, operation.Invocation, operation.Request

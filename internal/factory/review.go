@@ -176,8 +176,8 @@ func reviewRoleConfigured(run store.Run, role string) bool {
 }
 
 // standardsReviewConfigured reports whether the frozen packet declares the
-// standards reviewer as a runnable role. Older packets may predate the second
-// reviewer; those packets retain the single-review compatibility path.
+// standards reviewer as a runnable role. Repositories may select a subset of
+// declared roles.
 func standardsReviewConfigured(run store.Run) bool {
 	return reviewRoleConfigured(run, workflow.RoleStandardsReview)
 }
@@ -303,9 +303,7 @@ func reviewFindingBlocksForRole(role string, finding store.ReviewFinding) bool {
 			return false
 		}
 		// The report layer requires provenance for current prompts. Recheck a
-		// present source class here because durable legacy findings predate that
-		// field, while a current heuristic must not masquerade as a documented
-		// rule.
+		// source class here so a heuristic cannot masquerade as a documented rule.
 		evidence := strings.TrimSpace(finding.Evidence)
 		if strings.HasPrefix(evidence, "source=heuristic:") {
 			return false
@@ -407,9 +405,10 @@ func reviewResultProjectionFromReport(value report.Report, checkpoint string) *s
 }
 
 // effectiveReviewOutcome returns the current disposition while treating an
-// empty outcome as the completed value used by pre-disposition store rows.
+// recorded disposition; an absent review is treated as completed by callers
+// that separately check whether a role is configured.
 func effectiveReviewOutcome(review *store.ReviewResult) string {
-	if review == nil || review.Outcome == "" {
+	if review == nil {
 		return string(report.OutcomeCompleted)
 	}
 	return review.Outcome
@@ -761,8 +760,8 @@ func (s *Service) refreshSpecificationReviewPullRequest(ctx context.Context, reg
 }
 
 // generatedReviewSectionForStore adds durable round progress to the generated
-// pull-request section while retaining the legacy projection when a focused or
-// historical store has no normalized review manifest.
+// pull-request section. An injected store without normalized review manifests
+// renders its whole-diff review projection instead.
 func generatedReviewSectionForStore(ctx context.Context, runStore RunStore, run store.Run) (string, error) {
 	partitioned, ok := runStore.(store.ReviewRoundStore)
 	if !ok {

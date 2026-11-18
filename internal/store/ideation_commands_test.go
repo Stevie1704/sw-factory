@@ -254,37 +254,3 @@ func TestCommandInboxAppendsWithoutMigratingTheStore(t *testing.T) {
 		t.Fatal("OpenCommandInbox(older schema) error = nil, want a migration refusal")
 	}
 }
-
-// TestSchema45MigrationCreatesTheCommandInbox verifies that an older store
-// gains an empty command inbox through the normal migration path.
-func TestSchema45MigrationCreatesTheCommandInbox(t *testing.T) {
-	t.Parallel()
-
-	opened, path := openIdeationStoreForTest(t)
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), "DROP TABLE ideation_commands; UPDATE schema_metadata SET version = 44 WHERE singleton = 1"); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	if migrated.SchemaVersion() != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", migrated.SchemaVersion(), store.CurrentSchemaVersion)
-	}
-	pending, err := migrated.PendingIdeationCommands(t.Context())
-	if err != nil || len(pending) != 0 {
-		t.Fatalf("pending = %#v, %v; want an empty inbox", pending, err)
-	}
-}

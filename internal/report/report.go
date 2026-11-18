@@ -401,11 +401,10 @@ type ValidationContext struct {
 	// Stage is the expected workflow stage.
 	Stage string
 	// PromptVersion identifies the factory role-body version used by the
-	// invocation; retained legacy standards prompts keep their older report
-	// contract during restart recovery.
+	// invocation.
 	PromptVersion string
 	// RoleKind is the factory-resolved report contract. Empty preserves the
-	// legacy role-name fallback for callers that validate standalone reports.
+	// role-name inference for callers that validate standalone reports.
 	RoleKind string
 	// WorktreePath is the host checkout root, when filesystem containment is checked.
 	WorktreePath string
@@ -432,7 +431,7 @@ type ValidationContext struct {
 	// the coordinator supplies it during acceptance.
 	CheckpointSHA string
 	// ReviewUnitID is the exact manifest assignment expected from a partitioned
-	// review invocation. Empty retains the historical whole-diff contract.
+	// review invocation. It is empty when the complete mounted diff is reviewed.
 	ReviewUnitID string
 	// deferTestPathPolicy defers repository-specific ownership checks until the
 	// coordinator supplies the frozen configuration during report acceptance.
@@ -1186,7 +1185,7 @@ func validateReviewHandoff(value ReviewHandoff, context ValidationContext) error
 		default:
 			return fmt.Errorf("unsupported review finding category %q", finding.Category)
 		}
-		if context.Role == "standards_review" && context.PromptVersion != "standards-review-v1" && (context.CheckpointSHA != "" || context.RepositoryGuidanceBound) {
+		if context.Role == "standards_review" && (context.CheckpointSHA != "" || context.RepositoryGuidanceBound) {
 			if err := validateStandardsFindingProvenance(index, finding, context); err != nil {
 				return err
 			}

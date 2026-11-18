@@ -97,9 +97,9 @@ func TestLoadRepositoryUnknownSchemaFailsClosed(t *testing.T) {
 	}
 
 	_, err := config.LoadRepository(path)
-	var schemaErr *config.UnknownSchemaVersionError
+	var schemaErr *config.UnsupportedSchemaVersionError
 	if !errors.As(err, &schemaErr) {
-		t.Fatalf("error = %v, want UnknownSchemaVersionError", err)
+		t.Fatalf("error = %v, want UnsupportedSchemaVersionError", err)
 	}
 	if schemaErr.Version != 99 || schemaErr.Supported != config.CurrentRepositorySchemaVersion {
 		t.Fatalf("schema error = %#v", schemaErr)
@@ -360,39 +360,22 @@ func TestNewHostConfigUsesTheCurrentSchemaVersionAndNoRepositories(t *testing.T)
 	}
 }
 
-func TestLoadHostRejectsVersionOneWithDrainedUpgradeInstructions(t *testing.T) {
+func TestLoadHostRejectsAnUnsupportedSchemaBeforeDecoding(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	contents := `schema_version: 1
-repositories:
-  - path: /work/repository
-    github:
-      owner: example
-      repository: project
-    authorized_users: [alice]
-    polling:
-      interval: 30s
-      backoff: 5m
-    cmux:
-      socket_path: /tmp/cmux.sock
-      control_workspace: factory-control
-    operational_data_path: /var/lib/factory/factory.db
-    repository_config_path: /work/repository/factory.yaml
-`
+	contents := "schema_version: 1\nunsupported_field: true\n"
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	_, err := config.LoadHost(path)
-	var upgradeErr *config.PreviousHostSchemaError
+	var upgradeErr *config.UnsupportedSchemaVersionError
 	if !errors.As(err, &upgradeErr) {
-		t.Fatalf("LoadHost() error = %v, want PreviousHostSchemaError", err)
+		t.Fatalf("LoadHost() error = %v, want UnsupportedSchemaVersionError", err)
 	}
-	for _, instruction := range []string{"finish or cancel every non-terminal run", "previous binary", "stop the coordinator", "re-register"} {
-		if !strings.Contains(err.Error(), instruction) {
-			t.Fatalf("LoadHost() error = %q, want %q", err, instruction)
-		}
+	if upgradeErr.Version != 1 || upgradeErr.Supported != config.CurrentHostSchemaVersion {
+		t.Fatalf("schema refusal = %+v", upgradeErr)
 	}
 }
 
@@ -910,10 +893,10 @@ func TestLoadRepositoryReportsAMissingFileAsAConfigFileError(t *testing.T) {
 	}
 }
 
-func TestUnknownSchemaVersionErrorMessageUsesTheProvidedKindAndField(t *testing.T) {
+func TestUnsupportedSchemaVersionErrorMessageUsesTheProvidedKindAndField(t *testing.T) {
 	t.Parallel()
 
-	err := &config.UnknownSchemaVersionError{Kind: "host", Field: "schema_version", Version: 7, Supported: 1}
+	err := &config.UnsupportedSchemaVersionError{Kind: "host", Field: "schema_version", Version: 7, Supported: 1}
 	got := err.Error()
 	if !strings.Contains(got, "host") || !strings.Contains(got, "7") || !strings.Contains(got, "1") {
 		t.Fatalf("Error() = %q, want it to mention the kind and both versions", got)

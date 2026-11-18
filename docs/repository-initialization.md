@@ -102,8 +102,8 @@ cp -R "<FACTORY_RESOURCES>/operator/skills/factory-onboarding" ~/.claude/skills/
 ~~~
 
 Factory never installs the skill itself. The skill holds no procedure, model
-list, or credential. An older copy of the skill still prepares the resources
-with the installed release and uses that release's manifest and procedure.
+list, or credential. It prepares resources with the installed release and uses
+that release's manifest and procedure.
 
 ### With an interactive launcher
 

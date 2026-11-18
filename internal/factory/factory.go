@@ -179,7 +179,7 @@ type Dependencies struct {
 	Lease          tracker.LeaseClient
 	CommitStatuses codehost.CommitStatusPublisher
 	// CodeHostReadiness diagnoses an independently configured code host. Nil
-	// preserves legacy combined-provider readiness checks.
+	// selects the combined-provider readiness checks.
 	CodeHostReadiness codehost.ReadinessChecker
 	Worktree          gitadapter.WorktreeManager
 	// GitWorkspace owns checkpoint, base-sync, push, and cleanup effects on the host.
@@ -268,7 +268,7 @@ type InitResult struct {
 
 type RegisterRequest struct {
 	// Tracker and CodeHost explicitly select independent host adapters. Empty
-	// values preserve legacy combined GitHub registration and inference.
+	// values select combined GitHub registration and inference.
 	Tracker  config.Provider
 	CodeHost config.Provider
 	// LocalOperator supplies explicit host authority provenance; Register

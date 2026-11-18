@@ -94,7 +94,7 @@ func DiagnoseRepositoryFile(path string) RepositoryDiagnosis {
 	}
 	var validationErr *ValidationError
 	var policyErr *PolicyError
-	var schemaErr *UnknownSchemaVersionError
+	var schemaErr *UnsupportedSchemaVersionError
 	var fileErr *ConfigFileError
 	switch {
 	case errors.As(err, &validationErr):

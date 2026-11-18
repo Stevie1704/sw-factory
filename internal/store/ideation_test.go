@@ -1,7 +1,6 @@
 package store_test
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -129,69 +128,6 @@ func TestIdeationSessionRejectsMissingAndDuplicateIdentities(t *testing.T) {
 	if err == nil {
 		t.Fatal("CreateIdeationSession() accepted an undeclared state")
 	}
-}
-
-// TestSchema42MigrationAddsIdeationTablesAndKeepsStoredRuns verifies that an
-// older store gains the ideation tables while its existing runs stay readable.
-func TestSchema42MigrationAddsIdeationTablesAndKeepsStoredRuns(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "data", "factory.db")
-	opened, err := store.Open(t.Context(), path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	run := store.Run{
-		ID: "run-1", RepositoryPath: "/repos/factory", IssueNumber: 7,
-		Stage: store.StageImplementation, Status: store.StatusActive, Branch: "factory/run-1",
-		Worktree: "/worktrees/run-1", Revision: 3,
-		CreatedAt: ideationNow, UpdatedAt: ideationNow,
-	}
-	if err := opened.SaveRun(t.Context(), run); err != nil {
-		t.Fatal(err)
-	}
-	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), `
-		DROP TABLE ideation_sessions;
-		DROP TABLE ideation_turns;
-		DROP TABLE ideation_brief_revisions;
-		DROP TABLE ideation_plan_revisions;
-		DROP TABLE ideation_approvals;
-		DROP TABLE ideation_publication_receipts;
-		UPDATE schema_metadata SET version = 41 WHERE singleton = 1`); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	migrated, err := openMigrated(t.Context(), path)
-	if err != nil {
-		t.Fatalf("Open() migration error = %v", err)
-	}
-	defer func() { _ = migrated.Close() }()
-	if got := migrated.SchemaVersion(); got != store.CurrentSchemaVersion {
-		t.Fatalf("SchemaVersion() = %d, want %d", got, store.CurrentSchemaVersion)
-	}
-	current, err := migrated.CurrentRun(t.Context())
-	if err != nil {
-		t.Fatalf("CurrentRun() after migration error = %v", err)
-	}
-	if current == nil || current.ID != "run-1" || current.IssueNumber != 7 || current.Revision != 3 {
-		t.Fatalf("CurrentRun() after migration = %#v, want run-1", current)
-	}
-	sessions, err := migrated.IdeationSessions(t.Context(), "/repos/factory")
-	if err != nil || len(sessions) != 0 {
-		t.Fatalf("IdeationSessions() after migration = %#v, %v; want empty", sessions, err)
-	}
-	createIdeationSessionForTest(t, migrated, "session-1")
 }
 
 // appendUserTurnForTest appends one user turn and returns the new session.

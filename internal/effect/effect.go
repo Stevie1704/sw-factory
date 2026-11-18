@@ -30,8 +30,8 @@ type PendingEffectAbandoner interface {
 }
 
 // reviewUnitResultStore persists the axis-specific result carried by a
-// partitioned review acceptance. It is optional so historical compatibility
-// stores can continue to replay whole-diff review effects.
+// partitioned review acceptance. Injected stores may omit this capability when
+// their review adapter uses the complete mounted diff.
 type reviewUnitResultStore interface {
 	SaveReviewUnitResult(context.Context, store.ReviewUnitResult) error
 }
@@ -190,7 +190,7 @@ func decodePendingEffect(pending store.PendingEffect, destination any) error {
 
 // withPendingEffect reserves one external mutation before applying it and
 // completes the reservation only after the mutation succeeds. A store without
-// the optional journal retains the legacy direct-execution behavior.
+// the optional journal applies the mutation directly.
 func withPendingEffect(ctx context.Context, runStore any, pending store.PendingEffect, applier effectApplier) error {
 	journal, ok := runStore.(PendingEffectStore)
 	if !ok {

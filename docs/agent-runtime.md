@@ -220,10 +220,10 @@ same invocation twice. Gates, reports, transitions, draft pull requests, and
 other progression paths reconcile the durable effect journal and external
 identities before they resume an interrupted run.
 
-Invocation packets use append-only schemas. Restart recovery accepts the current
-and retained historical packet versions when their required identities and
-role-specific context are present; missing optional fields remain absent. Future
-or unsupported versions pause recovery rather than guessing at their semantics.
+Restart recovery accepts only the current invocation packet schema (11) and
+current embedded role prompts. Required identities, role context, and mounted
+review artifacts are verified before recovery. Missing or unsupported versions
+pause recovery rather than guessing at their semantics.
 
 When automatic recovery is exhausted, an operator can use the explicit
 recovery commands:
@@ -569,8 +569,7 @@ reason, without consuming the budget. `factory resume` or `/factory resume`
 retries the checks: it reconciles pending effects, persists `check/active`,
 and lets progression evaluate the same checkpoint again. It never launches an
 agent from `check`, and a repeated infrastructure failure returns to the same
-pause. Runs that an older coordinator parked in `check/waiting_for_harness`
-are recognized by their lifecycle reason and retry their checks the same way.
+pause.
 
 The setup command is frozen in the specification packet. A repair can change
 repository inputs and the scripts that command invokes, but a change to the

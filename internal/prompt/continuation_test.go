@@ -20,7 +20,7 @@ func continuationRequest() prompt.Request {
 		SpecificationPacket: "## Issue 115: Replace progression action closures\n\nMake run-transition planning a pure function.",
 		RepositoryGuidance:  "### AGENTS.md\nUse the repository guidance.",
 		Continuation:        true,
-		ReviewRepair: &store.ReviewRepairPacket{
+		ReviewRepair: &store.ReviewRepairPacket{Source: "factory",
 			Version:  1,
 			RunID:    "run-continuation",
 			Attempt:  1,

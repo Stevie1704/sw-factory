@@ -64,13 +64,11 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 			return "", fmt.Errorf("validate persisted review diff: %w", err)
 		}
 	}
-	var repositoryCraft *RepositoryCraftDocument
-	if persisted.SchemaVersion >= 9 || len(packet.RepositoryConfig.RoleCraft) > 0 || invocation.PromptCraftSourcePath != "" || invocation.PromptCraftSHA256 != "" {
-		repositoryCraft, err = validateInvocationCraftIdentity(packet, persisted, invocation)
-		if err != nil {
-			return "", err
-		}
+	repositoryCraft, err := validateInvocationCraftIdentity(packet, persisted, invocation)
+	if err != nil {
+		return "", err
 	}
+
 	rebuiltSpecification, err := promptSpecification(packet)
 	if err != nil {
 		return "", err
@@ -103,9 +101,8 @@ func promptForPersistedInvocation(run store.Run, invocation store.Invocation, pa
 	})
 }
 
-// decodePersistedInvocationPacket accepts the current and retained historical
-// append-only packet shapes. Fields introduced after an older version remain at
-// their zero value, while missing, future, and unsupported versions fail closed.
+// decodePersistedInvocationPacket accepts only the current invocation packet.
+// Missing, pre-baseline, and future versions fail closed.
 func decodePersistedInvocationPacket(data []byte) (InvocationPacket, error) {
 	var persisted InvocationPacket
 	if err := json.Unmarshal(data, &persisted); err != nil {
@@ -118,9 +115,9 @@ func decodePersistedInvocationPacket(data []byte) (InvocationPacket, error) {
 }
 
 // supportedInvocationPacketVersion reports whether a packet belongs to the
-// contiguous compatibility range maintained by the current factory.
+// current packet contract.
 func supportedInvocationPacketVersion(version int) bool {
-	return version >= invocationPacketMinimumSupportedVersion && version <= invocationPacketVersion
+	return version == invocationPacketVersion
 }
 
 // validatePersistedInvocationPacket verifies that a decoded packet still
@@ -148,15 +145,11 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 	if invocation.PromptVersion != "" && persisted.PromptVersion != invocation.PromptVersion {
 		return errors.New("persisted invocation packet prompt version does not match the invocation")
 	}
-	if persisted.SchemaVersion >= 9 {
-		if persisted.PromptCraftSourcePath != invocation.PromptCraftSourcePath {
-			return &CraftSourcePathMismatchError{Role: invocation.Role, InvocationID: invocation.ID, Expected: invocation.PromptCraftSourcePath, Observed: persisted.PromptCraftSourcePath}
-		}
-		if persisted.PromptCraftSHA256 != invocation.PromptCraftSHA256 {
-			return &CraftDigestMismatchError{Role: invocation.Role, InvocationID: invocation.ID, SourcePath: invocation.PromptCraftSourcePath, Expected: invocation.PromptCraftSHA256, Observed: persisted.PromptCraftSHA256}
-		}
-	} else if invocation.PromptCraftSourcePath != "" || invocation.PromptCraftSHA256 != "" {
-		return errors.New("legacy persisted invocation packet cannot carry repository craft identity")
+	if persisted.PromptCraftSourcePath != invocation.PromptCraftSourcePath {
+		return &CraftSourcePathMismatchError{Role: invocation.Role, InvocationID: invocation.ID, Expected: invocation.PromptCraftSourcePath, Observed: persisted.PromptCraftSourcePath}
+	}
+	if persisted.PromptCraftSHA256 != invocation.PromptCraftSHA256 {
+		return &CraftDigestMismatchError{Role: invocation.Role, InvocationID: invocation.ID, SourcePath: invocation.PromptCraftSourcePath, Expected: invocation.PromptCraftSHA256, Observed: persisted.PromptCraftSHA256}
 	}
 	if persisted.TestPolicyMode != "" {
 		packet, err := decodeSpecificationPacket(run.SpecificationPacket)
@@ -170,23 +163,21 @@ func validatePersistedInvocationPacket(run store.Run, invocation store.Invocatio
 			return errors.New("persisted invocation packet route does not match the frozen specification packet route")
 		}
 	}
-	if persisted.SchemaVersion >= 7 {
-		if !sameTestObjection(persisted.TestObjection, run.TestObjection) {
-			return errors.New("persisted invocation packet test objection does not match the run")
-		}
-		if run.TestObjection != nil && (persisted.TestRevisionAttempt != run.TestRevisionAttempts || persisted.TestRevisionBudget != run.TestRevisionBudget) {
-			return errors.New("persisted invocation packet test revision state does not match the run")
-		}
+	if !sameTestObjection(persisted.TestObjection, run.TestObjection) {
+		return errors.New("persisted invocation packet test objection does not match the run")
 	}
-	if persisted.SchemaVersion >= 8 {
-		expectedReviewRepair := run.ReviewRepairPacket
-		if invocation.Role != workflow.RoleImplementation {
-			expectedReviewRepair = nil
-		}
-		if !sameReviewRepairPacket(persisted.ReviewRepair, expectedReviewRepair) {
-			return errors.New("persisted invocation packet review-repair context does not match the run")
-		}
+	if run.TestObjection != nil && (persisted.TestRevisionAttempt != run.TestRevisionAttempts || persisted.TestRevisionBudget != run.TestRevisionBudget) {
+		return errors.New("persisted invocation packet test revision state does not match the run")
 	}
+
+	expectedReviewRepair := run.ReviewRepairPacket
+	if invocation.Role != workflow.RoleImplementation {
+		expectedReviewRepair = nil
+	}
+	if !sameReviewRepairPacket(persisted.ReviewRepair, expectedReviewRepair) {
+		return errors.New("persisted invocation packet review-repair context does not match the run")
+	}
+
 	if (persisted.ReviewRoundID == "") != (persisted.ReviewUnitID == "") {
 		return errors.New("persisted invocation packet review round and unit ids must be supplied together")
 	}
@@ -291,7 +282,7 @@ func (e *credentialProjectionError) Error() string {
 	return fmt.Sprintf("%s credential projection could not be restored; restore the configured source and retry `factory auth refresh`", credentialHarnessLabel(e.Harness))
 }
 
-// Unwrap exposes the safe capture-limit cause or retains the legacy
+// Unwrap exposes the safe capture-limit cause or the
 // authentication-expired recovery classification for every other cause.
 func (e *credentialProjectionError) Unwrap() error {
 	if e == nil {
@@ -306,7 +297,7 @@ func (e *credentialProjectionError) Unwrap() error {
 // newCredentialProjectionError constructs the redacted credential recovery
 // error used at every host-source and worker-projection boundary. Only the
 // worker's safe capture-limit type crosses the coordinator boundary; every
-// other cause retains the legacy authentication-expired classification without
+// other cause uses the authentication-expired classification without
 // exposing its message or adapter details.
 func newCredentialProjectionError(harnessName string, cause error) error {
 	projection := &credentialProjectionError{Harness: credentialHarnessLabel(harnessName)}

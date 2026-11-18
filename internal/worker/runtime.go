@@ -103,7 +103,7 @@ type StartRequest struct {
 	// RunID identifies the logical workflow run.
 	RunID string
 	// WorkerID optionally selects an isolated worker for one invocation. Empty
-	// preserves the historical run-scoped worker identity.
+	// selects the run-scoped worker.
 	WorkerID string
 	// WorktreeReadOnly prevents worker processes from changing the mounted run
 	// checkout. Review invocations set it to preserve the immutable checkpoint.
@@ -314,8 +314,8 @@ type CleanupRequest struct {
 	// RunID identifies the logical run whose resources are being removed.
 	RunID string
 	// WorkerIDs identifies the exact worker containers and role-home volume
-	// namespaces to remove. An empty list retains the legacy single-worker
-	// behavior and uses RunID.
+	// namespaces to remove. An empty list selects the run-scoped worker
+	// identified by RunID.
 	WorkerIDs []string
 	// Roles identifies the role-home volumes to remove. Credential storage is
 	// deliberately not addressable through this request.
@@ -338,9 +338,6 @@ type CleanupRuntime interface {
 // RemoveCredentialStoreRequest selects one factory-managed credential volume
 // by the persisted credential-store identity that created it.
 type RemoveCredentialStoreRequest struct {
-	// RunID is the legacy fallback identity used when a worker was started
-	// before credential stores had their own identifier.
-	RunID string
 	// CredentialStoreID is the persisted identity of the credential store.
 	CredentialStoreID string
 }
@@ -440,7 +437,7 @@ func (r *DockerRuntime) Start(ctx context.Context, request StartRequest) error {
 		args = append(args, "--mount", bindMount(request.ResultPath, ResultPath, false))
 	}
 	if request.CredentialStoreID != "" {
-		args = append(args, "--mount", "type=volume,src="+credentialVolumeName(request.RunID, request.CredentialStoreID)+",dst="+CredentialPath)
+		args = append(args, "--mount", "type=volume,src="+credentialVolumeName(request.CredentialStoreID)+",dst="+CredentialPath)
 	}
 	role := request.Role
 	if strings.TrimSpace(role) == "" {
@@ -870,13 +867,13 @@ func (r *DockerRuntime) Cleanup(ctx context.Context, request CleanupRequest) err
 // already-absent volume is a successful result, keeping a partially completed
 // reset safely retryable.
 func (r *DockerRuntime) RemoveCredentialStore(ctx context.Context, request RemoveCredentialStoreRequest) error {
-	if err := validateRunID(request.RunID); err != nil {
-		return err
+	if strings.TrimSpace(request.CredentialStoreID) == "" {
+		return errors.New("credential store id is required")
 	}
 	if strings.ContainsAny(request.CredentialStoreID, "\x00\r\n") {
 		return errors.New("credential store id contains control characters")
 	}
-	volume := credentialVolumeName(request.RunID, request.CredentialStoreID)
+	volume := credentialVolumeName(request.CredentialStoreID)
 	if _, err := r.runDocker(ctx, []string{"volume", "rm", volume}); err != nil && !isDockerResourceNotFound(err) {
 		return fmt.Errorf("remove factory-managed credential storage: %w", dockerStderrDetail(err))
 	}
@@ -1453,9 +1450,9 @@ func validateStartRequest(request StartRequest) error {
 }
 
 // workerMountsPresent reports whether an existing container already has the
-// complete immutable mount set requested by the coordinator. A legacy runtime
-// inspection that contains only destinations is accepted as a compatibility
-// fallback, but Docker's structured inspection must match each source too.
+// complete immutable mount set requested by the coordinator. An injected runtime
+// may expose only destinations; Docker's structured inspection must also match
+// each mount source.
 func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 	wanted := expectedWorkerMounts(request)
 	if inspection.mountIdentities != nil {
@@ -1477,7 +1474,7 @@ func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 		return true
 	}
 	if request.WorktreeReadOnly {
-		// A destination-only legacy inspection cannot prove that the review
+		// A destination-only inspection cannot prove that the review
 		// checkout is mounted read-only. Recreate it so the safety property is
 		// established by Docker rather than inferred from incomplete evidence.
 		return false
@@ -1490,8 +1487,8 @@ func workerMountsPresent(request StartRequest, inspection Inspection) bool {
 	return true
 }
 
-// requiredInvocationMounts returns the mounts that older inspections can
-// safely compare by destination, including the managed credential projection
+// requiredInvocationMounts returns the mounts a destination-only inspection
+// can compare, including the managed credential projection
 // when the invocation requires one.
 func requiredInvocationMounts(request StartRequest) []string {
 	required := make([]string, 0, 3)
@@ -1520,7 +1517,7 @@ func expectedWorkerMounts(request StartRequest) map[string]string {
 		"/home/factory": "volume:" + roleVolumeName(workerResourceID(request.RunID, request.WorkerID), role),
 	}
 	if request.CredentialStoreID != "" {
-		wanted[CredentialPath] = "volume:" + credentialVolumeName(request.RunID, request.CredentialStoreID)
+		wanted[CredentialPath] = "volume:" + credentialVolumeName(request.CredentialStoreID)
 	}
 	if request.InvocationPath != "" {
 		wanted[InvocationPath] = "bind:" + filepath.Clean(request.InvocationPath)
@@ -1919,7 +1916,7 @@ func validateRunID(runID string) error {
 }
 
 // validateOptionalWorkerID validates an invocation-scoped worker identity
-// while allowing empty values to retain the legacy run-scoped worker.
+// while allowing an empty value to select the run-scoped worker.
 func validateOptionalWorkerID(workerID string) error {
 	if workerID == "" {
 		return nil
@@ -2111,12 +2108,9 @@ func roleVolumeName(runID, role string) string {
 // credentialVolumeName derives a persistent factory-managed credential volume
 // without exposing its coordinator-side key or the host auth path to Docker.
 // One volume holds every harness's credential copy under its own file name;
-// the historical name prefix is retained because it is part of the mount
-// contract that Resume validates against an existing worker.
-func credentialVolumeName(runID, storeID string) string {
-	if strings.TrimSpace(storeID) == "" {
-		storeID = runID
-	}
+// the volume name is part of the mount contract that Resume validates against
+// an existing worker.
+func credentialVolumeName(storeID string) string {
 	digest := sha256.Sum256([]byte(storeID))
 	return "factory-auth-codex-" + hex.EncodeToString(digest[:])[:24]
 }

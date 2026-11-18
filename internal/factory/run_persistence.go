@@ -13,7 +13,7 @@ import (
 
 // persistAgentRunState uses the coordinator's GitHub label/comment transition
 // when the claimed run has a status comment, retaining a direct-store fallback
-// for legacy runs that predate that supervision record.
+// for standalone callers without a tracker or status comment.
 func (s *Service) persistAgentRunState(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, previous, next store.Run) error {
 	checkpointChanged := previous.CheckpointSHA != "" && next.CheckpointSHA != previous.CheckpointSHA
 	if checkpointChanged {
@@ -96,13 +96,13 @@ func (s *Service) applyStateTransition(ctx context.Context, runStore RunStore, t
 	if _, journaled := runStore.(PendingEffectStore); journaled {
 		return s.journal().ApplyStateTransition(ctx, runStore, transition, next)
 	}
-	return s.applyLegacyStateTransition(ctx, runStore, transition, next)
+	return s.applyDirectStateTransition(ctx, runStore, transition, next)
 }
 
-// applyLegacyStateTransition retains the pre-journal behavior for embedders
-// that supply an older RunStore implementation. The production SQLite store
-// implements PendingEffectStore and always uses the restart-safe path.
-func (s *Service) applyLegacyStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
+// applyDirectStateTransition serves RunStore adapters without a journal.
+// Production SQLite implements PendingEffectStore and always uses the
+// restart-safe path.
+func (s *Service) applyDirectStateTransition(ctx context.Context, runStore RunStore, transition stateTransition, next store.Run) (store.Run, error) {
 	if transition.PersistBeforeEffects {
 		next.UpdatedAt = s.deps.Now().UTC()
 		if transition.CreateComment {

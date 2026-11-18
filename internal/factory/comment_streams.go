@@ -14,7 +14,7 @@ import (
 const scopedCommentPrefix = "factory-comment:v1:"
 
 // commentWatermarksPrefix versions the two-stream payload in the existing field.
-// Legacy tracker payloads and raw watermark values retain their original shape.
+// Shared-namespace trackers use raw watermark values; separate streams use JSON.
 const commentWatermarksPrefix = "factory-comment-watermarks:v1:"
 
 // separateIssueCommentStream resolves the optional adapter namespace capability.
@@ -63,7 +63,7 @@ func splitScopedCommentID(id string) (string, string, bool) {
 	return stream, string(value), true
 }
 
-// commentWatermarks reads versioned local streams while preserving legacy issue IDs.
+// commentWatermarks reads scoped streams or a shared-namespace issue watermark.
 func commentWatermarks(value string) map[string]string {
 	result := map[string]string{}
 	if strings.HasPrefix(value, commentWatermarksPrefix) {

@@ -32,8 +32,8 @@ func readinessRunWithPullRequestWriter(t *testing.T) store.Run {
 	return store.Run{
 		ID: "run-summary", Stage: store.StageReview, Status: store.StatusActive,
 		CheckpointSHA:       summaryCheckpoint,
-		SpecificationReview: &store.SpecificationReview{CheckpointSHA: summaryCheckpoint},
-		StandardsReview:     &store.StandardsReview{CheckpointSHA: summaryCheckpoint},
+		SpecificationReview: &store.SpecificationReview{Outcome: "completed", CheckpointSHA: summaryCheckpoint},
+		StandardsReview:     &store.StandardsReview{Outcome: "completed", CheckpointSHA: summaryCheckpoint},
 		SpecificationPacket: string(packetData),
 	}
 }
@@ -53,8 +53,8 @@ func TestProgressionStepRunsThePullRequestWriterBeforeReadiness(t *testing.T) {
 	unconfigured := progressionRunWithConcurrentReviews(t)
 	unconfigured.Stage = store.StageReview
 	unconfigured.CheckpointSHA = summaryCheckpoint
-	unconfigured.SpecificationReview = &store.SpecificationReview{CheckpointSHA: summaryCheckpoint}
-	unconfigured.StandardsReview = &store.StandardsReview{CheckpointSHA: summaryCheckpoint}
+	unconfigured.SpecificationReview = &store.SpecificationReview{Outcome: "completed", CheckpointSHA: summaryCheckpoint}
+	unconfigured.StandardsReview = &store.StandardsReview{Outcome: "completed", CheckpointSHA: summaryCheckpoint}
 	pending := readinessRunWithPullRequestWriter(t)
 
 	tests := map[string]struct {

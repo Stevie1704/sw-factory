@@ -82,27 +82,6 @@ type LocalExecutionAuthorization struct {
 	CreatedAt time.Time
 }
 
-// migrateLocalExecution creates exact previews and explicit authority, and
-// extends the existing inbox without changing old session-command semantics.
-func migrateLocalExecution(ctx context.Context, tx *sql.Tx) error {
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS local_execution_previews(revision INTEGER PRIMARY KEY AUTOINCREMENT,preview_id TEXT NOT NULL UNIQUE,repository_path TEXT NOT NULL,binding BLOB NOT NULL,created_at TEXT NOT NULL)`,
-		`CREATE INDEX IF NOT EXISTS local_execution_previews_by_repository ON local_execution_previews(repository_path,revision)`,
-		`CREATE TABLE IF NOT EXISTS local_execution_authorizations(sequence INTEGER PRIMARY KEY AUTOINCREMENT,request_id TEXT NOT NULL UNIQUE,preview_id TEXT NOT NULL,repository_path TEXT NOT NULL,binding BLOB NOT NULL,created_at TEXT NOT NULL)`,
-		`CREATE INDEX IF NOT EXISTS local_execution_authorizations_by_repository ON local_execution_authorizations(repository_path,created_at,request_id)`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-	for _, field := range []string{"scope", "subject_id"} {
-		if err := addCommandScopeColumn(ctx, tx, field); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // RecordLocalExecutionPreview persists an exact coordinator preview once.
 // It never creates authorization, modifies source, or changes a session.
 func (s *Store) RecordLocalExecutionPreview(ctx context.Context, preview LocalExecutionPreview) (LocalExecutionPreview, error) {
@@ -392,48 +371,6 @@ func encodeLocalExecutionBinding(binding LocalExecutionBinding) ([]byte, error) 
 		return nil, fmt.Errorf("execution evidence exceeds its byte limit")
 	}
 	return data, nil
-}
-
-// addCommandScopeColumn tolerates schema fixtures whose metadata was rolled back.
-func addCommandScopeColumn(ctx context.Context, tx *sql.Tx, field string) error {
-	rows, err := tx.QueryContext(ctx, "PRAGMA table_info(ideation_commands)")
-	if err != nil {
-		return err
-	}
-	exists := false
-	for rows.Next() {
-		var cid, notnull, pk int
-		var name, kind string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &kind, &notnull, &defaultValue, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == field {
-			exists = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-	statement := ""
-	switch field {
-	case "scope":
-		statement = "ALTER TABLE ideation_commands ADD COLUMN scope TEXT NOT NULL DEFAULT 'session'"
-	case "subject_id":
-		statement = "ALTER TABLE ideation_commands ADD COLUMN subject_id TEXT NOT NULL DEFAULT ''"
-	default:
-		return errors.New("unsupported command scope column")
-	}
-	_, err = tx.ExecContext(ctx, statement)
-	return err
 }
 
 // localIdentityQuery reads mappings without allocation at preview/approval time.

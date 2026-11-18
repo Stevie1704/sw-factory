@@ -366,27 +366,3 @@ func scanPublicationOperation(row interface{ Scan(...any) error }) (PublicationO
 	operation.UpdatedAt, err = parseIdeationTime(updatedAt)
 	return operation, err
 }
-
-// publicationLedgerSchema creates the additive ledger table of schema version
-// 43. One row per operation keeps the one-row-per-run pending_effects journal
-// unchanged (ADR 0022).
-const publicationLedgerSchema = `CREATE TABLE IF NOT EXISTS ideation_publication_operations (
-	session_id TEXT NOT NULL,
-	approval_id TEXT NOT NULL,
-	id TEXT NOT NULL,
-	sequence INTEGER NOT NULL,
-	kind TEXT NOT NULL,
-	node_id TEXT NOT NULL DEFAULT '',
-	correlation TEXT NOT NULL DEFAULT '',
-	relationship_kind TEXT NOT NULL DEFAULT '',
-	from_node_id TEXT NOT NULL DEFAULT '',
-	to_node_id TEXT NOT NULL DEFAULT '',
-	state TEXT NOT NULL,
-	external_id TEXT NOT NULL DEFAULT '',
-	url TEXT NOT NULL DEFAULT '',
-	detail TEXT NOT NULL DEFAULT '',
-	attempts INTEGER NOT NULL DEFAULT 0,
-	updated_at TEXT NOT NULL,
-	PRIMARY KEY (session_id, approval_id, id),
-	UNIQUE (session_id, approval_id, sequence)
-)`

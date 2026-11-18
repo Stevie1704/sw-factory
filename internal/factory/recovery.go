@@ -141,8 +141,8 @@ type RecoveryResult struct {
 	Outcome RecoveryOutcome
 	// AbandonmentRefusalCode is the action disposition when an abandonment
 	// changed nothing because its run or effect no longer exists. When set,
-	// it takes precedence over Outcome, which retains the legacy reconciliation
-	// result so text output and successful no-op exits remain compatible.
+	// it takes precedence over Outcome, which describes the run reconciliation
+	// separately from the requested abandonment action.
 	AbandonmentRefusalCode RefusalCode
 }
 
@@ -181,9 +181,8 @@ func (e *InfrastructureDiscrepancyError) Error() string {
 	return fmt.Sprintf("recovery infrastructure discrepancy: run %q is waiting for human reconciliation: %s", e.Diagnosis.RunID, strings.Join(details, ", "))
 }
 
-// Unwrap preserves compatibility with callers that used the pre-reconciliation
-// RecoveryRequiredError while exposing the stronger infrastructure category to
-// new callers.
+// Unwrap exposes the broad interrupted-run diagnosis beneath the infrastructure
+// discrepancy category.
 func (e *InfrastructureDiscrepancyError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -216,17 +215,9 @@ func (e *WorkflowFailureError) Unwrap() error {
 	return e.Cause
 }
 
-// RecoveryInfrastructureError is a compatibility alias for callers that use
-// the longer typed-error vocabulary.
-type RecoveryInfrastructureError = InfrastructureDiscrepancyError
-
-// RecoveryWorkflowError is a compatibility alias for callers that use the
-// recovery-prefixed workflow error vocabulary.
-type RecoveryWorkflowError = WorkflowFailureError
-
-// RecoveryRequiredError preserves the compatibility error returned by legacy
-// stores that cannot expose a pending-effect journal. Journaled stores return
-// the typed reconciliation errors instead.
+// RecoveryRequiredError reports interrupted-run diagnosis when an injected
+// store cannot expose a pending-effect journal. It is also the broad diagnostic
+// available through typed reconciliation errors.
 type RecoveryRequiredError struct {
 	// Diagnosis is the complete read-only startup diagnosis.
 	Diagnosis RecoveryDiagnosis
@@ -397,7 +388,7 @@ func (s *Service) inspectInvocationProjection(ctx context.Context, diagnosis *Re
 }
 
 // inactiveInvocationStore adapts an empty plural active projection to the
-// legacy single-invocation inspection implementation.
+// inspection of one selected invocation.
 type inactiveInvocationStore struct {
 	OperationalStore
 }
@@ -415,7 +406,7 @@ type latestInactiveInvocationStore struct {
 }
 
 // selectedActiveInvocationStore supplies one member of a plural active
-// projection to the legacy single-invocation inspection implementation.
+// projection to inspection of one selected invocation.
 type selectedActiveInvocationStore struct {
 	OperationalStore
 	active store.Invocation
@@ -515,7 +506,7 @@ func (s *Service) inspectInvocationProjectionSingle(ctx context.Context, diagnos
 	}
 	invocationID = active.ID
 	diagnosis.InvocationExists = true
-	// Isolated legacy projections may omit the frozen packet entirely. The full
+	// Focused adapter projections may omit the frozen packet entirely. The full
 	// recovery diagnosis reports that absence above; invoke craft validation for
 	// every persisted packet or invocation identity so malformed packets fail closed.
 	if strings.TrimSpace(run.SpecificationPacket) != "" || active.PromptCraftSourcePath != "" || active.PromptCraftSHA256 != "" {
@@ -753,8 +744,7 @@ func workerProjectionExpectedStopped(run store.Run, invocation store.Invocation)
 // invocation without one owns no worker or harness state to compare: the
 // rollback stops the worker process. The coordinator must read
 // those identities as recorded history rather than as an infrastructure
-// discrepancy. A legacy cannot-proceed rollback is accepted for compatibility;
-// a superseded rollback is accepted only with the durable LaunchVoided marker
+// discrepancy. A superseded rollback requires the durable LaunchVoided marker
 // and a definitively absent regular report.
 func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
 	if strings.TrimSpace(invocation.NativeSessionID) != "" {
@@ -763,9 +753,6 @@ func invocationProjectionNeverEstablished(invocation store.Invocation) bool {
 	presence, err := structuredReportPresenceForInvocation(invocation)
 	if err != nil || presence != structuredReportAbsent {
 		return false
-	}
-	if invocation.Status == store.InvocationStatusCannotProceed {
-		return true
 	}
 	return invocation.Status == store.InvocationStatusSuperseded && invocation.LaunchVoided
 }
@@ -1660,33 +1647,10 @@ func isRestartReconciliationPause(run store.Run) bool {
 	return run.Status == store.StatusWaitingForHuman && strings.HasPrefix(run.LifecycleReason, restartReconciliationPausePrefix)
 }
 
-// legacyCheckInfrastructureWaitReasons are the lifecycle reasons older
-// coordinators recorded when they parked a check in waiting_for_harness. No
-// agent launch can leave that state, so recovery retries the checks instead.
-var legacyCheckInfrastructureWaitReasons = []string{
-	"check repair waiting for infrastructure",
-	"check repair harness unavailable",
-}
-
-// isCheckInfrastructurePause reports whether a check is paused because its
-// gate suite or repair launch failed for infrastructure reasons, including the
-// legacy waiting_for_harness form of that pause.
+// isCheckInfrastructurePause reports a check paused by unavailable gate or
+// repair infrastructure.
 func isCheckInfrastructurePause(run store.Run) bool {
-	if run.Stage != store.StageCheck {
-		return false
-	}
-	reason := strings.TrimSpace(run.LifecycleReason)
-	switch run.Status {
-	case store.StatusWaitingForHuman:
-		return strings.HasPrefix(reason, LifecycleReasonCheckInfrastructureUnavailable)
-	case store.StatusWaitingForHarness:
-		for _, legacy := range legacyCheckInfrastructureWaitReasons {
-			if strings.HasPrefix(reason, legacy) {
-				return true
-			}
-		}
-	}
-	return false
+	return run.Stage == store.StageCheck && run.Status == store.StatusWaitingForHuman && strings.HasPrefix(strings.TrimSpace(run.LifecycleReason), LifecycleReasonCheckInfrastructureUnavailable)
 }
 
 // isCheckContinuationPause reports whether a paused check continues by
@@ -2153,14 +2117,14 @@ func recoveryRequiredError(diagnosis RecoveryDiagnosis) error {
 	return &RecoveryRequiredError{Diagnosis: diagnosis}
 }
 
-// recoveryDiscrepancyError classifies a legacy-store startup refusal while
+// recoveryDiscrepancyError classifies a startup refusal while
 // retaining RecoveryRequiredError through the typed error's unwrap chain.
 func recoveryDiscrepancyError(diagnosis RecoveryDiagnosis) error {
 	return recoveryErrorWithCause(diagnosis, nil)
 }
 
 // recoveryErrorWithCause returns the typed category for a diagnosis and keeps
-// the compatibility recovery error discoverable through the unwrap chain.
+// the broad interrupted-run diagnosis discoverable through the unwrap chain.
 func recoveryErrorWithCause(diagnosis RecoveryDiagnosis, cause error) error {
 	if hasWorkflowDiscrepancy(diagnosis) {
 		if cause == nil {

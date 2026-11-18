@@ -37,8 +37,7 @@ func LocalRevisionKey(installationID, repositoryPath, codeHostProvider, codeHost
 	return localissues.Digest([]byte(strings.Join([]string{installationID, repositoryPath, codeHostProvider, codeHostRepository, targetBranch, issueID, contentDigest}, "\x00")))
 }
 
-// RevisionKey derives the revision identity from the claim's own fields. It
-// also matches legacy rows whose stored Key still includes a graph digest.
+// RevisionKey derives the revision identity from the claim's own fields.
 func (c LocalClaim) RevisionKey() string {
 	return LocalRevisionKey(c.InstallationID, c.RepositoryPath, c.CodeHostProvider, c.CodeHostRepository, c.TargetBranch, c.IssueID, c.ContentDigest)
 }
@@ -57,21 +56,6 @@ type LocalBacklogProjection struct {
 	Revision, GraphDigest, Error string
 	ObservedAt                   time.Time
 	Items                        []LocalBacklogItem
-}
-
-// migrateLocalClaims creates claim recovery and read-only backlog projections.
-func migrateLocalClaims(ctx context.Context, tx *sql.Tx) error {
-	for _, statement := range []string{
-		`CREATE TABLE IF NOT EXISTS local_claims(claim_key TEXT PRIMARY KEY,repository_path TEXT NOT NULL,run_id TEXT NOT NULL UNIQUE,state TEXT NOT NULL,claim BLOB NOT NULL,terminal_status TEXT NOT NULL DEFAULT '',merge_sha TEXT NOT NULL DEFAULT '')`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS one_reserved_local_claim ON local_claims(repository_path) WHERE state='reserved'`,
-		`CREATE TABLE IF NOT EXISTS local_backlog(repository_path TEXT PRIMARY KEY,projection BLOB NOT NULL)`,
-		`CREATE TABLE IF NOT EXISTS local_execution_invalidations(request_id TEXT PRIMARY KEY,repository_path TEXT NOT NULL,reason TEXT NOT NULL,observed_at TEXT NOT NULL)`,
-	} {
-		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // LocalClaims reads intents and consumption receipts, including cleaned Runs.
@@ -103,7 +87,7 @@ func scanLocalClaim(row localExecutionScanner) (LocalClaim, error) {
 	if err := json.Unmarshal(data, &claim); err != nil {
 		return claim, err
 	}
-	if claim.Key != key || claim.RepositoryPath != repo || claim.RunID != id {
+	if claim.Key != key || claim.Key != claim.RevisionKey() || claim.RepositoryPath != repo || claim.RunID != id {
 		return claim, ErrLocalClaimConflict
 	}
 	claim.State, claim.TerminalStatus, claim.MergeCommitSHA = state, Status(status), merge
@@ -199,25 +183,14 @@ func (s *Store) ReserveLocalClaim(ctx context.Context, claim LocalClaim) (LocalC
 	return claim, nil
 }
 
-// revisionClaim finds a claim for the same revision under any graph, including
-// legacy rows keyed with a graph digest. It is the consumed-revision guard.
+// revisionClaim finds the durable intent or consumption receipt for one exact
+// revision, independent of the graph in which it was authorized.
 func revisionClaim(ctx context.Context, tx *sql.Tx, claim LocalClaim) (LocalClaim, bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT claim_key,repository_path,run_id,state,claim,terminal_status,merge_sha FROM local_claims WHERE repository_path=?`, claim.RepositoryPath)
-	if err != nil {
-		return LocalClaim{}, false, err
+	existing, err := scanLocalClaim(tx.QueryRowContext(ctx, `SELECT claim_key,repository_path,run_id,state,claim,terminal_status,merge_sha FROM local_claims WHERE claim_key=?`, claim.RevisionKey()))
+	if errors.Is(err, sql.ErrNoRows) {
+		return LocalClaim{}, false, nil
 	}
-	defer rows.Close()
-	want := claim.RevisionKey()
-	for rows.Next() {
-		existing, err := scanLocalClaim(rows)
-		if err != nil {
-			return LocalClaim{}, false, err
-		}
-		if existing.RevisionKey() == want {
-			return existing, true, nil
-		}
-	}
-	return LocalClaim{}, false, rows.Err()
+	return existing, err == nil, err
 }
 
 // SaveLocalClaimRun atomically saves the Run and consumes its exact revision.

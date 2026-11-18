@@ -610,8 +610,8 @@ func (s *Service) ensureProgressionStartup(ctx context.Context, registration con
 // ensureAgentStartup permits only clean claim/test or explicitly skipped-test
 // states to cross into their first harness invocation. A clean draft checkpoint
 // may also cross into its independent immutable review. Journaled interrupted
-// runs have already passed reconciliation before this seam is reached; legacy
-// stores retain the typed #24 refusal.
+// runs have already passed reconciliation before this seam is reached; injected
+// stores without a journal refuse interrupted launches with a typed diagnosis.
 func (s *Service) ensureAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
 	if run != nil {
 		if err := validateRunAdapter(registration, *run); err != nil {
@@ -631,7 +631,7 @@ func (s *Service) ensureAgentStartup(ctx context.Context, registration config.Re
 		return nil
 	}
 	if _, journaled := runStore.(PendingEffectStore); !journaled {
-		return s.ensureLegacyAgentStartup(ctx, registration, runStore, run, request)
+		return s.startAgentWithoutJournal(ctx, registration, runStore, run, request)
 	}
 	updated, diagnosis, _, err := s.reconcileInterruptedRun(ctx, registration, runStore, *run)
 	*run = updated
@@ -771,9 +771,8 @@ func (s *Service) pauseAgentStartup(ctx context.Context, registration config.Rep
 		}
 	}
 	if hasWorkflowDiscrepancy(diagnosis) {
-		// Keep the legacy RecoveryRequiredError discoverable for callers that
-		// used it as the broad startup refusal while exposing workflow failure
-		// as the primary category for new callers.
+		// Expose the broad interrupted-run diagnosis through the error chain
+		// while classifying this refusal as a workflow failure.
 		s.startupErr = &WorkflowFailureError{RunID: run.ID, Cause: recoveryRequiredError(diagnosis)}
 	} else {
 		s.startupErr = &InfrastructureDiscrepancyError{Diagnosis: diagnosis}
@@ -784,10 +783,9 @@ func (s *Service) pauseAgentStartup(ctx context.Context, registration config.Rep
 	return s.startupErr
 }
 
-// ensureLegacyAgentStartup preserves the first-invocation compatibility seam
-// for embedders that have not upgraded their operational store to the durable
-// pending-effect journal.
-func (s *Service) ensureLegacyAgentStartup(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
+// startAgentWithoutJournal checks initial-launch admission for injected stores
+// without a pending-effect journal. Production SQLite stores use reconciliation.
+func (s *Service) startAgentWithoutJournal(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, run *store.Run, request AgentRequest) error {
 	diagnosis := s.diagnoseInterruptedRun(ctx, registration, *run)
 	if !diagnosis.SourcesAgree {
 		s.startupErr = recoveryDiscrepancyError(diagnosis)
@@ -1084,8 +1082,7 @@ func reviewRepairStatusComment(run store.Run) string {
 func StatusCommentBody(run store.Run) string { return statusCommentBody(run) }
 
 // specificationReviewStatusComment renders every configured review result in
-// the single editable issue supervision comment. The historical function name
-// remains as the compatibility seam for callers that only knew the first role.
+// the single editable issue supervision comment.
 func specificationReviewStatusComment(run store.Run) string {
 	if run.Stage != store.StageReview && run.SpecificationReview == nil && run.StandardsReview == nil {
 		return ""

@@ -112,16 +112,15 @@ func TestPlanningPromptStatesTheValidatedPlanContract(t *testing.T) {
 		}
 	}
 	request.PromptVersion = "planning-v1"
-	if _, legacy, err := prompt.BuildSession(request); err != nil || legacy.SHA256 != "849893b461300fd4cc2f80c8619b08acd237f9151b3c8e4d4803d3cd8aee3b86" {
-		t.Fatalf("BuildSession(planning-v1) identity = %#v, %v; want the retained v1 body", legacy, err)
+	if _, _, err := prompt.BuildSession(request); err == nil {
+		t.Fatal("BuildSession accepted a pre-baseline prompt version")
 	}
 }
 
 // TestIdeationPromptStatesTheGrillingContract verifies that the current
 // ideation prompt uses the factory-owned grilling skill, keeps unknowns out
 // of invented requirements, names the structured fields for corrected
-// answers and readiness, and that the earlier ideation version stays
-// buildable for persisted invocations.
+// answers and readiness, and refuses pre-baseline prompt versions.
 func TestIdeationPromptStatesTheGrillingContract(t *testing.T) {
 	t.Parallel()
 
@@ -146,7 +145,7 @@ func TestIdeationPromptStatesTheGrillingContract(t *testing.T) {
 		t.Fatalf("ideation prompt asks for sub-agent orchestration that the factory runtime owns:\n%s", text)
 	}
 	request.PromptVersion = "ideation-v1"
-	if _, legacy, err := prompt.BuildSession(request); err != nil || legacy.SHA256 != "b2c88fe7a651a61953d3c9f1d0d5ea219cdfa0cd4a5090e4ef0440e19bbc134d" {
-		t.Fatalf("BuildSession(ideation-v1) identity = %#v, %v; want the retained v1 body", legacy, err)
+	if _, _, err := prompt.BuildSession(request); err == nil {
+		t.Fatal("BuildSession accepted a pre-baseline prompt version")
 	}
 }

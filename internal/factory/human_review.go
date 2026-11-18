@@ -117,12 +117,6 @@ func humanRepairProjection(run store.Run, event store.ReviewRepairSourceEvent, i
 		Budget:          run.ReviewRepairBudget,
 		Findings:        findings,
 	}
-	if event == store.ReviewRepairEventPullRequestReview {
-		// Mirror the legacy review field so a packet written here stays
-		// readable by a coordinator built before source events existed. A
-		// command-sourced packet has no legacy equivalent and never borrows it.
-		packet.ReviewID = identity
-	}
 	next.ReviewRepairPacket = packet
 	// The reviewed checkpoint is superseded, so every result derived from it
 	// stops being evidence for readiness.

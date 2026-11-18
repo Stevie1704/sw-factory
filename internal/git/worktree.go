@@ -273,11 +273,6 @@ func NewWorktreeManager() *LocalWorktreeManager { return &LocalWorktreeManager{}
 // NewGitWorkspace returns the host-side Git workspace adapter.
 func NewGitWorkspace() *LocalWorktreeManager { return NewWorktreeManager() }
 
-// LocalGitWorkspace is the host-side Git workspace implementation. The alias
-// preserves the existing LocalWorktreeManager name for callers of earlier
-// foundation stages.
-type LocalGitWorkspace = LocalWorktreeManager
-
 // Inspect reads the current HEAD and porcelain status of one run worktree.
 func (m *LocalWorktreeManager) Inspect(ctx context.Context, worktreePath string) (WorktreeState, error) {
 	if strings.TrimSpace(worktreePath) == "" {
