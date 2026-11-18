@@ -124,6 +124,16 @@ type WorkerObservation struct {
 	Problem string
 }
 
+// ResourcesObservation is the prepared release resource directory.
+type ResourcesObservation struct {
+	// Directory is the prepared directory, or empty when none is known.
+	Directory string
+	// Verified reports that the directory holds the resources of the target.
+	Verified bool
+	// Problem tells why the directory is not verified.
+	Problem string
+}
+
 // Observation is the read-only state of one installation, observed by the
 // target binary.
 type Observation struct {
@@ -150,6 +160,8 @@ type Observation struct {
 	PolicyValid bool
 	// PolicyProblem tells why factory.yaml is not valid for the target.
 	PolicyProblem string
+	// Resources is the prepared release resource directory of the target.
+	Resources ResourcesObservation
 	// Smoke is the recorded skill smoke of the pinned worker per harness.
 	Smoke []onboarding.HarnessSmoke
 	// OnboardingPlanPath is the onboarding plan the operator named, or
@@ -266,7 +278,7 @@ type planner struct {
 func (p planner) evidence() map[OperationID]bool {
 	return map[OperationID]bool{
 		OperationInstallBinary:    p.observation.InstalledIsTarget,
-		OperationPrepareResources: p.onboardingVerified(onboarding.StepPrepare),
+		OperationPrepareResources: p.observation.Resources.Verified,
 		OperationOnboardingPlan:   p.observation.Onboarding != nil,
 		OperationRebuildWorker:    p.states[ComponentWorker] == StateNew,
 		OperationGateProof:        p.onboardingVerified(onboarding.StepGateProof),
@@ -349,6 +361,14 @@ func (p planner) onboardingAction(name onboarding.Step, fallback string) string 
 	return fallback
 }
 
+// resourcesDirectory returns the prepared resource directory for commands.
+func (p planner) resourcesDirectory() string {
+	if p.observation.Resources.Directory == "" {
+		return "<prepared directory>"
+	}
+	return onboarding.Quote(p.observation.Resources.Directory)
+}
+
 // planFile returns the onboarding plan path for commands.
 func (p planner) planFile() string {
 	if p.observation.OnboardingPlanPath == "" {
@@ -383,7 +403,7 @@ func (p planner) operations() []Operation {
 			ExpectedEffects: []string{"a new resource directory that the operator owns"}},
 		{ID: OperationOnboardingPlan, State: provedState(p.proved[OperationOnboardingPlan]), Effect: doctor.EffectLocalMutation,
 			Description:     "create or refresh the onboarding plan with the target binary, so its evidence is evaluated against the target release",
-			Command:         p.command() + " onboard plan --repository " + onboarding.Quote(o.RepositoryPath) + " --output " + p.planFile() + " " + p.configFlag() + " --resources <prepared directory> --json",
+			Command:         p.command() + " onboard plan --repository " + onboarding.Quote(o.RepositoryPath) + " --output " + p.planFile() + " " + p.configFlag() + " --resources " + p.resourcesDirectory() + " --json",
 			ExpectedEffects: []string{"the onboarding plan file and its lock"}},
 		{ID: OperationRebuildWorker, State: provedState(p.proved[OperationRebuildWorker]), Effect: doctor.EffectLocalMutation,
 			Description:     "rebuild the worker image from the target worker base image " + o.Target.WorkerBaseImage + " and record its digest in factory.yaml, as Step 3 of the onboarding procedure describes",

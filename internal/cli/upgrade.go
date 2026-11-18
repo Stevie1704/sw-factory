@@ -83,6 +83,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 	flags := newFlagSet("upgrade plan", errorsOutput)
 	configPath := flags.String("config", defaultConfigPath, "host configuration of the installation to upgrade")
 	onboardingPlan := flags.String("onboarding-plan", "", "onboarding plan of the repository, whose valid evidence the upgrade reuses")
+	resources := flags.String("resources", "", "directory that onboard prepare of the target filled; defaults to the onboarding plan's value")
 	asJSON := flags.Bool("json", false, "write the plan as one schema-versioned JSON document; required")
 	if !parseOnboardFlags(flags, args, errorsOutput) {
 		return 2
@@ -91,7 +92,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 		writeError(errorsOutput, errors.New("upgrade plan needs --json"))
 		return 2
 	}
-	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan)
+	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan, *resources)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
@@ -155,7 +156,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 
 // observeUpgrade reads every fact the plan needs. It only reads. An error is
 // returned only when the target binary itself cannot be located.
-func observeUpgrade(ctx context.Context, configPath, onboardingPlan string) (upgrade.Observation, error) {
+func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources string) (upgrade.Observation, error) {
 	command, err := factoryCommand()
 	if err != nil {
 		return upgrade.Observation{}, err
@@ -192,7 +193,7 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan string) (upg
 	if policy != nil {
 		observeWorker(ctx, images, *policy, identity, &observation)
 	}
-	return observation, observeOnboarding(ctx, images, registration, onboardingPlan, &observation)
+	return observation, observeOnboarding(ctx, images, registration, onboardingPlan, resources, &observation)
 }
 
 // installedBinary returns the factory command that PATH names and whether it
@@ -283,8 +284,10 @@ func baseImageCandidates(policy config.RepositoryConfig, identity version.Identi
 
 // observeOnboarding evaluates the named onboarding plan read-only against
 // the target, so its valid evidence is reused. Without a plan, it still
-// observes the skill smoke of the pinned worker.
-func observeOnboarding(ctx context.Context, images upgradeImages, registration config.RepositoryRegistration, planPath string, observation *upgrade.Observation) error {
+// observes the skill smoke of the pinned worker. The prepared resources are
+// verified on their own, so preparing them advances the plan before an
+// onboarding plan exists.
+func observeOnboarding(ctx context.Context, images upgradeImages, registration config.RepositoryRegistration, planPath, resources string, observation *upgrade.Observation) error {
 	observer, err := newOnboardingObserver()
 	if err != nil {
 		return err
@@ -305,8 +308,14 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 			plan = loaded
 		}
 	}
+	if resources != "" {
+		if plan.Resources, err = filepath.Abs(resources); err != nil {
+			return fmt.Errorf("resolve %s: %w", resources, err)
+		}
+	}
 	current := observer.Observe(ctx, plan)
 	observation.Smoke = current.Smoke
+	observation.Resources = upgrade.ResourcesObservation{Directory: plan.Resources, Verified: current.Resources.Done, Problem: current.Resources.Problem}
 	if observation.OnboardingPlanPath == "" || observation.OnboardingPlanProblem != "" {
 		return nil
 	}

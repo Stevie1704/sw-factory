@@ -271,3 +271,21 @@ func TestUpgradeNeedsASubcommandAndJSON(t *testing.T) {
 		}
 	}
 }
+
+// TestUpgradePlanAdvancesAfterPrepare verifies that a directory that onboard
+// prepare of the target filled proves prepare_resources before any
+// onboarding plan exists.
+func TestUpgradePlanAdvancesAfterPrepare(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.3.0"})
+
+	var document upgradeDocument
+	runUpgradeCommand(t, &document, "plan", "--config", fixture.hostConfig, "--resources", fixture.resources, "--json")
+
+	states := map[string]string{}
+	for _, operation := range document.Operations {
+		states[operation.ID] = operation.State
+	}
+	if states["prepare_resources"] != "done" {
+		t.Fatalf("operations = %v, want prepare_resources done", states)
+	}
+}

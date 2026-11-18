@@ -14,6 +14,7 @@ const (
 	targetFactory = "/opt/factory-v1.4.0/bin/factory"
 	configPath    = "/home/operator/.config/factory/config.yaml"
 	planPath      = "/home/operator/.cache/sw-factory/onboarding-service.json"
+	resourcesPath = "/home/operator/.cache/sw-factory/onboarding-v1.4.0"
 )
 
 // idleBeforeUpgrade is a healthy, idle installation of the previous release
@@ -43,6 +44,7 @@ func upgradedAndRunning() upgrade.Observation {
 	observation.Worker.Release = targetRelease
 	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
 	observation.Store.SchemaVersion = store.CurrentSchemaVersion
+	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
 	observation.Onboarding = verifiedOnboarding()
 	observation.CoordinatorRunning = true
 	return observation
@@ -324,6 +326,9 @@ func TestBuildContinuesAfterEachStep(t *testing.T) {
 		next upgrade.OperationID
 	}{
 		{func(o *upgrade.Observation) { o.InstalledBinary, o.InstalledIsTarget = targetFactory, true }, upgrade.OperationPrepareResources},
+		{func(o *upgrade.Observation) {
+			o.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
+		}, upgrade.OperationOnboardingPlan},
 		{func(o *upgrade.Observation) { o.Onboarding = staleProofAndDoctor }, upgrade.OperationRebuildWorker},
 		{func(o *upgrade.Observation) { o.Worker.Release = targetRelease }, upgrade.OperationGateProof},
 		{func(o *upgrade.Observation) {
@@ -342,5 +347,23 @@ func TestBuildContinuesAfterEachStep(t *testing.T) {
 		if next := nextOperation(plan); next != step.next || len(plan.Blockers) != 0 {
 			t.Fatalf("after step %d: next = %s, blockers %+v; want %s", index, next, plan.Blockers, step.next)
 		}
+	}
+}
+
+// TestBuildAdvancesOnPreparedResourcesAlone verifies that verified release
+// resources of the target prove prepare_resources before an onboarding plan
+// exists, and that the next command names that directory.
+func TestBuildAdvancesOnPreparedResourcesAlone(t *testing.T) {
+	observation := idleBeforeUpgrade()
+	observation.InstalledBinary, observation.InstalledIsTarget = targetFactory, true
+	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
+	plan := upgrade.Build(observation)
+
+	if operation(t, plan, upgrade.OperationPrepareResources).State != upgrade.OperationDone {
+		t.Fatalf("prepare_resources = %+v, want done", operation(t, plan, upgrade.OperationPrepareResources))
+	}
+	next := operation(t, plan, upgrade.OperationOnboardingPlan)
+	if next.State != upgrade.OperationPending || !strings.Contains(next.Command, "--resources "+resourcesPath) {
+		t.Fatalf("onboarding_plan = %+v, want pending with the prepared directory", next)
 	}
 }
