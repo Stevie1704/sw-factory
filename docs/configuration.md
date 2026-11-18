@@ -1640,15 +1640,16 @@ demonstration evidence. Close the disposable pull request and issue, then use
 
 ## Operational SQLite store
 
-The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly; an older supported schema is copied to a timestamped `.bak-*` file before its explicit migration runs. Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy, and `factory reset` removes only the backups whose file name proves they belong to that exact database. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
+The operational store contains current workflow state, the active run's frozen specification packet, the status-comment identity needed by later transitions, and the draft pull-request identity needed for idempotent regeneration. Registration and status both reject paths that resolve inside the repository checkout, including symlink aliases; its directory is private (`0700`) and the SQLite file is private (`0600`). A fresh store is initialized directly. An existing store is migrated only by `factory upgrade migrate-store --config <path> --json`, the one migration entry point: it holds the coordinator lock, refuses work that fails the migration gate, and copies a store of a schema that the release supports to a timestamped `.bak-*` file before it migrates. `MinimumUpgradeSchemaVersion` names the oldest accepted schema; it moves only by a deliberate decision. This release accepts only its own schema 52, so it refuses every older store as unsupported and reports `current` for its own. Every other command, including `factory start`, refuses an older schema with an error that names that command. A `.bak-*` file is migration provenance, not a restore point ([ADR 0032](adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)). Migration backups are not pruned automatically in this foundation; issue #23 owns the visible cleanup and retention policy, and `factory reset` removes only the backups whose file name proves they belong to that exact database. A newer or unversioned database refuses to open. There is no silent guessing or destructive migration. GitHub credentials are never columns in this store.
 
 Issue #25 adds a logically separate `evaluation_summaries` projection inside
 the same versioned SQLite store, plus isolated usage and disposition tables. It stores
 only bounded metadata, counts, durations, fixed categories, hashed human-event
 identities, and reliable harness-reported numeric usage. It never copies issue
 or specification text, prompts, transcripts, diffs, source contents, command
-output, logs, or credentials. Existing stores migrate with the normal private
-`.bak-*` backup and newer schemas still fail closed.
+output, logs, or credentials. Existing stores migrate through `factory upgrade
+migrate-store` with the normal private `.bak-*` backup, and newer schemas
+still fail closed.
 
 The checked-in `evaluation.retention` duration is an explicit operator policy
 for choosing a cutoff; the factory never deletes summaries automatically. Use
@@ -1758,9 +1759,10 @@ Store use:
   coordinator lock. Its only write is to append a validated operator command to the
   command inbox (see below). Thus the UI works while `factory start` runs, and
   its pages also work while the coordinator is stopped.
-- The read-only open requires the current store schema. After an upgrade, normal
-  coordinator startup performs any supported migration; the UI and read-only
-  inspection commands never migrate it. Until then,
+- The read-only open requires the current store schema. After an upgrade,
+  `factory upgrade migrate-store` performs any supported migration; the UI,
+  coordinator startup, and read-only inspection commands never migrate it.
+  Until then,
   and when the store is missing or busy, the page shows "Operational store
   unavailable" (HTTP 503). The next refresh tries again.
 

@@ -48,7 +48,8 @@ func TestStartupCheckDoesNotCreateOrMigrateTheOperationalStore(t *testing.T) {
 }
 
 // TestStartupCheckDoesNotCreateAMigrationBackup verifies an older store is
-// reported for normal migration without being changed by diagnosis.
+// reported for the explicit migration entry point without being changed by
+// diagnosis.
 func TestStartupCheckDoesNotCreateAMigrationBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state", "factory.db")
 	opened, err := store.Open(context.Background(), path)
@@ -62,7 +63,7 @@ func TestStartupCheckDoesNotCreateAMigrationBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(context.Background(), "UPDATE schema_metadata SET version = 0 WHERE singleton = 1"); err != nil {
+	if _, err := database.ExecContext(context.Background(), "UPDATE schema_metadata SET version = ? WHERE singleton = 1", store.CurrentSchemaVersion-1); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestStartupCheckDoesNotCreateAMigrationBackup(t *testing.T) {
 	}
 
 	result := doctor.Run(context.Background(), store.StartupCheck(path)).Results[0]
-	if result.Status != doctor.StatusFailed {
+	if result.Status != doctor.StatusFailed || result.Code != "store.sqlite.migration_required" {
 		t.Fatalf("SQLite result = %#v, want migration failure", result)
 	}
 	backups, err := filepath.Glob(path + ".bak-*")

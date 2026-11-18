@@ -1,0 +1,450 @@
+package upgrade_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/Stevie1704/sw-factory/internal/onboarding"
+	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/upgrade"
+)
+
+const (
+	targetRelease = "v1.4.0"
+	targetFactory = "/opt/factory-v1.4.0/bin/factory"
+	configPath    = "/home/operator/.config/factory/config.yaml"
+	planPath      = "/home/operator/.cache/sw-factory/onboarding-service.json"
+	resourcesPath = "/home/operator/.cache/sw-factory/onboarding-v1.4.0"
+)
+
+// idleBeforeUpgrade is a healthy, idle installation of the previous release
+// on which the operator runs the target binary for the first time.
+func idleBeforeUpgrade() upgrade.Observation {
+	return upgrade.Observation{
+		Target:             upgrade.Target{Version: targetRelease, Build: "release", Revision: "abc123", WorkerBaseImage: "ghcr.io/stevie1704/sw-factory-base@sha256:1111"},
+		FactoryCommand:     targetFactory,
+		ConfigPath:         configPath,
+		Registered:         true,
+		RepositoryPath:     "/work/service",
+		Store:              store.UpgradeInspection{Path: "/home/operator/.config/factory/data/factory.db", Exists: true, SchemaVersion: store.CurrentSchemaVersion},
+		InstalledBinary:    "/opt/factory-v1.3.0/bin/factory",
+		BaseImage:          upgrade.ImageObservation{Reference: "ghcr.io/stevie1704/sw-factory-base@sha256:1111", Present: true},
+		Worker:             upgrade.WorkerObservation{Image: "ghcr.io/example/service-worker@sha256:2222", Present: true, Release: "v1.3.0"},
+		PolicyValid:        true,
+		Smoke:              []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{}, Missing: []string{"tdd"}}},
+		OnboardingPlanPath: planPath,
+	}
+}
+
+// upgradedAndRunning is the same installation after a complete upgrade with
+// the target coordinator started in the foreground.
+func upgradedAndRunning() upgrade.Observation {
+	observation := idleBeforeUpgrade()
+	observation.InstalledBinary, observation.InstalledIsTarget = targetFactory, true
+	observation.Worker.Release = targetRelease
+	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
+	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
+	observation.Onboarding = verifiedOnboarding()
+	observation.Lock = targetCoordinator()
+	return observation
+}
+
+// targetCoordinator is the lock record of a coordinator of the target.
+func targetCoordinator() upgrade.LockObservation {
+	return upgrade.LockObservation{Held: true, Holder: "coordinator", Version: targetRelease, Revision: "abc123"}
+}
+
+// verifiedOnboarding is an onboarding status whose evidence all matches the
+// target release.
+func verifiedOnboarding() []onboarding.StepStatus {
+	var steps []onboarding.StepStatus
+	for _, step := range []onboarding.Step{onboarding.StepPrepare, onboarding.StepConfiguration, onboarding.StepImage, onboarding.StepGateProof, onboarding.StepRegistration, onboarding.StepSkillSmoke, onboarding.StepDoctor} {
+		steps = append(steps, onboarding.StepStatus{Name: step, State: onboarding.StateVerified})
+	}
+	return steps
+}
+
+// withStep replaces the state and action of one onboarding step.
+func withStep(steps []onboarding.StepStatus, name onboarding.Step, state onboarding.State, action string) []onboarding.StepStatus {
+	result := append([]onboarding.StepStatus{}, steps...)
+	for index := range result {
+		if result[index].Name == name {
+			result[index].State, result[index].Action = state, action
+		}
+	}
+	return result
+}
+
+// operation returns one operation of a plan by its ID.
+func operation(t *testing.T, plan upgrade.Plan, id upgrade.OperationID) upgrade.Operation {
+	t.Helper()
+	for _, candidate := range plan.Operations {
+		if candidate.ID == id {
+			return candidate
+		}
+	}
+	t.Fatalf("plan has no operation %s", id)
+	return upgrade.Operation{}
+}
+
+// component returns the state of one component.
+func component(t *testing.T, plan upgrade.Plan, name upgrade.Component) upgrade.ComponentState {
+	t.Helper()
+	for _, candidate := range plan.Components {
+		if candidate.Name == name {
+			return candidate.State
+		}
+	}
+	t.Fatalf("plan has no component %s", name)
+	return ""
+}
+
+// blocker returns the blocker with a code, or fails.
+func blocker(t *testing.T, plan upgrade.Plan, code string) upgrade.Blocker {
+	t.Helper()
+	for _, candidate := range plan.Blockers {
+		if candidate.Code == code {
+			return candidate
+		}
+	}
+	t.Fatalf("blockers = %+v, want %s", plan.Blockers, code)
+	return upgrade.Blocker{}
+}
+
+// nextOperation returns the first pending operation.
+func nextOperation(plan upgrade.Plan) upgrade.OperationID {
+	for _, candidate := range plan.Operations {
+		if candidate.State == upgrade.OperationPending {
+			return candidate.ID
+		}
+	}
+	return ""
+}
+
+// TestBuildPlansAHealthyIdleUpgrade verifies the reviewable plan of an idle
+// installation: no blockers, the documented order, and the old components.
+func TestBuildPlansAHealthyIdleUpgrade(t *testing.T) {
+	plan := upgrade.Build(idleBeforeUpgrade())
+
+	if plan.SchemaVersion != upgrade.PlanSchema || plan.Result != upgrade.ResultReady || len(plan.Blockers) != 0 {
+		t.Fatalf("plan = schema %d, result %s, blockers %+v; want a ready plan", plan.SchemaVersion, plan.Result, plan.Blockers)
+	}
+	var order []string
+	for _, step := range plan.Operations {
+		order = append(order, string(step.ID))
+	}
+	want := "pass_migration_gate,install_binary,prepare_resources,onboarding_plan,rebuild_worker,gate_proof,skill_smoke,migrate_store,doctor,start_coordinator"
+	if got := strings.Join(order, ","); got != want {
+		t.Fatalf("operation order = %s, want %s", got, want)
+	}
+	if operation(t, plan, upgrade.OperationPassMigrationGate).State != upgrade.OperationDone || nextOperation(plan) != upgrade.OperationInstallBinary {
+		t.Fatalf("operations = %+v, want pass_migration_gate done and install_binary next", plan.Operations)
+	}
+	for name, state := range map[upgrade.Component]upgrade.ComponentState{
+		upgrade.ComponentBinary: upgrade.StateOld, upgrade.ComponentWorker: upgrade.StateOld, upgrade.ComponentPolicy: upgrade.StateNew,
+		upgrade.ComponentSmoke: upgrade.StateOld, upgrade.ComponentStore: upgrade.StateNew,
+	} {
+		if got := component(t, plan, name); got != state {
+			t.Fatalf("component %s = %s, want %s", name, got, state)
+		}
+	}
+	migrate := operation(t, plan, upgrade.OperationMigrateStore)
+	if !strings.Contains(migrate.Command, targetFactory+" upgrade migrate-store --config "+configPath+" --json") || migrate.Effect != "local_mutation" || len(migrate.ExpectedEffects) == 0 {
+		t.Fatalf("migrate_store = %+v, want the explicit target entry point and its effects", migrate)
+	}
+	if !operation(t, plan, upgrade.OperationSkillSmoke).Paid {
+		t.Fatal("skill_smoke is not marked as paid")
+	}
+	if len(plan.Verification) == 0 {
+		t.Fatal("plan has no verification")
+	}
+	limits := strings.Join(plan.RecoveryLimits, " ")
+	for _, want := range []string{"old binary", "ADR 0032"} {
+		if !strings.Contains(limits, want) {
+			t.Fatalf("recovery limits %q do not state %q", limits, want)
+		}
+	}
+}
+
+// TestBuildBlocksActiveWorkWithTheOldBinary verifies the first-version
+// policy: active runs, journaled effects, and active invocations block the
+// upgrade and are finished with the binary that claimed them.
+func TestBuildBlocksActiveWorkWithTheClaimingBinary(t *testing.T) {
+	observation := idleBeforeUpgrade()
+	observation.Store.ActiveRuns = []string{"run-7"}
+	observation.Store.PendingEffects = 1
+	observation.Store.ActiveInvocations = 1
+	observation.Store.ActiveSessionInvocations = 1
+	observation.Store.QueuedSessionCommands = 1
+	plan := upgrade.Build(observation)
+
+	if plan.Result != upgrade.ResultBlocked {
+		t.Fatalf("result = %s, want blocked", plan.Result)
+	}
+	active := blocker(t, plan, "run.active")
+	if !strings.Contains(active.Detail, "run-7") || !strings.Contains(active.Action, "the binary that claimed it") {
+		t.Fatalf("run.active = %+v, want the run and the binary that claimed it", active)
+	}
+	blocker(t, plan, "effect.pending")
+	blocker(t, plan, "invocation.active")
+	blocker(t, plan, "session_invocation.active")
+	blocker(t, plan, "session_command.queued")
+	for _, step := range plan.Operations {
+		if step.State == upgrade.OperationPending {
+			t.Fatalf("operation %s is pending while the migration gate fails", step.ID)
+		}
+	}
+}
+
+// TestBuildReportsExplicitBlockers verifies the blockers of an unsupported
+// schema, a missing target base image, and a live coordinator.
+func TestBuildReportsExplicitBlockers(t *testing.T) {
+	for name, test := range map[string]struct {
+		change func(*upgrade.Observation)
+		code   string
+	}{
+		"newer schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion + 1 }, "store.schema_newer"},
+		"older schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.MinimumUpgradeSchemaVersion - 1 }, "store.schema_unsupported"},
+		"missing base image": {func(o *upgrade.Observation) { o.BaseImage.Present = false }, "worker.base_image_missing"},
+		"previous coordinator": {func(o *upgrade.Observation) {
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
+		}, "coordinator.worker_mismatch"},
+		"target coordinator too early": {func(o *upgrade.Observation) { o.Lock = targetCoordinator() }, "coordinator.running"},
+		"store migration holds the lock": {func(o *upgrade.Observation) {
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "store_migration", Version: targetRelease, Revision: "abc123"}
+		}, "maintenance.running"},
+		"old coordinator with new worker": {func(o *upgrade.Observation) {
+			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
+			o.Worker.Release = targetRelease
+		}, "coordinator.worker_mismatch"},
+		"no registration": {func(o *upgrade.Observation) { o.Registered = false; o.RegistrationProblem = "no host configuration" }, "registration.missing"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := idleBeforeUpgrade()
+			test.change(&observation)
+			plan := upgrade.Build(observation)
+			found := blocker(t, plan, test.code)
+			if plan.Result != upgrade.ResultBlocked || found.Action == "" {
+				t.Fatalf("plan = %s with %+v, want blocked with an action", plan.Result, found)
+			}
+			for _, forbidden := range []string{".bak", "downgrade", "restore the"} {
+				if strings.Contains(strings.ToLower(found.Action), forbidden) {
+					t.Fatalf("action %q advises %q", found.Action, forbidden)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls verifies an
+// interruption after the paid smoke: valid evidence is reused, and the
+// doctor is the supported continuation.
+func TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.Lock = upgrade.LockObservation{}
+	observation.Onboarding = withStep(verifiedOnboarding(), onboarding.StepDoctor, onboarding.StatePending, "run doctor")
+	plan := upgrade.Build(observation)
+
+	if smoke := operation(t, plan, upgrade.OperationSkillSmoke); smoke.State != upgrade.OperationDone {
+		t.Fatalf("skill_smoke = %+v, want done from reused evidence", smoke)
+	}
+	if next := nextOperation(plan); next != upgrade.OperationDoctor {
+		t.Fatalf("next operation = %s, want doctor", next)
+	}
+	if component(t, plan, upgrade.ComponentSmoke) != upgrade.StateNew {
+		t.Fatalf("components = %+v, want smoke new", plan.Components)
+	}
+}
+
+// TestBuildReportsPartialSmokeAsIncomplete verifies that a partly recorded
+// smoke of the new worker asks only for the missing paid calls.
+func TestBuildReportsPartialSmokeAsIncomplete(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.Lock = upgrade.LockObservation{}
+	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd", "review"}, Verified: []string{"tdd"}, Missing: []string{"review"}}}
+	observation.Onboarding = withStep(verifiedOnboarding(), onboarding.StepSkillSmoke, onboarding.StatePending, "run these paid smoke calls: MANDATORY_SKILLS=review")
+	plan := upgrade.Build(observation)
+
+	smoke := operation(t, plan, upgrade.OperationSkillSmoke)
+	if component(t, plan, upgrade.ComponentSmoke) != upgrade.StateIncomplete || smoke.State != upgrade.OperationPending || !strings.Contains(smoke.Command, "MANDATORY_SKILLS=review") {
+		t.Fatalf("skill_smoke = %+v, want the onboarding action for the missing skill only", smoke)
+	}
+}
+
+// TestBuildReportsAnInterruptedStoreWrite verifies that a rollback journal
+// makes the store incomplete with the explicit migration entry point as its
+// continuation.
+func TestBuildReportsAnInterruptedStoreWrite(t *testing.T) {
+	observation := idleBeforeUpgrade()
+	observation.Store = store.UpgradeInspection{Path: observation.Store.Path, Exists: true, InterruptedWrite: true}
+	plan := upgrade.Build(observation)
+
+	if component(t, plan, upgrade.ComponentStore) != upgrade.StateIncomplete {
+		t.Fatalf("store = %s, want incomplete", component(t, plan, upgrade.ComponentStore))
+	}
+	interrupted := blocker(t, plan, "store.interrupted_write")
+	if !strings.Contains(interrupted.Action, "upgrade migrate-store") {
+		t.Fatalf("store.interrupted_write action = %q, want the migration entry point", interrupted.Action)
+	}
+}
+
+// TestBuildVerifiesACompleteUpgrade verifies the final state: every
+// operation is done, every verification holds, and the live target
+// coordinator is not a blocker.
+func TestBuildVerifiesACompleteUpgrade(t *testing.T) {
+	plan := upgrade.Build(upgradedAndRunning())
+
+	if plan.Result != upgrade.ResultComplete || len(plan.Blockers) != 0 {
+		t.Fatalf("plan = %s with %+v, want complete", plan.Result, plan.Blockers)
+	}
+	codes := map[string]bool{}
+	for _, check := range plan.Verification {
+		codes[check.Code] = true
+		if !check.Satisfied {
+			t.Fatalf("verification %s is not satisfied", check.Code)
+		}
+	}
+	for _, want := range []string{"coordinator.identity", "worker.release", "configuration.valid", "smoke.complete", "store.ready", "doctor.ready", "supervisor.running"} {
+		if !codes[want] {
+			t.Fatalf("verification lacks %s", want)
+		}
+	}
+}
+
+// TestBuildContinuesAfterEachStep verifies that an interruption after each
+// operation is diagnosed from evidence alone: the plan reports the
+// operation as done and names the following one as the continuation.
+func TestBuildContinuesAfterEachStep(t *testing.T) {
+	staleProofAndDoctor := withStep(withStep(verifiedOnboarding(), onboarding.StepGateProof, onboarding.StateStale, ""), onboarding.StepDoctor, onboarding.StateStale, "")
+	steps := []struct {
+		done func(*upgrade.Observation)
+		next upgrade.OperationID
+	}{
+		{func(o *upgrade.Observation) { o.InstalledBinary, o.InstalledIsTarget = targetFactory, true }, upgrade.OperationPrepareResources},
+		{func(o *upgrade.Observation) {
+			o.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
+		}, upgrade.OperationOnboardingPlan},
+		{func(o *upgrade.Observation) { o.Onboarding = staleProofAndDoctor }, upgrade.OperationRebuildWorker},
+		{func(o *upgrade.Observation) { o.Worker.Release = targetRelease }, upgrade.OperationGateProof},
+		{func(o *upgrade.Observation) {
+			o.Onboarding = withStep(verifiedOnboarding(), onboarding.StepDoctor, onboarding.StateStale, "")
+		}, upgrade.OperationSkillSmoke},
+		{func(o *upgrade.Observation) {
+			o.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
+		}, upgrade.OperationDoctor},
+		{func(o *upgrade.Observation) { o.Onboarding = verifiedOnboarding() }, upgrade.OperationStartCoordinator},
+	}
+	observation := idleBeforeUpgrade()
+	for index, step := range steps {
+		step.done(&observation)
+		plan := upgrade.Build(observation)
+		if next := nextOperation(plan); next != step.next || len(plan.Blockers) != 0 {
+			t.Fatalf("after step %d: next = %s, blockers %+v; want %s", index, next, plan.Blockers, step.next)
+		}
+	}
+}
+
+// TestBuildAdvancesOnPreparedResourcesAlone verifies that verified release
+// resources of the target prove prepare_resources before an onboarding plan
+// exists, and that the next command names that directory.
+func TestBuildAdvancesOnPreparedResourcesAlone(t *testing.T) {
+	observation := idleBeforeUpgrade()
+	observation.InstalledBinary, observation.InstalledIsTarget = targetFactory, true
+	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
+	plan := upgrade.Build(observation)
+
+	if operation(t, plan, upgrade.OperationPrepareResources).State != upgrade.OperationDone {
+		t.Fatalf("prepare_resources = %+v, want done", operation(t, plan, upgrade.OperationPrepareResources))
+	}
+	next := operation(t, plan, upgrade.OperationOnboardingPlan)
+	if next.State != upgrade.OperationPending || !strings.Contains(next.Command, "--resources "+resourcesPath) {
+		t.Fatalf("onboarding_plan = %+v, want pending with the prepared directory", next)
+	}
+}
+
+// TestBuildRefusesAnOnboardingPlanOfAnotherRegistration verifies that the
+// evidence of an onboarding plan for another host configuration is neither
+// reused nor named in a command.
+func TestBuildRefusesAnOnboardingPlanOfAnotherRegistration(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.Lock = upgrade.LockObservation{}
+	observation.Onboarding = nil
+	observation.OnboardingPlanForeign = "the onboarding plan uses the host configuration /other/config.yaml"
+	plan := upgrade.Build(observation)
+
+	blocker(t, plan, "onboarding.plan_registration_mismatch")
+	for _, step := range plan.Operations {
+		if strings.Contains(step.Command, planPath) {
+			t.Fatalf("operation %s names the foreign plan: %s", step.ID, step.Command)
+		}
+	}
+}
+
+// TestBuildMarksPlanWritesAsLocalMutations verifies that every operation
+// that writes the onboarding plan declares a local mutation.
+func TestBuildMarksPlanWritesAsLocalMutations(t *testing.T) {
+	plan := upgrade.Build(idleBeforeUpgrade())
+	for _, id := range []upgrade.OperationID{upgrade.OperationOnboardingPlan, upgrade.OperationGateProof, upgrade.OperationDoctor} {
+		if step := operation(t, plan, id); step.Effect != "local_mutation" {
+			t.Fatalf("%s effect = %s, want local_mutation", id, step.Effect)
+		}
+	}
+}
+
+// TestBuildVerifiesTheObservedCoordinatorIdentity verifies that only a
+// coordinator of the target release completes the upgrade: a lock that a
+// store migration holds, or a coordinator of another release, does not.
+func TestBuildVerifiesTheObservedCoordinatorIdentity(t *testing.T) {
+	for name, test := range map[string]struct {
+		lock upgrade.LockObservation
+		code string
+	}{
+		"store migration":  {upgrade.LockObservation{Held: true, Holder: "store_migration", Version: targetRelease, Revision: "abc123"}, "maintenance.running"},
+		"reset":            {upgrade.LockObservation{Held: true, Holder: "reset", Version: targetRelease, Revision: "abc123"}, "maintenance.running"},
+		"previous release": {upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}, "coordinator.worker_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			observation := upgradedAndRunning()
+			observation.Lock = test.lock
+			plan := upgrade.Build(observation)
+			blocker(t, plan, test.code)
+			if plan.Result == upgrade.ResultComplete || operation(t, plan, upgrade.OperationStartCoordinator).State == upgrade.OperationDone {
+				t.Fatalf("plan = %s, want the upgrade not complete", plan.Result)
+			}
+			for _, check := range plan.Verification {
+				if check.Code == "supervisor.running" && check.Satisfied {
+					t.Fatal("supervisor.running is satisfied by a lock that no target coordinator holds")
+				}
+			}
+		})
+	}
+}
+
+// TestBuildEmitsOnlyExecutableCommands verifies that every command field is
+// a shell command without prose, and that the paid calls and the
+// authorization text of the smoke are separate fields.
+func TestBuildEmitsOnlyExecutableCommands(t *testing.T) {
+	observation := upgradedAndRunning()
+	observation.Lock = upgrade.LockObservation{}
+	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd", "review"}, Verified: []string{"tdd"}, Missing: []string{"review"}}}
+	observation.Onboarding = withStep(withStep(verifiedOnboarding(), onboarding.StepSkillSmoke, onboarding.StatePending, "run these paid smoke calls: x; apply factory guide authorization"), onboarding.StepDoctor, onboarding.StateStale, "repair the findings, then run doctor")
+	plan := upgrade.Build(observation)
+
+	for _, step := range plan.Operations {
+		for _, prose := range []string{"run these", "apply factory guide", "repair the", "then run", "paid smoke calls"} {
+			if strings.Contains(step.Command, prose) {
+				t.Fatalf("operation %s command %q contains prose %q", step.ID, step.Command, prose)
+			}
+		}
+	}
+	smoke := operation(t, plan, upgrade.OperationSkillSmoke)
+	if !strings.HasPrefix(smoke.Command, "cd /work/service && ") || !strings.Contains(smoke.Command, "MANDATORY_SKILLS=review") || !strings.HasSuffix(smoke.Command, resourcesPath+"/scripts/smoke-skills.sh") {
+		t.Fatalf("skill_smoke command = %q, want the smoke script call", smoke.Command)
+	}
+	if len(smoke.PaidCalls) != 1 || smoke.PaidCalls[0] != "codex: review" || smoke.Authorization == "" {
+		t.Fatalf("skill_smoke = %+v, want one paid call and the authorization text", smoke)
+	}
+	if doctorStep := operation(t, plan, upgrade.OperationDoctor); doctorStep.Command != targetFactory+" onboard record --plan "+planPath+" doctor --json" {
+		t.Fatalf("doctor command = %q", doctorStep.Command)
+	}
+}

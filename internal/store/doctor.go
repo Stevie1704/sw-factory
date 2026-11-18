@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,10 +17,13 @@ var startPrecondition = doctor.Precondition{Code: "doctor.ready", Description: "
 
 // Store diagnosis conditions. Codes are stable; wording may change.
 var (
-	sqlitePathMissing    = doctor.Condition{Code: "store.sqlite.path_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
-	sqliteUnreadable     = doctor.Condition{Code: "store.sqlite.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
-	sqliteCloseFailed    = doctor.Condition{Code: "store.sqlite.close_failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug"}
-	supervisorUnobserved = doctor.Condition{Code: "store.supervisor.unobserved", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
+	sqlitePathMissing = doctor.Condition{Code: "store.sqlite.path_missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup", Unobserved: true}
+	sqliteUnreadable  = doctor.Condition{Code: "store.sqlite.unreadable", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "setup"}
+	// sqliteMigrationRequired means the store has an older supported schema
+	// that only the explicit migration entry point may migrate.
+	sqliteMigrationRequired = doctor.Condition{Code: "store.sqlite.migration_required", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "maintenance"}
+	sqliteCloseFailed       = doctor.Condition{Code: "store.sqlite.close_failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug"}
+	supervisorUnobserved    = doctor.Condition{Code: "store.supervisor.unobserved", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 	// supervisorMissing means no heartbeat was ever recorded.
 	supervisorMissing = doctor.Condition{Code: "store.supervisor.missing", Origin: doctor.OriginEnvironment, Effect: doctor.EffectExternalMutation, Topic: "debug", Preconditions: []doctor.Precondition{startPrecondition}}
 	// supervisorStale means a recorded heartbeat expired or its coordinator
@@ -36,6 +40,10 @@ func StartupCheck(path string) doctor.Check {
 			return doctor.Failure(sqlitePathMissing, "SQLite", "the operational store path is not configured", "register the repository with a private operational_data_path")
 		}
 		opened, err := OpenReadOnly(ctx, path)
+		var migration *MigrationRequiredError
+		if errors.As(err, &migration) {
+			return doctor.Failure(sqliteMigrationRequired, "SQLite", migration.Error(), "follow factory guide maintenance; its migrate_store operation runs factory upgrade migrate-store")
+		}
 		if err != nil {
 			return doctor.Failure(sqliteUnreadable, "SQLite", "the existing operational store cannot be opened read-only with its current schema", "run the normal store initialization or migration, then retry the diagnosis")
 		}

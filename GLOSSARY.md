@@ -604,6 +604,36 @@ checkout, installed binaries, worker images, repository caches, host credential
 sources, GitHub history and label definitions, and remote branches.
 _Avoid_: Cleanup, uninstall, deregistration, factory reinstall
 
+**Upgrade plan**:
+The read-only, versioned document that the target release's binary derives
+from one installation: its blockers, migration gate, ordered
+operations, expected effects, and final verification, with each component
+marked old, new, or incomplete. It describes work and reuses onboarding
+evidence only on an identity match; it is not a workflow controller.
+_Avoid_: Upgrade script, migration plan
+
+**Full quiescence**:
+The state of an installation in which no process holds the coordinator lock,
+no run is non-terminal, no effect is pending, and no invocation, session-role
+invocation, session command, or publication is in progress. A maintenance
+checkpoint and a restore need it.
+_Avoid_: Quiescent installation, idle (alone), stopped
+
+**Migration gate**:
+The narrower set of conditions that the store migration of an upgrade needs:
+no process holds the coordinator lock, no run is non-terminal, no effect is
+pending, and no invocation, session-role invocation, or session command is in
+progress. It omits publications, because a migration keeps every row.
+_Avoid_: Quiescence (for this narrower set), idle check
+
+**Maintenance checkpoint**:
+A consistent, manifest-described snapshot of the operational store of one
+installation in full quiescence, bound to its host, registration, and Factory
+release.
+It contains private issue and specification text and no credentials. It is
+not a whole-installation backup and cannot rewind remote state.
+_Avoid_: Backup (alone), pre-migration backup, snapshot (alone)
+
 
 **Local Markdown issue**:
 An accepted UTF-8 Markdown specification under `docs/issues/` with a schema,

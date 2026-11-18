@@ -840,37 +840,61 @@ type Store struct {
 	schemaVersion int
 }
 
-// Open opens the operational store at path, creating or migrating its database as needed.
-// Open opens or creates an operational store at path, applying supported schema migrations as needed.
-// It requires a private parent directory and rejects empty databases, unsupported schema versions,
-// and databases with missing or unreadable schema metadata. Existing databases are backed up before migration.
+// Open opens an existing current operational store, or creates a new one.
+// It never migrates an existing store: an older schema is refused with a
+// *MigrationRequiredError, because factory upgrade migrate-store is the only
+// migration entry point. It requires a private parent directory and rejects
+// empty databases, newer schema versions, and databases with missing or
+// unreadable schema metadata.
 func Open(ctx context.Context, path string) (*Store, error) {
+	opened, _, err := openMigrating(ctx, path, false)
+	return opened, err
+}
+
+// MigrationRequiredError reports an existing store with an older schema
+// that only the explicit migration entry point may migrate.
+type MigrationRequiredError struct {
+	Version   int
+	Supported int
+}
+
+// Error names the supported migration entry point.
+func (e *MigrationRequiredError) Error() string {
+	return fmt.Sprintf("operational store schema version %d is older than supported version %d; migrate it with factory upgrade migrate-store", e.Version, e.Supported)
+}
+
+// openMigrating opens or creates a store and reports the schema migration
+// it applied and the path of the pre-migration backup. It migrates an
+// existing older store only when migrateExisting is set. An existing store
+// at version 0 has only its metadata, from an initialization that stopped
+// before its first migration, so it is completed like a new store.
+func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Store, Migration, error) {
 	if path == "" {
-		return nil, errors.New("operational store path is required")
+		return nil, Migration{}, errors.New("operational store path is required")
 	}
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve operational store path: %w", err)
+		return nil, Migration{}, fmt.Errorf("resolve operational store path: %w", err)
 	}
 	storeDirectory := filepath.Dir(absolutePath)
 	if err := os.MkdirAll(storeDirectory, 0o700); err != nil {
-		return nil, fmt.Errorf("create operational store directory: %w", err)
+		return nil, Migration{}, fmt.Errorf("create operational store directory: %w", err)
 	}
 	if info, err := os.Stat(storeDirectory); err != nil {
-		return nil, fmt.Errorf("inspect operational store directory: %w", err)
+		return nil, Migration{}, fmt.Errorf("inspect operational store directory: %w", err)
 	} else if info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("operational store directory %q is not private; expected no group or other permissions", storeDirectory)
+		return nil, Migration{}, fmt.Errorf("operational store directory %q is not private; expected no group or other permissions", storeDirectory)
 	}
 	existed, empty, err := databaseState(absolutePath)
 	if err != nil {
-		return nil, err
+		return nil, Migration{}, err
 	}
 	if existed && empty {
-		return nil, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
+		return nil, Migration{}, &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
 	}
 	database, err := openConfiguredDatabase(ctx, absolutePath)
 	if err != nil {
-		return nil, err
+		return nil, Migration{}, err
 	}
 	closeOnError := true
 	defer func() {
@@ -880,36 +904,43 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}()
 	if !existed {
 		if err := initializeMetadata(ctx, database); err != nil {
-			return nil, err
+			return nil, Migration{}, err
 		}
 	}
 	version, err := readSchemaVersion(ctx, database, absolutePath)
 	if err != nil {
-		return nil, err
+		return nil, Migration{}, err
 	}
 	if version > CurrentSchemaVersion {
-		return nil, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
+		return nil, Migration{}, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
+	if existed && version > 0 && version < CurrentSchemaVersion && !migrateExisting {
+		return nil, Migration{}, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
+	}
+	migration := Migration{FromVersion: version, ToVersion: version}
 	if version < CurrentSchemaVersion {
 		if existed {
 			if err := database.Close(); err != nil {
-				return nil, fmt.Errorf("close store before migration: %w", err)
+				return nil, Migration{}, fmt.Errorf("close store before migration: %w", err)
 			}
-			if _, err := backupDatabase(absolutePath); err != nil {
-				return nil, err
+			backup, err := backupDatabase(absolutePath)
+			if err != nil {
+				return nil, Migration{}, err
 			}
+			migration.Backup = backup
 			database, err = openConfiguredDatabase(ctx, absolutePath)
 			if err != nil {
-				return nil, fmt.Errorf("reopen operational store for migration: %w", err)
+				return nil, Migration{}, fmt.Errorf("reopen operational store for migration: %w", err)
 			}
 		}
 		if err := migrate(ctx, database, version); err != nil {
-			return nil, err
+			return nil, Migration{}, err
 		}
 		version = CurrentSchemaVersion
+		migration.ToVersion = version
 	}
 	closeOnError = false
-	return &Store{db: database, path: absolutePath, schemaVersion: version}, nil
+	return &Store{db: database, path: absolutePath, schemaVersion: version}, migration, nil
 }
 
 // OpenReadOnly opens an existing, current operational store without creating
@@ -938,7 +969,7 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 		return nil, &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	if version < CurrentSchemaVersion {
-		return nil, errors.New("operational store schema requires migration")
+		return nil, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	closeOnError = false
 	return &Store{db: database, path: absolutePath, schemaVersion: version}, nil

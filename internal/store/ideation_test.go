@@ -172,7 +172,7 @@ func TestSchema42MigrationAddsIdeationTablesAndKeepsStoredRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := store.Open(t.Context(), path)
+	migrated, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}

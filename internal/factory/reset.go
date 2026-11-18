@@ -268,7 +268,7 @@ func (s *Service) Reset(ctx context.Context, request ResetRequest) (ResetResult,
 	// Deletion takes seconds, so proving the lock unheld once is not enough:
 	// the confirmed path owns the lock for its whole duration, preventing a
 	// coordinator from starting against the store it is about to remove.
-	lock, err := acquireCoordinatorLock(lockPath)
+	lock, err := acquireCoordinatorLock(lockPath, LockHolderReset)
 	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
 		return ResetResult{Plan: plan}, &ResetBlockedError{Blockers: []ResetBlocker{runningCoordinatorBlocker()}}
 	}

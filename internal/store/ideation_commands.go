@@ -465,7 +465,7 @@ func OpenCommandInbox(ctx context.Context, path string) (*CommandInbox, error) {
 	}
 	if version < CurrentSchemaVersion {
 		_ = database.Close()
-		return nil, errors.New("operational store schema requires migration")
+		return nil, &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	return &CommandInbox{store: &Store{db: database, path: absolutePath, schemaVersion: version}}, nil
 }

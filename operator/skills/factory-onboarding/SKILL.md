@@ -24,6 +24,15 @@ The installed guide owns scoped session authorization, including when to use
 existing authority and when a new decision is needed. Discovering this skill
 does not itself authorize paid calls or external actions.
 
+## Upgrade an installed Factory
+
+When the operator asks to move an installation to another Factory release,
+use the new release's binary as the target. Run `<target path> guide
+maintenance` and follow that procedure instead of the steps below. It
+creates the upgrade plan with `<target path> upgrade plan --json`, and its
+operations name the onboarding commands to reuse. Never restore a database
+copy or downgrade the binary.
+
 ## 2. Prepare the release resources
 
 Choose a new directory below the home directory of the operator, for example

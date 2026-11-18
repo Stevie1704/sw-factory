@@ -103,7 +103,7 @@ func TestRunGuideRejectsUnknownTopicWithDiscovery(t *testing.T) {
 	if code := cli.Run(context.Background(), []string{"guide", "nonexistent"}, &output, &errorsOutput); code != 2 {
 		t.Fatalf("guide nonexistent exit code = %d, want 2", code)
 	}
-	for _, want := range []string{`unknown guide topic "nonexistent"`, "authorization, debug, ideation, reporting, setup", "factory guide"} {
+	for _, want := range []string{`unknown guide topic "nonexistent"`, "authorization, debug, ideation, maintenance, reporting, setup", "factory guide"} {
 		if !strings.Contains(errorsOutput.String(), want) {
 			t.Fatalf("guide nonexistent stderr = %q, want %q", errorsOutput.String(), want)
 		}
@@ -141,7 +141,7 @@ func TestGuideNamesOnlyImplementedCommandsAndFlags(t *testing.T) {
 	invocation := regexp.MustCompile("(?m)`factory ([a-z][a-z-]*)([^`]*)`|^factory ([a-z][a-z-]*)([^#\\n]*)")
 	flagName := regexp.MustCompile(`--([a-z][a-z-]*)`)
 	// subcommands names the subcommands whose flags the guide can name.
-	subcommands := map[string][]string{"onboard": {"prepare", "verify", "plan", "status", "record"}, "config": {"validate"}, "run": {"inspect", "evidence"}, "acceptance": {"scenarios", "report"}}
+	subcommands := map[string][]string{"onboard": {"prepare", "verify", "plan", "status", "record"}, "config": {"validate"}, "run": {"inspect", "evidence"}, "acceptance": {"scenarios", "report"}, "upgrade": {"plan", "migrate-store"}}
 	for _, name := range append([]string{guide.Overview}, guide.Topics()...) {
 		body, err := guide.Topic(name)
 		if err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
+	"github.com/Stevie1704/sw-factory/internal/version"
 )
 
 // TestCoordinatorLockPreventsASecondOwner verifies the host lock is enforced
@@ -18,18 +19,18 @@ func TestCoordinatorLockPreventsASecondOwner(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "state", "factory.lock")
-	first, err := acquireCoordinatorLock(path)
+	first, err := acquireCoordinatorLock(path, LockHolderCoordinator)
 	if err != nil {
 		t.Fatalf("first acquireCoordinatorLock() error = %v", err)
 	}
 	defer func() { _ = first.release() }()
-	if _, err := acquireCoordinatorLock(path); !errors.Is(err, ErrCoordinatorAlreadyRunning) {
+	if _, err := acquireCoordinatorLock(path, LockHolderCoordinator); !errors.Is(err, ErrCoordinatorAlreadyRunning) {
 		t.Fatalf("second acquireCoordinatorLock() error = %v, want ErrCoordinatorAlreadyRunning", err)
 	}
 	if err := first.release(); err != nil {
 		t.Fatalf("release() error = %v", err)
 	}
-	second, err := acquireCoordinatorLock(path)
+	second, err := acquireCoordinatorLock(path, LockHolderCoordinator)
 	if err != nil {
 		t.Fatalf("reacquireCoordinatorLock() error = %v", err)
 	}
@@ -50,7 +51,7 @@ func TestStartAcquiresTheCoordinatorLockBeforeReconciliation(t *testing.T) {
 		RepositoryConfigPath: filepath.Join(t.TempDir(), "factory.yaml"),
 		Polling:              config.PollingConfig{Interval: "1s", Backoff: "1s"},
 	}
-	owner, err := acquireCoordinatorLock(coordinatorLockPath(registration))
+	owner, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderCoordinator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestCoordinatorLockRejectsSymlinkedLockFiles(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := acquireCoordinatorLock(link); err == nil {
+	if _, err := acquireCoordinatorLock(link, LockHolderCoordinator); err == nil {
 		t.Fatal("acquireCoordinatorLock() followed a symlink")
 	}
 	if _, err := requestCoordinatorStop(link); err == nil {
@@ -168,3 +169,53 @@ type lockTestLease struct{}
 
 // RenewLease accepts the fixture heartbeat.
 func (lockTestLease) RenewLease(context.Context, tracker.Repository, tracker.Lease) error { return nil }
+
+// TestCoordinatorLockRecordsItsHolderIdentity verifies that the lock record
+// names what holds the lock and its release, that a reader can observe it
+// without taking the lock, and that stop still finds the owner PID.
+func TestCoordinatorLockRecordsItsHolderIdentity(t *testing.T) {
+	t.Parallel()
+	registration := config.RepositoryRegistration{Path: filepath.Join(t.TempDir(), "repository")}
+	if record, err := ObserveCoordinatorLock(registration); err != nil || record.Held {
+		t.Fatalf("free lock record = %+v, %v; want not held", record, err)
+	}
+	owner, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderStoreMigration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.release() }()
+
+	record, err := ObserveCoordinatorLock(registration)
+	identity := version.Current()
+	if err != nil || !record.Held || record.Holder != LockHolderStoreMigration || record.Version != identity.Version || record.Revision != identity.Revision {
+		t.Fatalf("record = %+v, %v; want the store migration of this build", record, err)
+	}
+	if stored, err := readLockRecord(coordinatorLockPath(registration)); err != nil || stored.PID != os.Getpid() {
+		t.Fatalf("lock record = %+v, %v; want PID %d", stored, err, os.Getpid())
+	}
+}
+
+// TestCoordinatorLockRefusesARecordWithoutIdentity verifies that a held
+// lock whose record has no holder identity is an error, not a coordinator.
+func TestCoordinatorLockRefusesARecordWithoutIdentity(t *testing.T) {
+	t.Parallel()
+	registration := config.RepositoryRegistration{Path: filepath.Join(t.TempDir(), "repository")}
+	owner, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderCoordinator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = owner.release() }()
+	if err := owner.file.Truncate(0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.file.WriteAt([]byte("4242\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if record, err := ObserveCoordinatorLock(registration); !errors.Is(err, errInvalidLockRecord) {
+		t.Fatalf("ObserveCoordinatorLock() = %+v, %v; want errInvalidLockRecord", record, err)
+	}
+	if _, err := requestCoordinatorStop(coordinatorLockPath(registration)); !errors.Is(err, errInvalidLockRecord) {
+		t.Fatalf("requestCoordinatorStop() error = %v, want errInvalidLockRecord", err)
+	}
+}

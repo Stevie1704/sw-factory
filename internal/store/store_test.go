@@ -149,7 +149,7 @@ func TestSchema40MigrationCreatesSupervisorHeartbeat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := store.Open(t.Context(), path)
+	migrated, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}
@@ -286,7 +286,7 @@ func TestSchema36MigrationPreservesHeadlessInvocationState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	migrated, err := store.Open(t.Context(), path)
+	migrated, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open(schema 35) error = %v", err)
 	}
@@ -381,7 +381,7 @@ func TestSchema33MigrationFoldsTheSingularActiveInvocationIntoTheSlice(t *testin
 		t.Fatal(err)
 	}
 
-	reopened, err := store.Open(context.Background(), path)
+	reopened, err := openMigrated(context.Background(), path)
 	if err != nil {
 		t.Fatalf("schema 33 migration error = %v", err)
 	}
@@ -672,7 +672,7 @@ func TestStoreMigratesSchemaThreeAndReadsLegacyEmptyPermittedPaths(t *testing.T)
 		t.Fatal(err)
 	}
 
-	opened, err := store.Open(context.Background(), path)
+	opened, err := openMigrated(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}
@@ -1611,7 +1611,7 @@ func TestSchemaOneMigrationPreservesClaimMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opened, err := store.Open(context.Background(), path)
+	opened, err := openMigrated(context.Background(), path)
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}
@@ -1696,7 +1696,7 @@ func TestSchemaTwoMigrationReconcilesDuplicateActiveRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	opened, err := store.Open(t.Context(), path)
+	opened, err := openMigrated(t.Context(), path)
 	if err != nil {
 		t.Fatalf("Open() migration error = %v", err)
 	}
