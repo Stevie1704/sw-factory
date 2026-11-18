@@ -12,8 +12,8 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// migrationRegistration returns a registration whose store holds one run
-// with the given status at the previous schema version.
+// migrationRegistration returns a registration whose current store holds
+// one run with the given status.
 func migrationRegistration(t *testing.T, status store.Status) config.RepositoryRegistration {
 	t.Helper()
 	directory := t.TempDir()
@@ -32,15 +32,12 @@ func migrationRegistration(t *testing.T, status store.Status) config.RepositoryR
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := setSchemaVersion(registration.OperationalDataPath, store.CurrentSchemaVersion-1); err != nil {
-		t.Fatal(err)
-	}
 	return registration
 }
 
-// TestMigrateStoreMigratesAQuiescentStore verifies the explicit migration
-// entry point on an idle store and its reported provenance.
-func TestMigrateStoreMigratesAQuiescentStore(t *testing.T) {
+// TestMigrateStoreLeavesACurrentStoreUnchanged verifies that the explicit
+// migration entry point is a typed no-op on an idle current store.
+func TestMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {
 	t.Parallel()
 	registration := migrationRegistration(t, store.StatusComplete)
 
@@ -48,14 +45,31 @@ func TestMigrateStoreMigratesAQuiescentStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MigrateStore() error = %v", err)
 	}
-	if len(result.Refusals) != 0 || result.Migration.ToVersion != store.CurrentSchemaVersion || result.Migration.Backup == "" {
-		t.Fatalf("result = %+v, want a migration with a backup", result)
+	if len(result.Refusals) != 0 || result.Migration != (store.Migration{FromVersion: store.CurrentSchemaVersion, ToVersion: store.CurrentSchemaVersion}) {
+		t.Fatalf("result = %+v, want a no-op at the current schema", result)
+	}
+}
+
+// TestMigrateStoreRefusesAnUnsupportedSchema verifies that an older and a
+// newer schema are refused and stay unchanged.
+func TestMigrateStoreRefusesAnUnsupportedSchema(t *testing.T) {
+	t.Parallel()
+	for version, code := range map[int]string{store.CurrentSchemaVersion - 1: "store.schema_unsupported", store.CurrentSchemaVersion + 1: "store.schema_newer"} {
+		registration := migrationRegistration(t, store.StatusComplete)
+		if err := setSchemaVersion(registration.OperationalDataPath, version); err != nil {
+			t.Fatal(err)
+		}
+		result, err := MigrateStore(context.Background(), registration)
+		if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != code {
+			t.Fatalf("schema %d result = %+v, %v; want %s", version, result, err, code)
+		}
+		assertSchema(t, registration.OperationalDataPath, version)
 	}
 }
 
 // TestMigrateStoreRefusesActiveWorkAndALiveCoordinator verifies that the
 // migration never runs while a run is active or a coordinator holds the
-// lock, and leaves the store schema unchanged.
+// lock.
 func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 	t.Parallel()
 	active := migrationRegistration(t, store.StatusActive)
@@ -63,7 +77,7 @@ func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 	if err != nil || len(result.Refusals) == 0 || result.Refusals[0].Code != "run.active" {
 		t.Fatalf("active result = %+v, %v; want a run.active refusal", result, err)
 	}
-	assertSchema(t, active.OperationalDataPath, store.CurrentSchemaVersion-1)
+	assertSchema(t, active.OperationalDataPath, store.CurrentSchemaVersion)
 
 	idle := migrationRegistration(t, store.StatusComplete)
 	owner, err := acquireCoordinatorLock(coordinatorLockPath(idle), LockHolderCoordinator)
@@ -75,11 +89,11 @@ func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 	if err != nil || len(result.Refusals) == 0 || result.Refusals[0].Code != "coordinator.running" {
 		t.Fatalf("locked result = %+v, %v; want a coordinator.running refusal", result, err)
 	}
-	assertSchema(t, idle.OperationalDataPath, store.CurrentSchemaVersion-1)
+	assertSchema(t, idle.OperationalDataPath, store.CurrentSchemaVersion)
 }
 
 // TestMigrateStoreRollsBackAnInterruptedWriteFirst verifies that a rollback
-// journal is resolved before quiescence is checked.
+// journal is resolved before the migration gate is checked.
 func TestMigrateStoreRollsBackAnInterruptedWriteFirst(t *testing.T) {
 	t.Parallel()
 	registration := migrationRegistration(t, store.StatusComplete)
@@ -87,8 +101,8 @@ func TestMigrateStoreRollsBackAnInterruptedWriteFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := MigrateStore(context.Background(), registration)
-	if err != nil || len(result.Refusals) != 0 || result.Migration.ToVersion != store.CurrentSchemaVersion {
-		t.Fatalf("result = %+v, %v; want a migration after the rollback", result, err)
+	if err != nil || len(result.Refusals) != 0 || !result.RolledBack || result.Migration.ToVersion != store.CurrentSchemaVersion {
+		t.Fatalf("result = %+v, %v; want a rollback and a current store", result, err)
 	}
 }
 
@@ -135,5 +149,5 @@ func TestMigrateStoreRefusesAnActiveSessionRole(t *testing.T) {
 	if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != "session_invocation.active" {
 		t.Fatalf("result = %+v, %v; want a session_invocation.active refusal", result, err)
 	}
-	assertSchema(t, registration.OperationalDataPath, store.CurrentSchemaVersion-1)
+	assertSchema(t, registration.OperationalDataPath, store.CurrentSchemaVersion)
 }

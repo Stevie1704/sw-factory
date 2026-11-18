@@ -14,9 +14,9 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// olderStoreFixture writes a reduced store of an older supported schema with
-// the tables that upgrade inspection reads, and returns its path.
-func olderStoreFixture(t *testing.T, version int, statements ...string) string {
+// storeFixture writes a reduced store with the given schema version and the
+// tables that upgrade inspection reads, and returns its path.
+func storeFixture(t *testing.T, version int, statements ...string) string {
 	t.Helper()
 	path := filepath.Join(privateDirectory(t), "factory.db")
 	database, err := sql.Open("sqlite", path)
@@ -29,6 +29,8 @@ func olderStoreFixture(t *testing.T, version int, statements ...string) string {
 		"CREATE TABLE operational_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
 		"CREATE TABLE invocations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, status TEXT NOT NULL)",
 		"CREATE TABLE pending_effects (run_id TEXT PRIMARY KEY, effect_id TEXT NOT NULL)",
+		"CREATE TABLE ideation_invocations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL)",
+		"CREATE TABLE ideation_commands (sequence INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL)",
 	}
 	for _, statement := range append(schema, statements...) {
 		if _, err := database.Exec(statement); err != nil {
@@ -60,15 +62,17 @@ func fileState(t *testing.T, path string) string {
 	return info.ModTime().String() + string(sum[:])
 }
 
-// TestInspectForUpgradeReadsAnOlderStoreWithoutMigration verifies the narrow
-// read-only path: an older supported schema reports its version, its active
-// work, and its migration backups, and the file does not change.
-func TestInspectForUpgradeReadsAnOlderStoreWithoutMigration(t *testing.T) {
+// TestInspectForUpgradeReadsActiveWorkWithoutChange verifies the read-only
+// path: a current store reports each kind of work that fails the migration
+// gate and its migration backups, and the file does not change.
+func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 	t.Parallel()
-	path := olderStoreFixture(t, 40,
+	path := storeFixture(t, store.CurrentSchemaVersion,
 		"INSERT INTO operational_runs (id, status) VALUES ('run-done', 'complete'), ('run-open', 'waiting_for_human')",
 		"INSERT INTO invocations (id, run_id, status) VALUES ('inv-1', 'run-open', 'active')",
 		"INSERT INTO pending_effects (run_id, effect_id) VALUES ('run-open', 'effect-1')",
+		"INSERT INTO ideation_invocations (id, session_id, status) VALUES ('session-inv-1', 'session-1', 'active'), ('session-inv-0', 'session-0', 'accepted')",
+		"INSERT INTO ideation_commands (state) VALUES ('accepted'), ('completed')",
 	)
 	if err := os.WriteFile(path+".bak-20260101T000000.000000000Z", []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
@@ -79,11 +83,15 @@ func TestInspectForUpgradeReadsAnOlderStoreWithoutMigration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectForUpgrade() error = %v", err)
 	}
-	if !inspection.Exists || inspection.SchemaVersion != 40 || !inspection.Supported() {
-		t.Fatalf("inspection = %+v, want an existing, supported schema 40", inspection)
+	if !inspection.Supported() || !slices.Equal(inspection.ActiveRuns, []string{"run-open"}) {
+		t.Fatalf("inspection = %+v, want a supported store with run-open active", inspection)
 	}
-	if !slices.Equal(inspection.ActiveRuns, []string{"run-open"}) || inspection.ActiveInvocations != 1 || inspection.PendingEffects != 1 {
-		t.Fatalf("active work = %v runs, %d invocations, %d effects; want run-open, 1, 1", inspection.ActiveRuns, inspection.ActiveInvocations, inspection.PendingEffects)
+	var codes []string
+	for _, finding := range inspection.ActivityFindings() {
+		codes = append(codes, finding.Code)
+	}
+	if !slices.Equal(codes, []string{"run.active", "invocation.active", "effect.pending", "session_invocation.active", "session_command.queued"}) {
+		t.Fatalf("activity findings = %v, want every kind of active work", codes)
 	}
 	if len(inspection.Backups) != 1 || filepath.Base(inspection.Backups[0]) != "factory.db.bak-20260101T000000.000000000Z" {
 		t.Fatalf("backups = %v, want the one migration backup", inspection.Backups)
@@ -96,18 +104,18 @@ func TestInspectForUpgradeReadsAnOlderStoreWithoutMigration(t *testing.T) {
 	}
 }
 
-// TestInspectForUpgradeReportsSchemaLimits verifies that a newer schema and
-// a schema below the inspectable minimum are reported without reading run
-// tables, and that a missing store is not an error.
+// TestInspectForUpgradeReportsSchemaLimits verifies that a newer and an
+// older schema are reported as unsupported without reading run tables, and
+// that a missing store is not an error.
 func TestInspectForUpgradeReportsSchemaLimits(t *testing.T) {
 	t.Parallel()
-	newer, err := store.InspectForUpgrade(context.Background(), olderStoreFixture(t, store.CurrentSchemaVersion+1))
+	newer, err := store.InspectForUpgrade(context.Background(), storeFixture(t, store.CurrentSchemaVersion+1))
 	if err != nil || newer.Supported() || newer.SchemaVersion != store.CurrentSchemaVersion+1 {
 		t.Fatalf("newer inspection = %+v, %v; want an unsupported newer schema", newer, err)
 	}
-	tooOld, err := store.InspectForUpgrade(context.Background(), olderStoreFixture(t, store.MinimumUpgradeSchemaVersion-1))
-	if err != nil || tooOld.Supported() {
-		t.Fatalf("old inspection = %+v, %v; want an unsupported old schema", tooOld, err)
+	older, err := store.InspectForUpgrade(context.Background(), storeFixture(t, store.CurrentSchemaVersion-1))
+	if err != nil || older.Supported() || older.SchemaFinding() == nil || older.SchemaFinding().Code != "store.schema_unsupported" {
+		t.Fatalf("older inspection = %+v, %v; want store.schema_unsupported", older, err)
 	}
 	missing, err := store.InspectForUpgrade(context.Background(), filepath.Join(privateDirectory(t), "factory.db"))
 	if err != nil || missing.Exists {
@@ -133,34 +141,19 @@ func TestInspectForUpgradeReportsAnInterruptedWrite(t *testing.T) {
 	}
 }
 
-// TestMigrateReportsTheBackupProvenance verifies the explicit migration entry
-// point: it migrates an older store, keeps the automatic backup, and names
-// it; a current store is left unchanged.
-func TestMigrateReportsTheBackupProvenance(t *testing.T) {
+// TestMigrateLeavesACurrentStoreUnchanged verifies that the explicit
+// migration entry point is a typed no-op on a current store.
+func TestMigrateLeavesACurrentStoreUnchanged(t *testing.T) {
 	t.Parallel()
 	path := quiescentStore(t, completedRun("run-1", 7))
-	database := openRaw(t, path)
-	if _, err := database.Exec("UPDATE schema_metadata SET version = 51"); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
+	before := fileState(t, path)
 
 	migration, err := store.Migrate(context.Background(), path)
-	if err != nil {
-		t.Fatalf("Migrate() error = %v", err)
+	if err != nil || migration != (store.Migration{FromVersion: store.CurrentSchemaVersion, ToVersion: store.CurrentSchemaVersion}) {
+		t.Fatalf("Migrate() = %+v, %v; want a no-op at the current schema", migration, err)
 	}
-	if migration.FromVersion != 51 || migration.ToVersion != store.CurrentSchemaVersion || migration.Backup == "" {
-		t.Fatalf("migration = %+v, want 51 to current with a backup", migration)
-	}
-	if _, err := os.Stat(migration.Backup); err != nil {
-		t.Fatalf("backup %s: %v", migration.Backup, err)
-	}
-
-	again, err := store.Migrate(context.Background(), path)
-	if err != nil || again.FromVersion != store.CurrentSchemaVersion || again.Backup != "" {
-		t.Fatalf("second Migrate() = %+v, %v; want no change and no backup", again, err)
+	if fileState(t, path) != before {
+		t.Fatal("Migrate() changed a current store")
 	}
 }
 
@@ -179,32 +172,6 @@ func TestRollBackInterruptedWriteClearsTheJournal(t *testing.T) {
 	inspection, err := store.InspectForUpgrade(context.Background(), path)
 	if err != nil || inspection.InterruptedWrite || inspection.SchemaVersion != store.CurrentSchemaVersion {
 		t.Fatalf("inspection after rollback = %+v, %v; want a readable current store", inspection, err)
-	}
-}
-
-// TestInspectForUpgradeReportsSessionWork verifies that an active
-// session-role invocation and a queued session command of a schema-51
-// store fail the migration gate even without an active run.
-func TestInspectForUpgradeReportsSessionWork(t *testing.T) {
-	t.Parallel()
-	path := olderStoreFixture(t, 51,
-		"CREATE TABLE ideation_invocations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL)",
-		"CREATE TABLE ideation_commands (sequence INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL)",
-		"INSERT INTO operational_runs (id, status) VALUES ('run-done', 'complete')",
-		"INSERT INTO ideation_invocations (id, session_id, status) VALUES ('session-inv-1', 'session-1', 'active'), ('session-inv-0', 'session-0', 'accepted')",
-		"INSERT INTO ideation_commands (state) VALUES ('accepted'), ('completed')",
-	)
-
-	inspection, err := store.InspectForUpgrade(context.Background(), path)
-	if err != nil {
-		t.Fatalf("InspectForUpgrade() error = %v", err)
-	}
-	var codes []string
-	for _, finding := range inspection.ActivityFindings() {
-		codes = append(codes, finding.Code)
-	}
-	if !slices.Equal(codes, []string{"session_invocation.active", "session_command.queued"}) {
-		t.Fatalf("activity findings = %v, want the active session invocation and the queued command", codes)
 	}
 }
 

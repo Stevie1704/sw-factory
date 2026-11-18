@@ -11,11 +11,6 @@ import (
 	"strings"
 )
 
-// MinimumUpgradeSchemaVersion is the oldest operational-store schema that the
-// read-only upgrade inspection reads. From this version on, the store has the
-// run, invocation, and pending-effect tables that the migration gate reads.
-const MinimumUpgradeSchemaVersion = 21
-
 // UpgradeInspection is the read-only view of an operational store that an
 // upgrade plan needs. Its run facts are set only when Supported is true.
 type UpgradeInspection struct {
@@ -44,9 +39,10 @@ type UpgradeInspection struct {
 	Backups []string
 }
 
-// Supported reports whether this build can inspect and migrate the store.
+// Supported reports whether this build can inspect the store: only the
+// current schema is supported.
 func (i UpgradeInspection) Supported() bool {
-	return i.Exists && i.SchemaVersion >= MinimumUpgradeSchemaVersion && i.SchemaVersion <= CurrentSchemaVersion
+	return i.Exists && i.SchemaVersion == CurrentSchemaVersion
 }
 
 // UpgradeFinding is one stable reason why a store must not be migrated now.
@@ -56,8 +52,8 @@ type UpgradeFinding struct {
 	Detail string `json:"detail"`
 }
 
-// SchemaFinding returns the finding of a store that is missing or whose
-// schema this build cannot inspect, or nil.
+// SchemaFinding returns the finding of a store that is missing, newer, or
+// older than the current schema, or nil.
 func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 	switch {
 	case !i.Exists:
@@ -65,7 +61,7 @@ func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 	case i.SchemaVersion > CurrentSchemaVersion:
 		return &UpgradeFinding{Code: "store.schema_newer", Detail: fmt.Sprintf("the store has schema %d; this build supports %d", i.SchemaVersion, CurrentSchemaVersion)}
 	case !i.Supported():
-		return &UpgradeFinding{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build inspects %d to %d", i.SchemaVersion, MinimumUpgradeSchemaVersion, CurrentSchemaVersion)}
+		return &UpgradeFinding{Code: "store.schema_unsupported", Detail: fmt.Sprintf("the store has schema %d; this build supports only schema %d", i.SchemaVersion, CurrentSchemaVersion)}
 	}
 	return nil
 }
@@ -103,9 +99,8 @@ type Migration struct {
 }
 
 // InspectForUpgrade reads the schema version and the active work of an
-// existing store through a narrow read-only path that also accepts an older
-// supported schema. It never creates, migrates, backs up, or changes the
-// store. A missing store is reported, not an error.
+// existing store through a narrow read-only path that reads the version of
+// any schema. It never creates, migrates, backs up, or changes the store. A missing store is reported, not an error.
 func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, error) {
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
@@ -164,25 +159,13 @@ func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeIn
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM pending_effects").Scan(&inspection.PendingEffects); err != nil {
 		return fmt.Errorf("read pending effects: %w", err)
 	}
-	if inspection.ActiveSessionInvocations, err = countIfTable(ctx, database, "ideation_invocations", "SELECT COUNT(*) FROM ideation_invocations WHERE status = ?", SessionInvocationActive); err != nil {
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_invocations WHERE status = ?", SessionInvocationActive).Scan(&inspection.ActiveSessionInvocations); err != nil {
 		return fmt.Errorf("read active session invocations: %w", err)
 	}
-	if inspection.QueuedSessionCommands, err = countIfTable(ctx, database, "ideation_commands", "SELECT COUNT(*) FROM ideation_commands WHERE state <> ?", IdeationCommandCompleted); err != nil {
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_commands WHERE state <> ?", IdeationCommandCompleted).Scan(&inspection.QueuedSessionCommands); err != nil {
 		return fmt.Errorf("read queued session commands: %w", err)
 	}
 	return nil
-}
-
-// countIfTable runs a count query when its table exists, and returns zero
-// for an older schema that has no such table.
-func countIfTable(ctx context.Context, database *sql.DB, table, query string, args ...any) (int, error) {
-	var tables int
-	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&tables); err != nil || tables == 0 {
-		return 0, err
-	}
-	var count int
-	err := database.QueryRowContext(ctx, query, args...).Scan(&count)
-	return count, err
 }
 
 // migrationBackups lists the pre-migration backups whose name proves they

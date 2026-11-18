@@ -107,10 +107,8 @@ func (p planner) store() ComponentStatus {
 		status.State, status.Detail = StateUnknown, finding.Detail
 	case finding != nil:
 		status.State, status.Detail = StateUnsupported, finding.Detail
-	case s.SchemaVersion == store.CurrentSchemaVersion:
-		status.State = StateNew
 	default:
-		status.State, status.Detail = StateOld, fmt.Sprintf("schema %d; the target uses %d", s.SchemaVersion, store.CurrentSchemaVersion)
+		status.State = StateNew
 	}
 	return status
 }
@@ -180,7 +178,7 @@ func (p planner) activityBlockers() []Blocker {
 	if !o.Store.Supported() || o.Store.InterruptedWrite {
 		return blockers
 	}
-	owner := p.storeOwner()
+	owner := "the binary that claimed it"
 	actions := map[string]string{
 		"run.active":                "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
 		"invocation.active":         "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
@@ -224,15 +222,6 @@ func (p planner) coordinatorBlocker() *Blocker {
 func (p planner) targetCoordinator() bool {
 	lock, target := p.observation.Lock, p.observation.Target
 	return lock.Held && lock.Holder == LockHolderCoordinator && lock.Version == target.Version && lock.Revision == target.Revision
-}
-
-// storeOwner names the binary that reads the current store schema. Before
-// the migration it is the old binary; after it, only the target binary.
-func (p planner) storeOwner() string {
-	if p.observation.Store.SchemaVersion == store.CurrentSchemaVersion {
-		return "the target binary " + p.command()
-	}
-	return "the old binary that claimed it"
 }
 
 // workerBlockers lists the worker conditions that stop a rebuild.

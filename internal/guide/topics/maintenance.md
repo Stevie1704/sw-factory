@@ -113,7 +113,10 @@ holds, and an unsupported schema.
 Then it copies the store to a private `<store>.bak-<timestamp>` file and
 migrates the schema in one transaction. Its document has `outcome`
 (`migrated`, `current`, `refused`, or `error`), `migration` with
-`from_version`, `to_version`, and `backup`, and `refusals`. No other command
+`from_version`, `to_version`, and `backup`, and `refusals`. A release
+supports only the store schemas that it names; this release supports only its
+own schema, so `migrate_store` reports `current` for it and refuses an older
+schema as `store.schema_unsupported`. No other command
 migrates an existing store: `factory start`, `factory doctor`, `factory
 status`, and every other command refuse an older schema, and the doctor
 reports `store.sqlite.migration_required`.

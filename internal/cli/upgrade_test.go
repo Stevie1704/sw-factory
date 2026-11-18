@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -38,15 +37,15 @@ func (f fakeUpgradeImages) ImageRelease(context.Context, worker.ImageReference) 
 	return f.release, nil
 }
 
-// upgradeFixture is a registered repository with a previous-schema store.
+// upgradeFixture is a registered repository with a current store.
 type upgradeFixture struct {
 	planFixture
 	store string
 }
 
-// newUpgradeFixture registers the onboarding fixture, gives it a store with
-// one run of the given status at the previous schema, and makes the target
-// a release binary that PATH does not name yet.
+// newUpgradeFixture registers the onboarding fixture, gives it a current
+// store with one run of the given status, and makes the target a release
+// binary that PATH does not name yet.
 func newUpgradeFixture(t *testing.T, status store.Status, images fakeUpgradeImages) upgradeFixture {
 	t.Helper()
 	usePlanFakes(t)
@@ -65,16 +64,6 @@ func newUpgradeFixture(t *testing.T, status store.Status, images fakeUpgradeImag
 		t.Fatal(err)
 	}
 	if err := opened.Close(); err != nil {
-		t.Fatal(err)
-	}
-	database, err := sql.Open("sqlite", fixture.store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.Exec("UPDATE schema_metadata SET version = ?", store.CurrentSchemaVersion-1); err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
 	identityFn, lookPath, imagesFn := upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI
@@ -164,8 +153,8 @@ func TestUpgradePlanOfAnIdleInstallationChangesNothing(t *testing.T) {
 	for _, component := range document.Components {
 		states[component.Name] = component.State
 	}
-	if states["store"] != "old" || states["worker"] != "old" || states["binary"] != "old" {
-		t.Fatalf("components = %v, want old store, worker, and binary", states)
+	if states["store"] != "new" || states["worker"] != "old" || states["binary"] != "old" {
+		t.Fatalf("components = %v, want a current store and an old worker and binary", states)
 	}
 	if len(document.Operations) != 10 || len(document.RecoveryLimits) == 0 || document.StoreBackups == nil {
 		t.Fatalf("plan = %+v, want ten operations, recovery limits, and backups", document)
@@ -223,26 +212,16 @@ func TestUpgradePlanReusesTheOnboardingPlan(t *testing.T) {
 	}
 }
 
-// TestUpgradeMigrateStoreIsTheExplicitEntryPoint verifies the migration and
-// its provenance, and that a repeated call changes nothing.
-func TestUpgradeMigrateStoreIsTheExplicitEntryPoint(t *testing.T) {
+// TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged verifies the typed
+// no-op result of the explicit entry point on a current store.
+func TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {
 	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
 
-	var migrated migrateStoreDocument
-	if code := runUpgradeCommand(t, &migrated, "migrate-store", "--config", fixture.hostConfig, "--json"); code != 0 {
-		t.Fatalf("migrate-store exit = %d, %+v", code, migrated)
-	}
-	if migrated.Outcome != "migrated" || migrated.Migration == nil || migrated.Migration.Backup == "" || migrated.Migration.ToVersion != store.CurrentSchemaVersion {
-		t.Fatalf("migrate-store = %+v, want a migration with a backup", migrated)
-	}
-	var again migrateStoreDocument
-	if code := runUpgradeCommand(t, &again, "migrate-store", "--config", fixture.hostConfig, "--json"); code != 0 || again.Outcome != "current" {
-		t.Fatalf("second migrate-store = exit %d, %+v; want current", code, again)
-	}
-	var plan upgradeDocument
-	runUpgradeCommand(t, &plan, "plan", "--config", fixture.hostConfig, "--json")
-	if len(plan.StoreBackups) != 1 || plan.StoreBackups[0] != migrated.Migration.Backup {
-		t.Fatalf("plan backups = %v, want the migration backup", plan.StoreBackups)
+	var document migrateStoreDocument
+	code := runUpgradeCommand(t, &document, "migrate-store", "--config", fixture.hostConfig, "--json")
+
+	if code != 0 || document.Outcome != "current" || document.Migration == nil || document.Migration.Backup != "" || document.Migration.ToVersion != store.CurrentSchemaVersion {
+		t.Fatalf("migrate-store = exit %d, %+v; want the current outcome without a backup", code, document)
 	}
 }
 
@@ -258,7 +237,7 @@ func TestUpgradeMigrateStoreRefusesAnActiveRun(t *testing.T) {
 		t.Fatalf("migrate-store = exit %d, %+v; want a run.active refusal", code, document)
 	}
 	inspection, err := store.InspectForUpgrade(context.Background(), fixture.store)
-	if err != nil || inspection.SchemaVersion != store.CurrentSchemaVersion-1 {
+	if err != nil || inspection.SchemaVersion != store.CurrentSchemaVersion {
 		t.Fatalf("schema after refusal = %d, %v", inspection.SchemaVersion, err)
 	}
 }

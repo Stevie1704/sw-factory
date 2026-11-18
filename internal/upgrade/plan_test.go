@@ -26,7 +26,7 @@ func idleBeforeUpgrade() upgrade.Observation {
 		ConfigPath:         configPath,
 		Registered:         true,
 		RepositoryPath:     "/work/service",
-		Store:              store.UpgradeInspection{Path: "/home/operator/.config/factory/data/factory.db", Exists: true, SchemaVersion: store.CurrentSchemaVersion - 1},
+		Store:              store.UpgradeInspection{Path: "/home/operator/.config/factory/data/factory.db", Exists: true, SchemaVersion: store.CurrentSchemaVersion},
 		InstalledBinary:    "/opt/factory-v1.3.0/bin/factory",
 		BaseImage:          upgrade.ImageObservation{Reference: "ghcr.io/stevie1704/sw-factory-base@sha256:1111", Present: true},
 		Worker:             upgrade.WorkerObservation{Image: "ghcr.io/example/service-worker@sha256:2222", Present: true, Release: "v1.3.0"},
@@ -43,7 +43,6 @@ func upgradedAndRunning() upgrade.Observation {
 	observation.InstalledBinary, observation.InstalledIsTarget = targetFactory, true
 	observation.Worker.Release = targetRelease
 	observation.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
-	observation.Store.SchemaVersion = store.CurrentSchemaVersion
 	observation.Resources = upgrade.ResourcesObservation{Directory: resourcesPath, Verified: true}
 	observation.Onboarding = verifiedOnboarding()
 	observation.Lock = targetCoordinator()
@@ -143,7 +142,7 @@ func TestBuildPlansAHealthyIdleUpgrade(t *testing.T) {
 	}
 	for name, state := range map[upgrade.Component]upgrade.ComponentState{
 		upgrade.ComponentBinary: upgrade.StateOld, upgrade.ComponentWorker: upgrade.StateOld, upgrade.ComponentPolicy: upgrade.StateNew,
-		upgrade.ComponentSmoke: upgrade.StateOld, upgrade.ComponentStore: upgrade.StateOld,
+		upgrade.ComponentSmoke: upgrade.StateOld, upgrade.ComponentStore: upgrade.StateNew,
 	} {
 		if got := component(t, plan, name); got != state {
 			t.Fatalf("component %s = %s, want %s", name, got, state)
@@ -156,15 +155,21 @@ func TestBuildPlansAHealthyIdleUpgrade(t *testing.T) {
 	if !operation(t, plan, upgrade.OperationSkillSmoke).Paid {
 		t.Fatal("skill_smoke is not marked as paid")
 	}
-	if len(plan.Verification) == 0 || len(plan.RecoveryLimits) == 0 {
-		t.Fatalf("plan has no verification (%d) or recovery limits (%d)", len(plan.Verification), len(plan.RecoveryLimits))
+	if len(plan.Verification) == 0 {
+		t.Fatal("plan has no verification")
+	}
+	limits := strings.Join(plan.RecoveryLimits, " ")
+	for _, want := range []string{"old binary", "ADR 0032"} {
+		if !strings.Contains(limits, want) {
+			t.Fatalf("recovery limits %q do not state %q", limits, want)
+		}
 	}
 }
 
 // TestBuildBlocksActiveWorkWithTheOldBinary verifies the first-version
 // policy: active runs, journaled effects, and active invocations block the
-// upgrade and are finished with the binary that owns the store schema.
-func TestBuildBlocksActiveWorkWithTheOldBinary(t *testing.T) {
+// upgrade and are finished with the binary that claimed them.
+func TestBuildBlocksActiveWorkWithTheClaimingBinary(t *testing.T) {
 	observation := idleBeforeUpgrade()
 	observation.Store.ActiveRuns = []string{"run-7"}
 	observation.Store.PendingEffects = 1
@@ -177,8 +182,8 @@ func TestBuildBlocksActiveWorkWithTheOldBinary(t *testing.T) {
 		t.Fatalf("result = %s, want blocked", plan.Result)
 	}
 	active := blocker(t, plan, "run.active")
-	if !strings.Contains(active.Detail, "run-7") || !strings.Contains(active.Action, "old") {
-		t.Fatalf("run.active = %+v, want the run and the old binary", active)
+	if !strings.Contains(active.Detail, "run-7") || !strings.Contains(active.Action, "the binary that claimed it") {
+		t.Fatalf("run.active = %+v, want the run and the binary that claimed it", active)
 	}
 	blocker(t, plan, "effect.pending")
 	blocker(t, plan, "invocation.active")
@@ -199,7 +204,7 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 		code   string
 	}{
 		"newer schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion + 1 }, "store.schema_newer"},
-		"schema too old":     {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.MinimumUpgradeSchemaVersion - 1 }, "store.schema_unsupported"},
+		"older schema":       {func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion - 1 }, "store.schema_unsupported"},
 		"missing base image": {func(o *upgrade.Observation) { o.BaseImage.Present = false }, "worker.base_image_missing"},
 		"previous coordinator": {func(o *upgrade.Observation) {
 			o.Lock = upgrade.LockObservation{Held: true, Holder: "coordinator", Version: "v1.3.0", Revision: "old"}
@@ -232,23 +237,22 @@ func TestBuildReportsExplicitBlockers(t *testing.T) {
 }
 
 // TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls verifies an
-// interruption after the paid smoke: valid evidence is reused, and the store
-// migration is the supported continuation.
+// interruption after the paid smoke: valid evidence is reused, and the
+// doctor is the supported continuation.
 func TestBuildContinuesAfterSmokeWithoutRepeatingPaidCalls(t *testing.T) {
 	observation := upgradedAndRunning()
 	observation.Lock = upgrade.LockObservation{}
-	observation.Store.SchemaVersion = store.CurrentSchemaVersion - 1
 	observation.Onboarding = withStep(verifiedOnboarding(), onboarding.StepDoctor, onboarding.StatePending, "run doctor")
 	plan := upgrade.Build(observation)
 
 	if smoke := operation(t, plan, upgrade.OperationSkillSmoke); smoke.State != upgrade.OperationDone {
 		t.Fatalf("skill_smoke = %+v, want done from reused evidence", smoke)
 	}
-	if next := nextOperation(plan); next != upgrade.OperationMigrateStore {
-		t.Fatalf("next operation = %s, want migrate_store", next)
+	if next := nextOperation(plan); next != upgrade.OperationDoctor {
+		t.Fatalf("next operation = %s, want doctor", next)
 	}
-	if component(t, plan, upgrade.ComponentSmoke) != upgrade.StateNew || component(t, plan, upgrade.ComponentStore) != upgrade.StateOld {
-		t.Fatalf("components = %+v, want smoke new and store old", plan.Components)
+	if component(t, plan, upgrade.ComponentSmoke) != upgrade.StateNew {
+		t.Fatalf("components = %+v, want smoke new", plan.Components)
 	}
 }
 
@@ -264,31 +268,6 @@ func TestBuildReportsPartialSmokeAsIncomplete(t *testing.T) {
 	smoke := operation(t, plan, upgrade.OperationSkillSmoke)
 	if component(t, plan, upgrade.ComponentSmoke) != upgrade.StateIncomplete || smoke.State != upgrade.OperationPending || !strings.Contains(smoke.Command, "MANDATORY_SKILLS=review") {
 		t.Fatalf("skill_smoke = %+v, want the onboarding action for the missing skill only", smoke)
-	}
-}
-
-// TestBuildNeverOffersTheOldBinaryAfterMigration verifies an interruption
-// after the store migration while PATH still names the old binary: the plan
-// continues forward with the target binary and states that the old binary
-// is no rollback.
-func TestBuildNeverOffersTheOldBinaryAfterMigration(t *testing.T) {
-	observation := idleBeforeUpgrade()
-	observation.Store.SchemaVersion = store.CurrentSchemaVersion
-	observation.Store.ActiveRuns = []string{"run-9"}
-	plan := upgrade.Build(observation)
-
-	if component(t, plan, upgrade.ComponentStore) != upgrade.StateNew || component(t, plan, upgrade.ComponentBinary) != upgrade.StateOld {
-		t.Fatalf("components = %+v, want store new and binary old", plan.Components)
-	}
-	active := blocker(t, plan, "run.active")
-	if strings.Contains(active.Action, "old") || !strings.Contains(active.Action, targetFactory) {
-		t.Fatalf("run.active action = %q, want the target binary, never the old one", active.Action)
-	}
-	limits := strings.Join(plan.RecoveryLimits, " ")
-	for _, want := range []string{"old binary", "ADR 0032"} {
-		if !strings.Contains(limits, want) {
-			t.Fatalf("recovery limits %q do not state %q", limits, want)
-		}
 	}
 }
 
@@ -352,8 +331,7 @@ func TestBuildContinuesAfterEachStep(t *testing.T) {
 		}, upgrade.OperationSkillSmoke},
 		{func(o *upgrade.Observation) {
 			o.Smoke = []onboarding.HarnessSmoke{{Harness: "codex", Required: []string{"tdd"}, Verified: []string{"tdd"}, Missing: []string{}}}
-		}, upgrade.OperationMigrateStore},
-		{func(o *upgrade.Observation) { o.Store.SchemaVersion = store.CurrentSchemaVersion }, upgrade.OperationDoctor},
+		}, upgrade.OperationDoctor},
 		{func(o *upgrade.Observation) { o.Onboarding = verifiedOnboarding() }, upgrade.OperationStartCoordinator},
 	}
 	observation := idleBeforeUpgrade()
