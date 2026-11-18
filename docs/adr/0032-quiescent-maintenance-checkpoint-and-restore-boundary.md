@@ -294,16 +294,17 @@ checkpoint. Each one is refused, not approximated.
 
 ## Feasibility evidence
 
-`internal/store/checkpoint_feasibility_test.go` is a test-only prototype. In
-rollback-journal mode and in WAL mode, it runs the exact snapshot sequence:
-connection A holds `BEGIN IMMEDIATE` and checks quiescence; `VACUUM INTO`
-inside A fails; a third writer cannot change the store; connection B takes
-the snapshot; A ends. The snapshot holds the checked state, has no sidecar,
-passes the integrity check, and opens as a current store only after its mode
-is set to `0600`. The prototype also shows that a divergence check refuses a
-later run, a later pull request, a journaled pending effect, and a known
-branch that moved, and that an unreadable known object refuses as
-unverified. It adds no production code.
+The production tests are the evidence. `internal/store/snapshot_test.go`
+runs the snapshot sequence in rollback-journal mode and in WAL mode:
+connection A holds `BEGIN IMMEDIATE` and runs the check; a third writer
+cannot change the store; connection B takes the snapshot; A ends. The
+snapshot holds the checked state, has mode `0600`, and passes the integrity
+check. `internal/store/checkpoint_feasibility_test.go` keeps the one fact
+that production does not exercise: `VACUUM INTO` inside A fails, so the
+snapshot runs on B. `internal/checkpoint/divergence_test.go` and
+`internal/factory/checkpoint_restore_test.go` show that restore refuses a
+later run, a later pull request, a pending effect, and a known branch that
+moved, and that an unreadable known object refuses as unverified.
 
 ## Follow-up implementation specifications
 
