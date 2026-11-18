@@ -37,6 +37,11 @@ var upgradeImagesForCLI = func() upgradeImages { return worker.NewDockerRuntime(
 // the CLI contract can be tested without Docker.
 var upgradeWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
 
+// upgradeMigrateStoreForCLI is the store migration seam, so the CLI
+// contract of a migration can be tested while this release accepts only its
+// own schema.
+var upgradeMigrateStoreForCLI = factory.MigrateStore
+
 // upgradeIdentityForCLI is the build identity seam: the plan runs from the
 // target binary, so its identity is the target release.
 var upgradeIdentityForCLI = version.Current
@@ -89,7 +94,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 	configPath := flags.String("config", defaultConfigPath, "host configuration of the installation to upgrade")
 	onboardingPlan := flags.String("onboarding-plan", "", "onboarding plan of the repository, whose valid evidence the upgrade reuses")
 	resources := flags.String("resources", "", "directory that onboard prepare of the target filled; defaults to the onboarding plan's value")
-	checkpoints := flags.String("checkpoints", "", "directory whose direct subdirectories are maintenance checkpoints; the plan lists the newest one of this registration and release")
+	checkpoints := flags.String("checkpoints", "", "directory whose direct subdirectories are maintenance checkpoints; the plan lists the newest one of this registration and store schema")
 	asJSON := flags.Bool("json", false, "write the plan as one schema-versioned JSON document; required")
 	if !parseOnboardFlags(flags, args, errorsOutput) {
 		return 2
@@ -137,7 +142,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 	}
 	var result factory.StoreMigrationResult
 	if err == nil {
-		result, err = factory.MigrateStore(ctx, host.Repositories[0], upgradeWorkersForCLI())
+		result, err = upgradeMigrateStoreForCLI(ctx, host.Repositories[0], upgradeWorkersForCLI())
 	}
 	if err != nil {
 		document.Outcome, document.Error = "error", newErrorDocument("upgrade.migrate_store_failed", doctor.OriginUnknown, err)
@@ -187,14 +192,14 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources, 
 	}
 	registration := host.Repositories[0]
 	observation.Registered, observation.RepositoryPath = true, registration.Path
-	if err := observeCheckpoints(ctx, checkpoints, registration, &observation); err != nil {
-		return observation, err
-	}
 	observation.Store, err = store.InspectForUpgrade(ctx, registration.OperationalDataPath)
 	if err != nil {
 		observation.StoreProblem = err.Error()
 	} else if observation.Store.Supported() {
 		observation.WorkerActivity = factory.WorkerActivityFindings(ctx, observation.Store.WorkerProcesses, upgradeWorkersForCLI())
+	}
+	if err := observeCheckpoints(ctx, checkpoints, registration, &observation); err != nil {
+		return observation, err
 	}
 	if record, err := factory.ObserveCoordinatorLock(registration); err != nil {
 		observation.Lock.Problem = err.Error()
@@ -339,11 +344,14 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 	return nil
 }
 
-// observeCheckpoints lists the newest checkpoint of this registration and
-// target release in the named directory. Without a directory it observes
-// nothing, so the plan lists no checkpoint.
+// observeCheckpoints lists the newest checkpoint of this registration and of
+// the schema of the live store in the named directory: the checkpoint that
+// the installed release created before the migration and can restore. The
+// target binary that runs the plan did not create it. Without a directory,
+// or without an inspected store, it observes nothing, so the plan lists no
+// checkpoint.
 func observeCheckpoints(ctx context.Context, directory string, registration config.RepositoryRegistration, observation *upgrade.Observation) error {
-	if directory == "" {
+	if directory == "" || observation.StoreProblem != "" || !observation.Store.Exists {
 		return nil
 	}
 	absolute, err := filepath.Abs(directory)
@@ -356,8 +364,7 @@ func observeCheckpoints(ctx context.Context, directory string, registration conf
 	}
 	observation.Checkpoint, err = checkpoint.FindNewest(ctx, absolute, checkpoint.Match{
 		RegistrationIdentity: identity,
-		Version:              observation.Target.Version,
-		Revision:             observation.Target.Revision,
+		StoreSchemaVersion:   observation.Store.SchemaVersion,
 	})
 	if err != nil {
 		return fmt.Errorf("list checkpoints: %w", err)

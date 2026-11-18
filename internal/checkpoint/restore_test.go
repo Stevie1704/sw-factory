@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Stevie1704/sw-factory/internal/checkpoint"
@@ -142,7 +143,7 @@ func TestApplyRestoreReplacesTheStoreAndPreservesTheOriginal(t *testing.T) {
 	if plan.LiveFiles[0] != "factory.db" || len(plan.LiveFiles) != 4 {
 		t.Fatalf("live files = %v, want the store first, then each sidecar", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	fixture.assertReplaced(t, "complete")
@@ -169,7 +170,7 @@ func TestApplyRestoreWithoutALiveStore(t *testing.T) {
 	if len(plan.LiveFiles) != 0 {
 		t.Fatalf("live files = %v, want none", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	if _, err := store.OpenReadOnly(context.Background(), fixture.storePath); err != nil {
@@ -184,7 +185,7 @@ func TestApplyRestoreRollsBackAReplacementThatDoesNotVerify(t *testing.T) {
 	fixture := newRestoreFixture(t)
 	plan := fixture.plan(t)
 	plan.Replacement.SHA256 = "0000"
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err == nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
 		t.Fatal("ApplyRestore() of a replacement that does not verify succeeded")
 	}
 	fixture.assertOriginal(t, "failed verification")
@@ -205,7 +206,7 @@ func TestRestoreContinuationAfterACrashAtEachPoint(t *testing.T) {
 	t.Parallel()
 	var points []string
 	recorder := newRestoreFixture(t)
-	if err := checkpoint.ApplyRestore(context.Background(), recorder.plan(t), checkpoint.Factory{}, func(point string) error {
+	if err := checkpoint.ApplyRestoreWithCrash(context.Background(), recorder.plan(t), checkpoint.Factory{}, func(point string) error {
 		points = append(points, point)
 		return nil
 	}); err != nil {
@@ -227,7 +228,7 @@ func TestRestoreContinuationAfterACrashAtEachPoint(t *testing.T) {
 	verifying := slices.Index(points, "journal verifying")
 	for index, point := range points {
 		fixture := newRestoreFixture(t)
-		err := checkpoint.ApplyRestore(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(current string) error {
+		err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(current string) error {
 			if current == point {
 				return errCrash
 			}
@@ -276,7 +277,7 @@ func TestContinueRestoreWithoutAJournal(t *testing.T) {
 func TestRestoreContinuationRollsBackAReplacementThatNoLongerVerifies(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
-	err := checkpoint.ApplyRestore(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(point string) error {
+	err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(point string) error {
 		if point == "journal verifying" {
 			return errCrash
 		}
@@ -293,4 +294,152 @@ func TestRestoreContinuationRollsBackAReplacementThatNoLongerVerifies(t *testing
 		t.Fatalf("ContinueRestore() = %+v, %v; want rolled back", continuation, err)
 	}
 	fixture.assertOriginal(t, "changed replacement")
+}
+
+// crashAt returns a crash point that stops at point and passes every other
+// point.
+func crashAt(point string) func(string) error {
+	return func(current string) error {
+		if current == point {
+			return errCrash
+		}
+		return nil
+	}
+}
+
+// interruptBeforeRollback crashes a restore of the fixture at point, so the
+// next continuation rolls back. For the verifying state it also changes the
+// replacement, so the repeated verification fails.
+func interruptBeforeRollback(t *testing.T, fixture restoreFixture, point string) {
+	t.Helper()
+	if err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, crashAt(point)); !errors.Is(err, errCrash) {
+		t.Fatalf("ApplyRestore() = %v, want the simulated crash at %s", err, point)
+	}
+	if point == "journal verifying" {
+		if err := os.WriteFile(fixture.storePath, []byte("changed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestRestoreContinuationAfterACrashInsideTheRollback crashes the rollback
+// of a continuation at each of its points, including between two sidecar
+// renames, and continues again. The result is always the unchanged
+// original file set.
+func TestRestoreContinuationAfterACrashInsideTheRollback(t *testing.T) {
+	t.Parallel()
+	for _, interrupted := range []string{"after replace factory.db", "journal verifying"} {
+		var points []string
+		recorder := newRestoreFixture(t)
+		interruptBeforeRollback(t, recorder, interrupted)
+		if _, err := checkpoint.ContinueRestoreWithCrash(context.Background(), recorder.storePath, func(point string) error {
+			points = append(points, point)
+			return nil
+		}); err != nil {
+			t.Fatalf("%s: ContinueRestore() error = %v", interrupted, err)
+		}
+		for _, required := range []string{"rollback removed replacement", "after rollback factory.db", "after rollback factory.db-journal", "before rollback factory.db-wal"} {
+			if !slices.Contains(points, required) {
+				t.Fatalf("%s: rollback crash points = %v, want %q", interrupted, points, required)
+			}
+		}
+		for _, point := range points {
+			fixture := newRestoreFixture(t)
+			interruptBeforeRollback(t, fixture, interrupted)
+			if _, err := checkpoint.ContinueRestoreWithCrash(context.Background(), fixture.storePath, crashAt(point)); !errors.Is(err, errCrash) {
+				t.Fatalf("%s, %s: ContinueRestore() = %v, want the simulated crash", interrupted, point, err)
+			}
+			continuation, err := checkpoint.ContinueRestore(context.Background(), fixture.storePath)
+			if err != nil || continuation.Result != checkpoint.ContinuationRolledBack {
+				t.Fatalf("%s, %s: second ContinueRestore() = %+v, %v; want rolled back", interrupted, point, continuation, err)
+			}
+			fixture.assertOriginal(t, interrupted+", "+point)
+		}
+	}
+}
+
+// TestApplyRestoreRefusesASidecarThatIsNotOfTheReplacement places a stale
+// sidecar at the live path before and after the replacement moves into
+// place. The replacement is one file without sidecars, so a sidecar at the
+// live path belongs to another store and could apply to the replacement.
+// The restore fails and the original file set is back.
+func TestApplyRestoreRefusesASidecarThatIsNotOfTheReplacement(t *testing.T) {
+	t.Parallel()
+	for _, point := range []string{"journal replacing", "after replace factory.db"} {
+		for _, suffix := range liveSidecars {
+			fixture := newRestoreFixture(t)
+			err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(current string) error {
+				if current == point {
+					return os.WriteFile(fixture.storePath+suffix, []byte("a stale sidecar"), 0o600)
+				}
+				return nil
+			})
+			if err == nil {
+				t.Fatalf("%s, %s: ApplyRestore() with a stale sidecar succeeded", point, suffix)
+			}
+			fixture.assertOriginal(t, point+", "+suffix)
+		}
+	}
+}
+
+// TestApplyRestoreRunsTheStoreDoctorCheckOnTheReplacement verifies that the
+// verifying step runs the store doctor check: a replacement that matches the
+// manifest but that factory doctor refuses, here because other users can
+// read it, is rolled back.
+func TestApplyRestoreRunsTheStoreDoctorCheckOnTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, func(point string) error {
+		if point == "after replace factory.db" {
+			return os.Chmod(fixture.storePath, 0o644)
+		}
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "store.sqlite") {
+		t.Fatalf("ApplyRestore() of a replacement that the doctor refuses = %v, want a store.sqlite doctor failure", err)
+	}
+	fixture.assertOriginal(t, "doctor failure")
+}
+
+// TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement verifies a
+// sidecar that appears after the plan listed the live files: the
+// replacement never goes live beside it, and restore does not remove it.
+func TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	for _, suffix := range liveSidecars {
+		if err := os.Remove(fixture.storePath + suffix); err != nil {
+			t.Fatal(err)
+		}
+		delete(fixture.original, "factory.db"+suffix)
+	}
+	plan := fixture.plan(t)
+	stale := []byte("a stale write-ahead log")
+	if err := os.WriteFile(fixture.storePath+"-wal", stale, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
+		t.Fatal("ApplyRestore() beside an unlisted sidecar succeeded")
+	}
+	fixture.original["factory.db-wal"] = stale
+	fixture.assertOriginal(t, "unlisted sidecar")
+}
+
+// TestRestoreContinuationRefusesASidecarThatIsNotOfTheReplacement crashes
+// a restore in the verifying state, places a stale sidecar at the live
+// path, and verifies that the continuation rolls back.
+func TestRestoreContinuationRefusesASidecarThatIsNotOfTheReplacement(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	if err := checkpoint.ApplyRestoreWithCrash(context.Background(), fixture.plan(t), checkpoint.Factory{}, crashAt("journal verifying")); !errors.Is(err, errCrash) {
+		t.Fatalf("ApplyRestore() = %v, want the simulated crash", err)
+	}
+	if err := os.WriteFile(fixture.storePath+"-shm", []byte("a stale shared memory index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := checkpoint.ContinueRestore(context.Background(), fixture.storePath)
+	if err != nil || continuation.Result != checkpoint.ContinuationRolledBack {
+		t.Fatalf("ContinueRestore() = %+v, %v; want rolled back", continuation, err)
+	}
+	fixture.assertOriginal(t, "stale sidecar while verifying")
 }

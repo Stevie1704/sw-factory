@@ -213,6 +213,34 @@ func TestUpgradePlanReusesTheOnboardingPlan(t *testing.T) {
 	}
 }
 
+// TestUpgradeMigrateStoreReportsTheBackupProvenance verifies that a
+// migration names the pre-migration backup and its provenance file in the
+// JSON document. This release accepts only its own schema, so a fake
+// migration result stands in for the migration.
+func TestUpgradeMigrateStoreReportsTheBackupProvenance(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	migrate := upgradeMigrateStoreForCLI
+	t.Cleanup(func() { upgradeMigrateStoreForCLI = migrate })
+	upgradeMigrateStoreForCLI = func(context.Context, config.RepositoryRegistration, factory.WorkerProbe) (factory.StoreMigrationResult, error) {
+		return factory.StoreMigrationResult{Migration: store.Migration{FromVersion: 52, ToVersion: 53, Backup: "/data/factory.db.bak-1", Provenance: "/data/factory.db.bak-1.json"}}, nil
+	}
+
+	var document struct {
+		Outcome   string `json:"outcome"`
+		Migration struct {
+			FromVersion int    `json:"from_version"`
+			ToVersion   int    `json:"to_version"`
+			Backup      string `json:"backup"`
+			Provenance  string `json:"provenance"`
+		} `json:"migration"`
+	}
+	code := runUpgradeCommand(t, &document, "migrate-store", "--config", fixture.hostConfig, "--json")
+
+	if code != 0 || document.Outcome != "migrated" || document.Migration.FromVersion != 52 || document.Migration.ToVersion != 53 || document.Migration.Backup != "/data/factory.db.bak-1" || document.Migration.Provenance != "/data/factory.db.bak-1.json" {
+		t.Fatalf("migrate-store = exit %d, %+v; want the migrated outcome with the backup and its provenance", code, document)
+	}
+}
+
 // TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged verifies the typed
 // no-op result of the explicit entry point on a current store.
 func TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {

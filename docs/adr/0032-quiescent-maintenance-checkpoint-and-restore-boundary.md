@@ -193,10 +193,13 @@ Restore refuses unless every precondition is proved:
 3. The current registration identity equals `registration_identity`.
 4. Restore acquires the coordinator lock and holds it to the end.
 5. No worker container or role session of this installation runs.
-6. The live store, when it is readable, has no pending effect, no
-   non-terminal run, and nothing newer than the watermarks: no run,
-   invocation, ledger entry, or local issue identity that the snapshot does
-   not have.
+6. The live store has no pending effect, no non-terminal run, and nothing
+   newer than the watermarks: no run, invocation, ledger entry, or local
+   issue identity that the snapshot does not have. Only a missing store or a
+   damaged one (empty, corrupt, or not a database) skips this precondition,
+   and the preview names the damage. A store that exists but does not open
+   for another reason, for example busy, not private, or of another schema,
+   refuses with `restore.not_quiescent` (`store.unreadable`).
 7. Every known external object in `external_state` has exactly its recorded
    state: each known branch has the recorded remote head SHA, each known pull
    request has the recorded head SHA, state, and draft flag, each known issue
@@ -254,9 +257,14 @@ and `original/`, also after the coordinator lock is released by a crash.
 | --- | --- | --- | --- |
 | `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
 | `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
-| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), rename every original back, then remove `new/` and the journal |
+| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), write the journal state `preserving`, then continue as for `preserving` |
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
+
+The replacement is one file without sidecars. Before the rename into place
+and in each verification, restore refuses a `-journal`, `-wal`, or `-shm`
+file at the live path, so a stale sidecar never applies to the replacement;
+restore then rolls back and does not remove an unlisted sidecar.
 
 Every continuation before `verified` ends with the original live file set
 back in place and unchanged, so it is lossless. After `verified`, the
@@ -286,16 +294,17 @@ checkpoint. Each one is refused, not approximated.
 
 ## Feasibility evidence
 
-`internal/store/checkpoint_feasibility_test.go` is a test-only prototype. In
-rollback-journal mode and in WAL mode, it runs the exact snapshot sequence:
-connection A holds `BEGIN IMMEDIATE` and checks quiescence; `VACUUM INTO`
-inside A fails; a third writer cannot change the store; connection B takes
-the snapshot; A ends. The snapshot holds the checked state, has no sidecar,
-passes the integrity check, and opens as a current store only after its mode
-is set to `0600`. The prototype also shows that a divergence check refuses a
-later run, a later pull request, a journaled pending effect, and a known
-branch that moved, and that an unreadable known object refuses as
-unverified. It adds no production code.
+The production tests are the evidence. `internal/store/snapshot_test.go`
+runs the snapshot sequence in rollback-journal mode and in WAL mode:
+connection A holds `BEGIN IMMEDIATE` and runs the check; a third writer
+cannot change the store; connection B takes the snapshot; A ends. The
+snapshot holds the checked state, has mode `0600`, and passes the integrity
+check. `internal/store/checkpoint_feasibility_test.go` keeps the one fact
+that production does not exercise: `VACUUM INTO` inside A fails, so the
+snapshot runs on B. `internal/checkpoint/divergence_test.go` and
+`internal/factory/checkpoint_restore_test.go` show that restore refuses a
+later run, a later pull request, a pending effect, and a known branch that
+moved, and that an unreadable known object refuses as unverified.
 
 ## Follow-up implementation specifications
 

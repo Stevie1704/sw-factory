@@ -208,7 +208,7 @@ func InspectSnapshot(ctx context.Context, path string) (SnapshotInspection, erro
 	if inspection.File.SchemaVersion, err = readSchemaVersion(ctx, database, absolutePath); err != nil {
 		return SnapshotInspection{}, err
 	}
-	if inspection.File.Size, inspection.File.SHA256, err = fileDigest(absolutePath); err != nil {
+	if inspection.File.Size, inspection.File.SHA256, err = FileDigest(absolutePath); err != nil {
 		return SnapshotInspection{}, err
 	}
 	// Only the current schema has known tables; a caller compares the
@@ -225,8 +225,9 @@ func InspectSnapshot(ctx context.Context, path string) (SnapshotInspection, erro
 	return inspection, nil
 }
 
-// fileDigest returns the size and the hexadecimal SHA-256 of one file.
-func fileDigest(path string) (int64, string, error) {
+// FileDigest returns the size and the hexadecimal SHA-256 of one file. The
+// snapshot, the checkpoint manifest, and the restore plan digest use it.
+func FileDigest(path string) (int64, string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, "", fmt.Errorf("open %s for its checksum: %w", path, err)

@@ -194,7 +194,7 @@ func checkpointManifest(request CheckpointRequest, createdAt time.Time, snapshot
 		return checkpoint.Manifest{}, err
 	}
 	manifest := checkpoint.NewManifest(id, createdAt, snapshot)
-	manifest.Factory = checkpoint.Factory{Version: request.Build.Version, Build: request.Build.Build, Revision: request.Build.Revision, Modified: request.Build.Modified}
+	manifest.Factory = checkpointFactory(request.Build)
 	manifest.RegistrationIdentity = identity
 	manifest.RegistrationSummary = registrationSummary(request.Registration)
 	manifest.WorkerImage = request.WorkerImage
@@ -303,4 +303,10 @@ func syncDirectory(path string) error {
 		return fmt.Errorf("sync %s: %w", path, err)
 	}
 	return nil
+}
+
+// checkpointFactory returns the build identity that a checkpoint manifest
+// or a restore journal records.
+func checkpointFactory(build version.Identity) checkpoint.Factory {
+	return checkpoint.Factory{Version: build.Version, Build: build.Build, Revision: build.Revision, Modified: build.Modified}
 }

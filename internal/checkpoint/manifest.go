@@ -254,7 +254,7 @@ func verifyFile(directory string, file File) error {
 	if !info.Mode().IsRegular() || fmt.Sprintf("%04o", info.Mode().Perm()) != file.Mode {
 		return &VerificationError{Code: CodeCorrupt, Detail: fmt.Sprintf("%s is not a regular file with mode %s", file.Path, file.Mode)}
 	}
-	size, digest, err := fileDigest(path)
+	size, digest, err := store.FileDigest(path)
 	if err != nil {
 		return err
 	}

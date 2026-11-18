@@ -9,6 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // RestoreFacts are the facts of a live store that restore preconditions 5
@@ -19,9 +22,14 @@ type RestoreFacts struct {
 	// Readable reports that the store opens read-only with the current
 	// schema. The other fields are set only for a readable store.
 	Readable bool
+	// Damaged reports an existing store file that is empty, corrupt, or not
+	// a database. Only a missing or damaged store skips precondition 6.
+	Damaged bool
 	// Unreadable says why an existing store is not readable.
 	Unreadable string
-	// Findings are the unmet full-quiescence conditions.
+	// Findings are the unmet full-quiescence conditions. A store that exists
+	// but is neither readable nor damaged gives the store.unreadable finding:
+	// its state is unknown evidence, never success.
 	Findings []UpgradeFinding
 	// Watermarks are the highest identities that the live store knows.
 	Watermarks Watermarks
@@ -29,11 +37,18 @@ type RestoreFacts struct {
 	WorkerProcesses []WorkerProcess
 }
 
+// storeUnreadable is the finding of an existing live store that does not
+// open and is not damaged, for example because it is busy, not private, or
+// of another schema.
+const storeUnreadable = "store.unreadable"
+
 // InspectForRestore reads the restore facts of the live store at path
-// through the read-only opener. A missing or unreadable store is a fact,
-// not an error: restore replaces a damaged store.
+// through the read-only opener. A missing or damaged store is a fact, not an
+// error: restore replaces a damaged store. Any other store that does not
+// open gives the store.unreadable finding, so restore refuses.
 func InspectForRestore(ctx context.Context, path string) (RestoreFacts, error) {
-	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
 		return RestoreFacts{}, nil
 	}
 	facts := RestoreFacts{Exists: true}
@@ -44,6 +59,10 @@ func InspectForRestore(ctx context.Context, path string) (RestoreFacts, error) {
 	}
 	if err != nil {
 		facts.Unreadable = err.Error()
+		facts.Damaged = (info != nil && info.Mode().IsRegular() && info.Size() == 0) || isDamagedDatabase(err)
+		if !facts.Damaged {
+			facts.Findings = []UpgradeFinding{{Code: storeUnreadable, Detail: "the live store does not open, so restore cannot prove that it has nothing newer than the snapshot: " + err.Error()}}
+		}
 		return facts, nil
 	}
 	defer func() { _ = opened.Close() }()
@@ -58,6 +77,20 @@ func InspectForRestore(ctx context.Context, path string) (RestoreFacts, error) {
 		return RestoreFacts{}, err
 	}
 	return facts, nil
+}
+
+// isDamagedDatabase reports whether err says that SQLite found a corrupt
+// file or a file that is not a database.
+func isDamagedDatabase(err error) bool {
+	var failure *sqlite.Error
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.Code() & 0xff {
+	case sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB:
+		return true
+	}
+	return false
 }
 
 // ReadSnapshotWorkerProcesses reads the harness processes of a store

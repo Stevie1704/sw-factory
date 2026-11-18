@@ -129,14 +129,16 @@ put it on `PATH` yet. Its `factory` binary is the target. Run:
 
 The plan only reads. It names the blockers, the conditions of the migration
 gate, the ordered operations with their effects, the final verification, and
-the newest maintenance checkpoint of this installation and release when you
-pass `--checkpoints <directory>`. The checkpoint step is optional; the
-`factory guide maintenance` topic describes it. Do the first pending operation, then plan again; after an
-interruption, the plan tells which components are old, new, or incomplete.
+the newest maintenance checkpoint of this installation and of the live store
+schema when you pass `--checkpoints <directory>`. The checkpoint step is
+optional; the `factory guide maintenance` topic describes it. Do the first
+pending operation, then plan again; after an interruption, the plan tells
+which components are old, new, or incomplete.
 `factory upgrade migrate-store --config <path> --json` is the only supported
 store migration entry point. Every other command, `factory start` included,
-refuses an older store schema and names it. The coordinator runs in the foreground; stop it with Ctrl-C or
-`factory stop`, and start the target with `factory start` at the end.
+refuses an older store schema and names it. The coordinator runs in the
+foreground; stop it with Ctrl-C or `factory stop`, and start the target with
+`factory start` at the end.
 
 A release coordinator accepts only a worker image built from the worker base
 image of its own release. Until the rebuild, `factory doctor` reports
@@ -144,14 +146,15 @@ image of its own release. Until the rebuild, `factory doctor` reports
 rebuild, the digest pin, the skill smoke, and the doctor. It repeats a paid
 smoke only for a skill without a record for the new digest.
 
-Recovery limits: the only supported restore is `factory checkpoint restore`
-of a maintenance checkpoint of the same host, registration, and release; it
-does not restore across an upgrade. The automatic
-`<store>.bak-<timestamp>` snapshot and its `.json` provenance file that the
-migration writes are provenance, not a restore point; never copy it over the store. After the migration, the old
-binary refuses the store, so it is not a rollback. A database copy does not
-rewind branches, pull requests, comments, labels, workers, or harness
-sessions. [ADR 0032](https://github.com/Stevie1704/sw-factory/blob/main/docs/adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)
+Recovery limits: the only supported restore is `factory checkpoint restore` of
+a maintenance checkpoint of the same host, registration, and release; it does
+not restore across an upgrade. The automatic `<store>.bak-<timestamp>`
+snapshot and its `.json` provenance file that the migration writes are
+provenance, not a restore point; never copy it over the store. After the
+migration, the old binary refuses the store, so it is not a rollback. A
+database copy does not rewind branches, pull requests, comments, labels,
+workers, or harness sessions.
+[ADR 0032](https://github.com/Stevie1704/sw-factory/blob/main/docs/adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)
 sets the checkpoint and restore boundary.
 
 The worker base images of a release with base image variants carry no Node,

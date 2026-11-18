@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
@@ -143,15 +144,15 @@ func ReadRestoreJournal(storePath string) (RestoreJournal, error) {
 	return journal, nil
 }
 
-// CrashPoint lets a test stop a restore at one named point, as a process
+// crashPoint lets a test stop a restore at one named point, as a process
 // crash does: an error from it stops the restore at once, without cleanup.
-// Production passes nil, which never stops.
-type CrashPoint func(point string) error
+// Production uses nil, which never stops. export_test.go sets it.
+type crashPoint func(point string) error
 
 // restorer runs one restore with an optional crash point.
 type restorer struct {
 	journal RestoreJournal
-	crash   CrashPoint
+	crash   crashPoint
 }
 
 // ApplyRestore runs the restore plan of ADR 0032. It writes the journal
@@ -160,8 +161,14 @@ type restorer struct {
 // verifies it. On a failed step, such as a replacement that does not
 // verify, it rolls back, so the original live file set is back. A crash
 // leaves the journal for ContinueRestore. The caller holds the coordinator
-// lock. crash is nil outside tests.
-func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory, crash CrashPoint) error {
+// lock.
+func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory) error {
+	return applyRestore(ctx, plan, build, nil)
+}
+
+// applyRestore is ApplyRestore with a crash point; crash is nil outside
+// tests.
+func applyRestore(ctx context.Context, plan RestorePlan, build Factory, crash crashPoint) error {
 	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}, crash: crash}).apply(ctx)
 }
 
@@ -274,6 +281,9 @@ func (r *restorer) replace(context.Context) error {
 	if err := r.at("before replace " + name); err != nil {
 		return err
 	}
+	if err := refuseLiveSidecars(plan.StorePath); err != nil {
+		return err
+	}
 	if err := renameDurably(filepath.Join(plan.WorkDirectory, "new", StoreFile), plan.StorePath); err != nil {
 		return err
 	}
@@ -282,7 +292,47 @@ func (r *restorer) replace(context.Context) error {
 
 // verify checks the replacement at the live path.
 func (r *restorer) verify(ctx context.Context) error {
-	return verifyReplacement(ctx, r.journal.StorePath, r.journal.Replacement)
+	return verifyLive(ctx, r.journal.StorePath, r.journal.Replacement)
+}
+
+// verifyLive checks the replacement at the live store path: no sidecar is
+// beside it, it verifies against the manifest, and the store doctor check
+// passes.
+func verifyLive(ctx context.Context, storePath string, expected Replacement) error {
+	if err := refuseLiveSidecars(storePath); err != nil {
+		return err
+	}
+	if err := verifyReplacement(ctx, storePath, expected); err != nil {
+		return err
+	}
+	return runStoreDoctor(ctx, storePath)
+}
+
+// runStoreDoctor runs the store doctor check on the replacement at the live
+// path, as factory doctor runs it after the restore.
+func runStoreDoctor(ctx context.Context, storePath string) error {
+	result := store.RestoredStoreCheck(storePath)(ctx)
+	if result.Status != doctor.StatusPassed {
+		return fmt.Errorf("the store doctor check refuses the replacement: %s: %s", result.Code, result.Problem)
+	}
+	return nil
+}
+
+// refuseLiveSidecars fails when a -journal, -wal, or -shm file is at the
+// live store path. The replacement is one self-contained file, so such a
+// sidecar belongs to another store, and SQLite could apply it to the
+// replacement. A sidecar that cannot be inspected also fails.
+func refuseLiveSidecars(storePath string) error {
+	for _, suffix := range sidecarSuffixes {
+		_, err := os.Lstat(storePath + suffix)
+		switch {
+		case err == nil:
+			return fmt.Errorf("the sidecar %s is at the live store path; it is not of the replacement, so the replacement does not go live beside it", storePath+suffix)
+		case !errors.Is(err, os.ErrNotExist):
+			return fmt.Errorf("inspect the live sidecar %s: %w", storePath+suffix, err)
+		}
+	}
+	return nil
 }
 
 // finish removes the journal of a verified restore and the empty new/. The
@@ -303,6 +353,12 @@ func (r *restorer) finish() error {
 // exists. The caller holds the coordinator lock and runs the release that
 // wrote the journal.
 func ContinueRestore(ctx context.Context, storePath string) (RestoreContinuation, error) {
+	return continueRestore(ctx, storePath, nil)
+}
+
+// continueRestore is ContinueRestore with a crash point; crash is nil
+// outside tests.
+func continueRestore(ctx context.Context, storePath string, crash crashPoint) (RestoreContinuation, error) {
 	absolute, err := filepath.Abs(storePath)
 	if err != nil {
 		return RestoreContinuation{}, fmt.Errorf("resolve the store path: %w", err)
@@ -312,13 +368,13 @@ func ContinueRestore(ctx context.Context, storePath string) (RestoreContinuation
 		return RestoreContinuation{}, err
 	}
 	continuation := RestoreContinuation{State: journal.State, Journal: journal}
-	r := &restorer{journal: journal}
+	r := &restorer{journal: journal, crash: crash}
 	switch journal.State {
 	case StateVerified:
 		continuation.Result = ContinuationCompleted
 		return continuation, r.finish()
 	case StateVerifying:
-		if verifyReplacement(ctx, journal.StorePath, journal.Replacement) == nil {
+		if verifyLive(ctx, journal.StorePath, journal.Replacement) == nil {
 			if err := r.enter(StateVerified); err != nil {
 				return continuation, err
 			}
@@ -334,19 +390,18 @@ func ContinueRestore(ctx context.Context, storePath string) (RestoreContinuation
 }
 
 // rollback puts the original live file set back and removes every restore
-// file. Before it removes a file at the live store path, it proves that the
-// complete original is in original/, so it never removes an original.
+// file. It can stop at any point and run again: in the replacing and
+// verifying states it removes the replacement, then records the preserving
+// state before it moves an original back, so a repeated rollback never
+// removes a file at the live store path that can be an original. In the
+// preserving state each listed file is at its live path or in original/,
+// and only the ones in original/ move back.
 func (r *restorer) rollback() error {
 	plan := r.journal.RestorePlan
 	original := filepath.Join(plan.WorkDirectory, "original")
 	if r.journal.State == StateReplacing || r.journal.State == StateVerifying {
-		for _, name := range plan.LiveFiles {
-			if _, err := os.Lstat(filepath.Join(original, name)); err != nil {
-				return fmt.Errorf("the original %s is not in %s; nothing was removed: %w", name, original, err)
-			}
-		}
-		if err := os.Remove(plan.StorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove the replacement at the live path: %w", err)
+		if err := r.removeReplacement(); err != nil {
+			return err
 		}
 	}
 	for _, name := range plan.LiveFiles {
@@ -354,7 +409,13 @@ func (r *restorer) rollback() error {
 		if _, err := os.Lstat(preserved); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
+		if err := r.at("before rollback " + name); err != nil {
+			return err
+		}
 		if err := renameDurably(preserved, filepath.Join(filepath.Dir(plan.StorePath), name)); err != nil {
+			return err
+		}
+		if err := r.at("after rollback " + name); err != nil {
 			return err
 		}
 	}
@@ -367,6 +428,34 @@ func (r *restorer) rollback() error {
 		}
 	}
 	return removeJournal(plan.StorePath)
+}
+
+// removeReplacement removes a replacement at the live store path once it
+// proves that the complete original is in original/, so it never removes an
+// original. Then it records the preserving state: from there on, the live
+// store path holds nothing or the original.
+func (r *restorer) removeReplacement() error {
+	plan := r.journal.RestorePlan
+	original := filepath.Join(plan.WorkDirectory, "original")
+	for _, name := range plan.LiveFiles {
+		if _, err := os.Lstat(filepath.Join(original, name)); err != nil {
+			return fmt.Errorf("the original %s is not in %s; nothing was removed: %w", name, original, err)
+		}
+	}
+	if err := os.Remove(plan.StorePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove the replacement at the live path: %w", err)
+	}
+	if err := syncDirectories(filepath.Dir(plan.StorePath)); err != nil {
+		return err
+	}
+	if err := r.at("rollback removed replacement"); err != nil {
+		return err
+	}
+	r.journal.State = StatePreserving
+	if err := writeJournal(r.journal); err != nil {
+		return err
+	}
+	return r.at("rollback journal preserving")
 }
 
 // verifyReplacement runs the integrity check on path, reads its schema

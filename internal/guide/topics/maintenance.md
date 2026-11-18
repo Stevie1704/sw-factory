@@ -43,8 +43,11 @@ another configuration is a blocker, and its evidence is not used.
 filled; it defaults to the onboarding plan's directory. `--checkpoints`
 names a directory whose direct subdirectories may be maintenance
 checkpoints. The plan lists the newest one that verifies and matches this
-registration and the target release. It searches only one level deep and
-keeps no registry, so a checkpoint outside that directory is not listed.
+registration and the schema of the live store: the checkpoint that the
+installed release created before the migration. Only the release named in
+its manifest restores it, so keep that release until the upgrade is done.
+It searches only one level deep and keeps no registry, so a checkpoint
+outside that directory is not listed.
 
 The command only reads. It does not migrate the store, replace a binary,
 pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
@@ -118,9 +121,13 @@ A `done` operation has valid evidence; do not do it again.
     foreground and keep its terminal open.
 
 Optional, before `migrate_store`: a checkpoint before the store migration.
-Create it once the migration gate holds, as the Maintenance checkpoint
-section below describes. It adds no operation and no blocker, so the plan
-never requires it. Plan again with `--checkpoints <directory>` to list it.
+Create it with the installed release before `install_binary`, once the
+migration gate holds, as the Maintenance checkpoint section below describes.
+The target binary refuses a checkpoint of an older store schema. The
+checkpoint adds no operation and no blocker, so the plan never requires it.
+Plan again with `--checkpoints <directory>` to list it. To restore it before
+`migrate_store`, run `factory checkpoint restore` of the release that its
+manifest names.
 
 `migrate_store` holds the repository lock, rolls back an interrupted write,
 and refuses work that fails the migration gate, a lock that another process
@@ -256,7 +263,7 @@ effect. Afterwards run `factory doctor`, then `factory start`.
 | `restore.registration_changed` | The registration or the host configuration path differs from the checkpoint. |
 | `restore.coordinator_running` | A coordinator or another maintenance command holds the repository lock. |
 | `restore.worker_active` | A harness runs in a worker of this store, a role session has no proved resource release, or Docker cannot prove that none runs. |
-| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. |
+| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. With `store.unreadable`, the live store exists but does not open, for example because it is busy, not private, or of another schema; repair that first. Only a missing or damaged (empty, corrupt, or not a database) store is replaced without this check, and the preview names the damage. |
 | `restore.external_divergence` | A known branch, pull request, issue, or status comment changed after the checkpoint, or a `factory/*` branch, a pull request from one, or an issue with a run-state label is unknown to it; `detail` names each object. |
 | `restore.divergence_unverified` | A known object or a listing cannot be read. Unknown evidence never passes. |
 | `restore.plan_stale` | The `--confirm` digest is not the digest of the current plan. |
