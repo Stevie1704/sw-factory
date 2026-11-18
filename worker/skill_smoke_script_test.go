@@ -458,6 +458,9 @@ func TestSkillSmokeRefusesAnUnprovedCopilotVersionBeforeAnyPaidCall(t *testing.T
 	tests := map[string]string{
 		"no copilot in the image": `echo "/bin/sh: 1: copilot: not found" >&2; exit 127`,
 		"another CLI release":     `echo "GitHub Copilot CLI 1.0.99."`,
+		// Startup diagnosis compares the raw first line exactly, so a
+		// character that a normalization would strip is not the proved line.
+		"proved line with a carriage return": `printf 'GitHub Copilot CLI 1.0.98.\r\n'`,
 	}
 	for name, version := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -484,6 +487,21 @@ esac
 				t.Errorf("refusal does not name the proved release and the base image variant:\n%s", smoke.stderr)
 			}
 		})
+	}
+}
+
+// TestSkillSmokeProvesTheVersionLineStartupDiagnosisRequires verifies that
+// the proved Copilot version line of the smoke script is the line that
+// startup diagnosis compares exactly, so the smoke and the doctor cannot
+// accept different CLI releases.
+func TestSkillSmokeProvesTheVersionLineStartupDiagnosisRequires(t *testing.T) {
+	script, err := os.ReadFile("../scripts/smoke-skills.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `COPILOT_PROVED_VERSION="` + worker.CopilotVersionLine + `"`
+	if !strings.Contains(string(script), "\n"+want+"\n") {
+		t.Errorf("scripts/smoke-skills.sh does not set %s", want)
 	}
 }
 
