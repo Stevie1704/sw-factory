@@ -42,7 +42,7 @@ states that limit.
    leaves a state that a continuation recovers without loss.
 6. The manifest records the observable state of every known external object.
    Restore compares each one and refuses on any difference.
-7. The pre-migration `.bak-*` copy of the operational store stays migration
+7. The pre-migration `.bak-*` snapshot of the operational store stays migration
    provenance. It is not a checkpoint, and no procedure restores it.
 
 ## State and ownership inventory
@@ -112,8 +112,7 @@ journal mode.
 
 Copying the database file is not supported, also not after closing the
 connection, because another process can write between the close and the copy.
-The current pre-migration backup copies the file; follow-up D moves it to the
-same online primitive.
+The pre-migration backup uses the same online sequence (follow-up D, #321).
 
 **Full quiescence** means all of these are true on connection A:
 
