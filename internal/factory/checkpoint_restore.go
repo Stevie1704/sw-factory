@@ -77,8 +77,6 @@ type RestoreRequest struct {
 	Owned checkpoint.OwnedObjectLister
 	// Workers reads Docker for the worker-activity precondition.
 	Workers WorkerProbe
-	// crash stops the restore at a named point; a test sets it.
-	crash checkpoint.CrashPoint
 }
 
 // RestorePlan is the previewed restore that --confirm binds by its digest.
@@ -369,5 +367,5 @@ func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan)
 		return fmt.Errorf("create the store directory: %w", err)
 	}
 	build := checkpoint.Factory{Version: request.Build.Version, Build: request.Build.Build, Revision: request.Build.Revision, Modified: request.Build.Modified}
-	return checkpoint.ApplyRestore(ctx, plan.files, build, request.crash)
+	return checkpoint.ApplyRestore(ctx, plan.files, build)
 }

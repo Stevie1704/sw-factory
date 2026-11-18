@@ -557,6 +557,38 @@ func TestRestoreCheckpointRefusesAnEarlierWorkDirectory(t *testing.T) {
 	assertRestoreRefusal(t, fixture, nil, result, err, RestoreWorkDirectoryExists)
 }
 
+// interruptRestore leaves the files of a restore of the fixture checkpoint
+// that stopped after the live store moved into original/, as a crash does:
+// the journal in the preserving state, the staged replacement in new/, and
+// the live store preserved. The restore sequence and its crash points are
+// tested in internal/checkpoint.
+func interruptRestore(t *testing.T, request RestoreRequest) {
+	t.Helper()
+	plan := preview(t, request).files
+	for _, directory := range []string{plan.WorkDirectory, filepath.Join(plan.WorkDirectory, "new"), filepath.Join(plan.WorkDirectory, "original")} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := os.ReadFile(filepath.Join(plan.CheckpointPath, checkpoint.StoreFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(plan.WorkDirectory, "new", checkpoint.StoreFile), snapshot, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(plan.StorePath, filepath.Join(plan.WorkDirectory, "original", filepath.Base(plan.StorePath))); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := json.Marshal(checkpoint.RestoreJournal{SchemaVersion: checkpoint.RestoreJournalSchemaVersion, State: checkpoint.StatePreserving, Factory: checkpoint.Factory{Version: request.Build.Version, Build: request.Build.Build, Revision: request.Build.Revision}, RestorePlan: plan})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.RestoreJournalPath(plan.StorePath), journal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRestoreCheckpointContinuesAnInterruptedRestore covers the restore
 // journal row: while the journal exists, store openers refuse; the restore
 // command continues the earlier restore before anything else.
@@ -565,16 +597,7 @@ func TestRestoreCheckpointContinuesAnInterruptedRestore(t *testing.T) {
 	fixture := newRestoreFixture(t)
 	before := fixture.storeBytes(t)
 	request := fixture.restoreRequest()
-	request.Confirm = preview(t, request).Digest
-	request.crash = func(point string) error {
-		if point == "after preserve factory.db" {
-			return errors.New("simulated crash")
-		}
-		return nil
-	}
-	if _, err := RestoreCheckpoint(context.Background(), request); err == nil {
-		t.Fatal("the interrupted restore reported no error")
-	}
+	interruptRestore(t, request)
 	if _, err := store.Open(context.Background(), fixture.registration.OperationalDataPath); !errors.As(err, new(*store.RestoreInProgressError)) {
 		t.Fatalf("Open() during the restore = %v, want a restore in progress", err)
 	}
@@ -583,7 +606,6 @@ func TestRestoreCheckpointContinuesAnInterruptedRestore(t *testing.T) {
 		t.Fatalf("doctor during the restore = %+v, want store.sqlite.restore_in_progress", check)
 	}
 
-	request.crash, request.Confirm = nil, ""
 	result, err := RestoreCheckpoint(context.Background(), request)
 	if err != nil || result.Outcome != RestoreOutcomeInterrupted || result.Journal == nil || result.Journal.State != checkpoint.StatePreserving || result.Journal.Result != checkpoint.ContinuationRolledBack {
 		t.Fatalf("continuation = %+v, %v; want the interrupted restore rolled back", result, err)
@@ -599,17 +621,8 @@ func TestRestoreCheckpointContinuesOnlyFromTheSameRelease(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
 	request := fixture.restoreRequest()
-	request.Confirm = preview(t, request).Digest
-	request.crash = func(point string) error {
-		if point == "journal replacing" {
-			return errors.New("simulated crash")
-		}
-		return nil
-	}
-	if _, err := RestoreCheckpoint(context.Background(), request); err == nil {
-		t.Fatal("the interrupted restore reported no error")
-	}
-	request.crash, request.Confirm, request.Build.Revision = nil, "", "def456"
+	interruptRestore(t, request)
+	request.Build.Revision = "def456"
 	result, err := RestoreCheckpoint(context.Background(), request)
 	assertRestoreRefusal(t, fixture, nil, result, err, RestoreReleaseMismatch)
 	if _, err := os.Stat(store.RestoreJournalPath(fixture.registration.OperationalDataPath)); err != nil {

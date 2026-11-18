@@ -143,15 +143,15 @@ func ReadRestoreJournal(storePath string) (RestoreJournal, error) {
 	return journal, nil
 }
 
-// CrashPoint lets a test stop a restore at one named point, as a process
+// crashPoint lets a test stop a restore at one named point, as a process
 // crash does: an error from it stops the restore at once, without cleanup.
-// Production passes nil, which never stops.
-type CrashPoint func(point string) error
+// Production uses nil, which never stops. export_test.go sets it.
+type crashPoint func(point string) error
 
 // restorer runs one restore with an optional crash point.
 type restorer struct {
 	journal RestoreJournal
-	crash   CrashPoint
+	crash   crashPoint
 }
 
 // ApplyRestore runs the restore plan of ADR 0032. It writes the journal
@@ -160,8 +160,14 @@ type restorer struct {
 // verifies it. On a failed step, such as a replacement that does not
 // verify, it rolls back, so the original live file set is back. A crash
 // leaves the journal for ContinueRestore. The caller holds the coordinator
-// lock. crash is nil outside tests.
-func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory, crash CrashPoint) error {
+// lock.
+func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory) error {
+	return applyRestore(ctx, plan, build, nil)
+}
+
+// applyRestore is ApplyRestore with a crash point; crash is nil outside
+// tests.
+func applyRestore(ctx context.Context, plan RestorePlan, build Factory, crash crashPoint) error {
 	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}, crash: crash}).apply(ctx)
 }
 
@@ -303,6 +309,12 @@ func (r *restorer) finish() error {
 // exists. The caller holds the coordinator lock and runs the release that
 // wrote the journal.
 func ContinueRestore(ctx context.Context, storePath string) (RestoreContinuation, error) {
+	return continueRestore(ctx, storePath, nil)
+}
+
+// continueRestore is ContinueRestore with a crash point; crash is nil
+// outside tests.
+func continueRestore(ctx context.Context, storePath string, crash crashPoint) (RestoreContinuation, error) {
 	absolute, err := filepath.Abs(storePath)
 	if err != nil {
 		return RestoreContinuation{}, fmt.Errorf("resolve the store path: %w", err)
@@ -312,7 +324,7 @@ func ContinueRestore(ctx context.Context, storePath string) (RestoreContinuation
 		return RestoreContinuation{}, err
 	}
 	continuation := RestoreContinuation{State: journal.State, Journal: journal}
-	r := &restorer{journal: journal}
+	r := &restorer{journal: journal, crash: crash}
 	switch journal.State {
 	case StateVerified:
 		continuation.Result = ContinuationCompleted
