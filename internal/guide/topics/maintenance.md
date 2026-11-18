@@ -6,13 +6,19 @@ procedure with the target binary, unless a step names the old binary.
 
 ## First-version policy
 
-- Upgrade only a quiescent installation. Finish every active run, or cancel
-  it deliberately, with the old binary before you start. The upgrade never
-  moves a claimed run to a new worker or policy, and never resumes an old
-  harness session with a new image.
+- Upgrade only an installation that passes the migration gate: no process
+  holds the coordinator lock, no run is non-terminal, no effect is pending,
+  and no invocation, session-role invocation, or session command is in
+  progress. Finish every active run, or cancel it deliberately, with the old
+  binary before you start. The upgrade never moves a claimed run to a new
+  worker or policy, and never resumes an old harness session with a new
+  image. The migration gate is narrower than the full quiescence that a
+  future maintenance checkpoint needs.
 - The coordinator runs in the foreground. A supervised service is not
   supported yet. Stop the coordinator with Ctrl-C in its terminal, or with
-  `factory stop --config <path>` and the binary that started it.
+  `factory stop --config <path>` and the binary that started it. A
+  coordinator, a store migration, and a reset record their kind and release
+  in the coordinator lock, and the plan reads that record.
 - There is no automatic update, no live-run migration, and no restore
   command.
 
@@ -23,12 +29,16 @@ instructions in the release archive describe. Do not install it on `PATH`
 yet. Run:
 
 ```sh
-<target factory> upgrade plan --config <host config> --onboarding-plan <plan file> --json
+<target factory> upgrade plan --config <host config> --onboarding-plan <plan file> --resources <prepared directory> --json
 ```
 
 `--onboarding-plan` names the onboarding plan of the repository, for example
 `$HOME/.cache/sw-factory/onboarding-<repository name>.json`. Omit it when no
-plan exists; the plan then contains an operation that creates one.
+plan exists; the plan then contains an operation that creates one. The plan
+must belong to the host configuration that `--config` selects; a plan of
+another configuration is a blocker, and its evidence is not used.
+`--resources` names the directory that `onboard prepare` of the target
+filled; it defaults to the onboarding plan's directory.
 
 The command only reads. It does not migrate the store, replace a binary,
 pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
@@ -41,15 +51,18 @@ pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
 | `result` | `blocked`, `ready`, or `complete` |
 | `components` | `binary`, `worker`, `policy`, `smoke`, and `store`, each `old`, `new`, `incomplete`, `unsupported`, or `unknown` |
 | `blockers` | `code`, `detail`, and `action` of each condition that stops every operation |
-| `quiescence` | Each condition of a quiescent installation and whether it holds |
-| `operations` | The ordered steps with `state` (`done`, `pending`, `blocked`), `command`, `effect`, `paid`, and `expected_effects` |
+| `migration_gate` | Each condition of the migration gate and whether it holds |
+| `operations` | The ordered steps with `state` (`done`, `pending`, `blocked`), `command`, `effect`, `paid`, `paid_calls`, `authorization`, and `expected_effects` |
 | `verification` | The checks of the final state and whether each holds |
 | `recovery_limits` | What the upgrade cannot undo |
 | `store_backups` | The existing pre-migration backups, as provenance |
 
-Show the plan to the operator. Apply `factory guide authorization` before
-each operation whose `effect` is `local_mutation` or `external_mutation`, and
-before each operation with `paid: true`.
+`command` is always an executable shell command, or empty for a manual step
+that `description` explains. Show the plan to the operator. Apply `factory
+guide authorization` before each operation whose `effect` is
+`local_mutation` or `external_mutation`, and before each operation with
+`paid: true`; `paid_calls` lists each paid call, and `authorization` names
+the contract to apply.
 
 ## 2. Resolve the blockers
 
@@ -58,23 +71,24 @@ store, a lock file, or the onboarding plan to remove a blocker.
 
 | Code | Meaning |
 | --- | --- |
-| `run.active`, `invocation.active`, `effect.pending` | Active work exists. Finish or cancel it with the binary that reads the store schema. |
-| `coordinator.running` | A coordinator holds the repository lock. Stop it. |
-| `coordinator.worker_mismatch` | A coordinator of the previous release runs while the worker or the store already belongs to the target. Stop it. Start the target coordinator only at `start_coordinator`. |
+| `run.active`, `invocation.active`, `effect.pending`, `session_invocation.active`, `session_command.queued` | Active work fails the migration gate. Finish or cancel it with the binary that reads the store schema. |
+| `coordinator.worker_mismatch` | The lock record names a coordinator of another release, or of a previous release that records no identity. Stop it. Start the target coordinator only at `start_coordinator`. |
+| `coordinator.running` | A coordinator of the target runs before the upgrade is done. Stop it. |
+| `maintenance.running` | A store migration or a reset holds the repository lock. Wait until it ends. |
 | `worker.release_unreadable` | The release label of the pinned worker image cannot be read. Check that this account can inspect the image. |
 | `store.schema_newer` | A newer release migrated the store. Use that release or a newer one as the target. |
 | `store.schema_unsupported`, `store.unreadable`, `store.missing` | The target cannot prove the store state. Keep the current binary and follow `factory guide debug` or `factory guide reporting`. |
 | `store.interrupted_write` | A write stopped before its commit. The store migration operation rolls it back first. |
 | `worker.base_image_missing` | Pull the named target base image. The plan never pulls. |
 | `configuration.invalid` | Repair `factory.yaml` for the target release. |
-| `registration.missing`, `onboarding.plan_unreadable` | Name the correct host configuration or onboarding plan. |
+| `registration.missing`, `onboarding.plan_unreadable`, `onboarding.plan_registration_mismatch` | Name the correct host configuration, or the onboarding plan of that configuration. |
 
 ## 3. Do the operations in order
 
 Do only the first operation with `state: "pending"`. Then run the plan again.
 A `done` operation has valid evidence; do not do it again.
 
-1. `quiesce`: no active work, and no coordinator runs.
+1. `pass_migration_gate`: every condition of the migration gate holds.
 2. `install_binary`: install the target archive in place of the old one, so
    that `command -v factory` names the target binary.
 3. `prepare_resources`: export the target release resources to a new
@@ -93,12 +107,15 @@ A `done` operation has valid evidence; do not do it again.
     foreground and keep its terminal open.
 
 `migrate_store` holds the repository lock, rolls back an interrupted write,
-and refuses active work, a running coordinator, and an unsupported schema.
+and refuses work that fails the migration gate, a lock that another process
+holds, and an unsupported schema.
 Then it copies the store to a private `<store>.bak-<timestamp>` file and
 migrates the schema in one transaction. Its document has `outcome`
 (`migrated`, `current`, `refused`, or `error`), `migration` with
-`from_version`, `to_version`, and `backup`, and `refusals`. A command that
-only inspects, such as `factory doctor` or `factory status`, never migrates.
+`from_version`, `to_version`, and `backup`, and `refusals`. No other command
+migrates an existing store: `factory start`, `factory doctor`, `factory
+status`, and every other command refuse an older schema, and the doctor
+reports `store.sqlite.migration_required`.
 
 ## 4. Continue after an interruption
 
@@ -118,10 +135,9 @@ target binary.
 The upgrade is complete only when `result` is `complete` and every
 `verification` entry has `satisfied: true`: the target binary on `PATH`, the
 pinned worker release, a valid configuration, complete smoke evidence, a
-current store, a recorded doctor of the target, and a running coordinator.
-`factory status --config <path> --json` shows the supervisor. The plan cannot
-read the release of a running coordinator, so start it with the target
-binary.
+current store, a recorded doctor of the target, and a coordinator whose lock
+record names the target release and revision. `factory status --config
+<path> --json` shows the supervisor heartbeat.
 
 ## Recovery limits
 

@@ -606,22 +606,30 @@ _Avoid_: Cleanup, uninstall, deregistration, factory reinstall
 
 **Upgrade plan**:
 The read-only, versioned document that the target release's binary derives
-from one installation: its blockers, quiescence conditions, ordered
+from one installation: its blockers, migration gate, ordered
 operations, expected effects, and final verification, with each component
 marked old, new, or incomplete. It describes work and reuses onboarding
 evidence only on an identity match; it is not a workflow controller.
 _Avoid_: Upgrade script, migration plan
 
-**Quiescent installation**:
-An installation in which no coordinator holds the lock, no run is
-non-terminal, no effect is pending, and no invocation, worker, publication, or
-session command is in progress. Maintenance that changes the operational store
-or the release starts only from this state.
-_Avoid_: Idle (alone), stopped
+**Full quiescence**:
+The state of an installation in which no process holds the coordinator lock,
+no run is non-terminal, no effect is pending, and no invocation, session-role
+invocation, session command, or publication is in progress. A maintenance
+checkpoint and a restore need it.
+_Avoid_: Quiescent installation, idle (alone), stopped
+
+**Migration gate**:
+The narrower set of conditions that the store migration of an upgrade needs:
+no process holds the coordinator lock, no run is non-terminal, no effect is
+pending, and no invocation, session-role invocation, or session command is in
+progress. It omits publications, because a migration keeps every row.
+_Avoid_: Quiescence (for this narrower set), idle check
 
 **Maintenance checkpoint**:
 A consistent, manifest-described snapshot of the operational store of one
-quiescent installation, bound to its host, registration, and Factory release.
+installation in full quiescence, bound to its host, registration, and Factory
+release.
 It contains private issue and specification text and no credentials. It is
 not a whole-installation backup and cannot rewind remote state.
 _Avoid_: Backup (alone), pre-migration backup, snapshot (alone)

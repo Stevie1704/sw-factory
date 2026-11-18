@@ -151,7 +151,7 @@ func (p planner) blockers() []Blocker {
 var storeActions = map[string]string{
 	"store.missing":            "check operational_data_path in the host configuration; Factory has no supported procedure that recreates a lost store with its history (ADR 0032)",
 	"store.schema_newer":       "use the release that migrated the store, or a newer one, as the target binary; the store is not changed",
-	"store.schema_unsupported": "this build cannot prove that the store is quiescent; file a report with factory bug-report and keep the current binary",
+	"store.schema_unsupported": "this build cannot prove that the store passes the migration gate; file a report with factory bug-report and keep the current binary",
 }
 
 // storeBlockers lists the store conditions that the target cannot continue
@@ -164,7 +164,7 @@ func (p planner) storeBlockers() []Blocker {
 			Action: "repair the access to the operational store, for example its private file modes, then plan again; follow factory guide debug"}}
 	case o.Store.InterruptedWrite:
 		return []Blocker{{Code: "store.interrupted_write", Detail: "a rollback journal beside the store shows a write that stopped before its commit",
-			Action: "run " + p.command() + " upgrade migrate-store " + p.configFlag() + " --json; it rolls the interrupted write back and checks quiescence before it migrates"}}
+			Action: "run " + p.command() + " upgrade migrate-store " + p.configFlag() + " --json; it rolls the interrupted write back and checks the migration gate before it migrates"}}
 	}
 	if finding := o.Store.SchemaFinding(); finding != nil {
 		return []Blocker{{Code: finding.Code, Detail: finding.Detail, Action: storeActions[finding.Code]}}

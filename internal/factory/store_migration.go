@@ -23,7 +23,7 @@ type StoreMigrationResult struct {
 // MigrateStore is the supported store migration entry point of an upgrade.
 // It holds the coordinator lock for its whole duration, so no coordinator
 // can start, rolls back an interrupted write, and refuses unless the store
-// is quiescent and its schema is supported. Only then does it back up and
+// passes the migration gate and its schema is supported. Only then does it back up and
 // migrate the store in one transaction.
 func MigrateStore(ctx context.Context, registration config.RepositoryRegistration) (StoreMigrationResult, error) {
 	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderStoreMigration)

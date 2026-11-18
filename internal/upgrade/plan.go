@@ -68,16 +68,16 @@ type OperationID string
 
 // The upgrade operations, in procedure order.
 const (
-	OperationQuiesce          OperationID = "quiesce"
-	OperationInstallBinary    OperationID = "install_binary"
-	OperationPrepareResources OperationID = "prepare_resources"
-	OperationOnboardingPlan   OperationID = "onboarding_plan"
-	OperationRebuildWorker    OperationID = "rebuild_worker"
-	OperationGateProof        OperationID = "gate_proof"
-	OperationSkillSmoke       OperationID = "skill_smoke"
-	OperationMigrateStore     OperationID = "migrate_store"
-	OperationDoctor           OperationID = "doctor"
-	OperationStartCoordinator OperationID = "start_coordinator"
+	OperationPassMigrationGate OperationID = "pass_migration_gate"
+	OperationInstallBinary     OperationID = "install_binary"
+	OperationPrepareResources  OperationID = "prepare_resources"
+	OperationOnboardingPlan    OperationID = "onboarding_plan"
+	OperationRebuildWorker     OperationID = "rebuild_worker"
+	OperationGateProof         OperationID = "gate_proof"
+	OperationSkillSmoke        OperationID = "skill_smoke"
+	OperationMigrateStore      OperationID = "migrate_store"
+	OperationDoctor            OperationID = "doctor"
+	OperationStartCoordinator  OperationID = "start_coordinator"
 )
 
 // OperationState is the evaluated state of one operation.
@@ -206,8 +206,10 @@ type Blocker struct {
 	Action string `json:"action"`
 }
 
-// Quiescence is one condition that a quiescent installation satisfies.
-type Quiescence struct {
+// GateCondition is one condition of the migration gate: the narrower set of
+// conditions that an upgrade needs before the store migration. A
+// maintenance checkpoint needs full quiescence (ADR 0032).
+type GateCondition struct {
 	Code        string `json:"code"`
 	Description string `json:"description"`
 	Satisfied   bool   `json:"satisfied"`
@@ -246,7 +248,7 @@ type Plan struct {
 	Result         Result            `json:"result"`
 	Components     []ComponentStatus `json:"components"`
 	Blockers       []Blocker         `json:"blockers"`
-	Quiescence     []Quiescence      `json:"quiescence"`
+	MigrationGate  []GateCondition   `json:"migration_gate"`
 	Operations     []Operation       `json:"operations"`
 	Verification   []Verification    `json:"verification"`
 	RecoveryLimits []string          `json:"recovery_limits"`
@@ -275,7 +277,7 @@ func Build(observation Observation) Plan {
 		Result:         result(operations, blockers),
 		Components:     components,
 		Blockers:       blockers,
-		Quiescence:     planner.quiescence(),
+		MigrationGate:  planner.migrationGate(),
 		Operations:     operations,
 		Verification:   planner.verification(),
 		RecoveryLimits: RecoveryLimits,
@@ -430,7 +432,7 @@ func (p planner) operations() []Operation {
 	o := p.observation
 	smokeCommand, paidCalls := p.smokeCalls()
 	return []Operation{
-		{ID: OperationQuiesce, State: provedState(p.quiescent() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
+		{ID: OperationPassMigrationGate, State: provedState(p.gatePassed() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
 			Description:     "finish or cancel every active run with the binary that claimed it, then stop the foreground coordinator with Ctrl-C or factory stop " + p.configFlag(),
 			ExpectedEffects: []string{"no coordinator holds the repository lock", "no run, invocation, or pending effect is active"}},
 		{ID: OperationInstallBinary, State: provedState(p.proved[OperationInstallBinary]), Effect: doctor.EffectLocalMutation,
@@ -482,10 +484,9 @@ func (p planner) laterOperationsDone() bool {
 	return true
 }
 
-// quiescent reports whether no coordinator runs and the store holds no
-// active work.
-func (p planner) quiescent() bool {
-	for _, condition := range p.quiescence() {
+// gatePassed reports whether every condition of the migration gate holds.
+func (p planner) gatePassed() bool {
+	for _, condition := range p.migrationGate() {
 		if !condition.Satisfied {
 			return false
 		}
@@ -493,11 +494,11 @@ func (p planner) quiescent() bool {
 	return true
 }
 
-// quiescence evaluates each condition of a quiescent installation.
-func (p planner) quiescence() []Quiescence {
+// migrationGate evaluates each condition of the migration gate.
+func (p planner) migrationGate() []GateCondition {
 	o := p.observation
 	readable := o.Store.Supported() && !o.Store.InterruptedWrite && o.StoreProblem == ""
-	return []Quiescence{
+	return []GateCondition{
 		{Code: "coordinator.stopped", Description: "no process holds the repository lock", Satisfied: !o.Lock.Held && o.Lock.Problem == ""},
 		{Code: "runs.terminal", Description: "every run is complete, cancelled, or failed", Satisfied: readable && len(o.Store.ActiveRuns) == 0},
 		{Code: "invocations.inactive", Description: "no invocation is active", Satisfied: readable && o.Store.ActiveInvocations == 0},

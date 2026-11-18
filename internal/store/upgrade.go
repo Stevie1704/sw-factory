@@ -13,7 +13,7 @@ import (
 
 // MinimumUpgradeSchemaVersion is the oldest operational-store schema that the
 // read-only upgrade inspection reads. From this version on, the store has the
-// run, invocation, and pending-effect tables that prove quiescence.
+// run, invocation, and pending-effect tables that the migration gate reads.
 const MinimumUpgradeSchemaVersion = 21
 
 // UpgradeInspection is the read-only view of an operational store that an
@@ -140,7 +140,8 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 	return inspection, readActiveWork(ctx, database, &inspection)
 }
 
-// readActiveWork reads the facts that decide whether the store is quiescent.
+// readActiveWork reads the facts that decide whether the store passes the
+// migration gate.
 func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeInspection) error {
 	rows, err := database.QueryContext(ctx, "SELECT id FROM operational_runs WHERE status NOT IN (?, ?, ?) ORDER BY id", StatusComplete, StatusCancelled, StatusFailed)
 	if err != nil {

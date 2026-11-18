@@ -134,12 +134,12 @@ func TestBuildPlansAHealthyIdleUpgrade(t *testing.T) {
 	for _, step := range plan.Operations {
 		order = append(order, string(step.ID))
 	}
-	want := "quiesce,install_binary,prepare_resources,onboarding_plan,rebuild_worker,gate_proof,skill_smoke,migrate_store,doctor,start_coordinator"
+	want := "pass_migration_gate,install_binary,prepare_resources,onboarding_plan,rebuild_worker,gate_proof,skill_smoke,migrate_store,doctor,start_coordinator"
 	if got := strings.Join(order, ","); got != want {
 		t.Fatalf("operation order = %s, want %s", got, want)
 	}
-	if operation(t, plan, upgrade.OperationQuiesce).State != upgrade.OperationDone || nextOperation(plan) != upgrade.OperationInstallBinary {
-		t.Fatalf("operations = %+v, want quiesce done and install_binary next", plan.Operations)
+	if operation(t, plan, upgrade.OperationPassMigrationGate).State != upgrade.OperationDone || nextOperation(plan) != upgrade.OperationInstallBinary {
+		t.Fatalf("operations = %+v, want pass_migration_gate done and install_binary next", plan.Operations)
 	}
 	for name, state := range map[upgrade.Component]upgrade.ComponentState{
 		upgrade.ComponentBinary: upgrade.StateOld, upgrade.ComponentWorker: upgrade.StateOld, upgrade.ComponentPolicy: upgrade.StateNew,
@@ -186,7 +186,7 @@ func TestBuildBlocksActiveWorkWithTheOldBinary(t *testing.T) {
 	blocker(t, plan, "session_command.queued")
 	for _, step := range plan.Operations {
 		if step.State == upgrade.OperationPending {
-			t.Fatalf("operation %s is pending while the installation is not quiescent", step.ID)
+			t.Fatalf("operation %s is pending while the migration gate fails", step.ID)
 		}
 	}
 }

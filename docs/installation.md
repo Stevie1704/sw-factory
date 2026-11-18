@@ -127,13 +127,13 @@ put it on `PATH` yet. Its `factory` binary is the target. Run:
 <target factory> upgrade plan --config <host config> --onboarding-plan <plan file> --json
 ```
 
-The plan only reads. It names the blockers, the conditions of a quiescent
-installation, the ordered operations with their effects, and the final
+The plan only reads. It names the blockers, the conditions of the migration
+gate, the ordered operations with their effects, and the final
 verification. Do the first pending operation, then plan again; after an
 interruption, the plan tells which components are old, new, or incomplete.
 `factory upgrade migrate-store --config <path> --json` is the only supported
-store migration entry point. `factory doctor` and `factory status` never
-migrate. The coordinator runs in the foreground; stop it with Ctrl-C or
+store migration entry point. Every other command, `factory start` included,
+refuses an older store schema and names it. The coordinator runs in the foreground; stop it with Ctrl-C or
 `factory stop`, and start the target with `factory start` at the end.
 
 A release coordinator accepts only a worker image built from the worker base
