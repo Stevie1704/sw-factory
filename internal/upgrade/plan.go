@@ -164,6 +164,10 @@ type Observation struct {
 	Store               store.UpgradeInspection
 	// StoreProblem tells why the store could not be inspected.
 	StoreProblem string
+	// WorkerActivity lists the worker-activity findings of the store's
+	// workers (factory.WorkerActivityFindings); empty means no harness
+	// process of the store runs.
+	WorkerActivity []store.UpgradeFinding
 	// Lock is the observed holder of the coordinator lock.
 	Lock LockObservation
 	// InstalledBinary is the factory command that PATH names, or empty.
@@ -503,6 +507,8 @@ func (p planner) migrationGate() []GateCondition {
 		{Code: "invocations.inactive", Description: "no invocation is active", Satisfied: readable && o.Store.ActiveInvocations == 0},
 		{Code: "effects.empty", Description: "the pending-effect journal is empty", Satisfied: readable && o.Store.PendingEffects == 0},
 		{Code: "session_invocations.inactive", Description: "no session-role invocation is active", Satisfied: readable && o.Store.ActiveSessionInvocations == 0},
+		{Code: "session_invocations.released", Description: "every ended session-role invocation has released its worker", Satisfied: readable && o.Store.UnreleasedSessionInvocations == 0},
 		{Code: "session_commands.completed", Description: "every session command is completed", Satisfied: readable && o.Store.QueuedSessionCommands == 0},
+		{Code: "workers.idle", Description: "Docker proves that no harness process runs in a worker of this store", Satisfied: readable && len(o.WorkerActivity) == 0},
 	}
 }

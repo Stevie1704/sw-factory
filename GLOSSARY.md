@@ -614,16 +614,20 @@ _Avoid_: Upgrade script, migration plan
 
 **Full quiescence**:
 The state of an installation in which no process holds the coordinator lock,
-no run is non-terminal, no effect is pending, and no invocation, session-role
-invocation, session command, or publication is in progress. A maintenance
-checkpoint and a restore need it.
+no run is non-terminal, no effect is pending, no invocation, session-role
+invocation, session command, or publication is in progress, every ended
+session-role invocation has released its worker, and Docker proves that no
+harness process runs in a worker of this store. A maintenance checkpoint and
+a restore need it.
 _Avoid_: Quiescent installation, idle (alone), stopped
 
 **Migration gate**:
 The narrower set of conditions that the store migration of an upgrade needs:
 no process holds the coordinator lock, no run is non-terminal, no effect is
-pending, and no invocation, session-role invocation, or session command is in
-progress. It omits publications, because a migration keeps every row.
+pending, no invocation, session-role invocation, or session command is in
+progress, every ended session-role invocation has released its worker, and
+Docker proves that no harness process runs in a worker of this store. It
+omits publications, because a migration keeps every row.
 _Avoid_: Quiescence (for this narrower set), idle check
 
 **Maintenance checkpoint**:

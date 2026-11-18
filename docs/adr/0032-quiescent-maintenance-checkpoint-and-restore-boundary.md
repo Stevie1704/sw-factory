@@ -119,17 +119,32 @@ The pre-migration backup uses the same online sequence (follow-up D, #321).
 - no run has a non-terminal status;
 - the pending-effect journal is empty;
 - no invocation or session-role invocation is active;
+- every ended session-role invocation has a recorded resource release
+  (`resources_released_at` is set), so its worker is proved stopped;
 - the command inbox has no session command that is not completed;
+- Docker proves that no harness process of this store runs: no worker
+  container named from a worker of this store runs a starting or running
+  harness helper (`worker.active`);
 - no ideation session is publishing or has an incomplete publication;
 - the coordinator lock was free when the command acquired it.
+
+The Docker condition reads only the containers whose names derive from the
+workers of the invocations in this store, so a container of another
+registration never blocks. Its evidence is the harness helper state, not a
+running container: a terminal run can leave its idle worker running, for
+example after an accepted report that does not stop the worker. Docker that
+cannot be reached gives `docker.unreachable`, and a helper state that cannot
+be read gives `worker.unobserved`; neither is a pass. A store that never
+launched a worker needs no Docker. Restore precondition 5 uses the same
+check.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
 condition. The operator finishes or cancels the work with the current binary
 first.
 
 The upgrade store migration (`factory upgrade migrate-store`) uses the
-narrower **migration gate**: the first four conditions and the free
-coordinator lock. It does not check publications, because a migration keeps
+narrower **migration gate**: every condition except the publication
+condition, so the first six conditions and the free coordinator lock. It does not check publications, because a migration keeps
 every row and its pre-migration copy, while restore replaces the store.
 
 ## Manifest, identity, and integrity

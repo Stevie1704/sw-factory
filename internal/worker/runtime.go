@@ -808,6 +808,28 @@ func (r *DockerRuntime) Stop(ctx context.Context, runID string) error {
 	return nil
 }
 
+// RunningWorkers returns, in the given order, the worker IDs among workerIDs
+// whose container runs. It reads all running worker containers with one
+// Docker call and never names a worker that the caller did not ask for. An
+// unreachable Docker daemon is an error, never an empty result.
+func (r *DockerRuntime) RunningWorkers(ctx context.Context, workerIDs []string) ([]string, error) {
+	result, err := r.runDocker(ctx, []string{"ps", "--filter", "name=factory-worker-", "--format", "{{.Names}}"})
+	if err != nil {
+		return nil, fmt.Errorf("list running worker containers: %w", dockerStderrDetail(err))
+	}
+	running := make(map[string]bool)
+	for _, name := range strings.Fields(result.Stdout) {
+		running[name] = true
+	}
+	var found []string
+	for _, workerID := range workerIDs {
+		if running[containerName(workerID)] {
+			found = append(found, workerID)
+		}
+	}
+	return found, nil
+}
+
 // Cleanup removes one stopped or running worker and its run-scoped role-home
 // volumes. It is idempotent for absent Docker resources and never removes the
 // credential volume shared by harnesses.

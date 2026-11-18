@@ -111,6 +111,7 @@ func (f checkpointFixture) request(name string) CheckpointRequest {
 		WorkerImage:  "factory-worker@sha256:" + strings.Repeat("a", 64),
 		Build:        version.Identity{Version: "v1.2.3", Build: "release", Revision: "abc123"},
 		External:     checkpointExternal{},
+		Workers:      idleWorkers{},
 		Now:          func() time.Time { return time.Unix(1000, 0) },
 	}
 }
@@ -223,16 +224,39 @@ func TestCreateCheckpointManifestHoldsNoCredentialPath(t *testing.T) {
 func TestCreateCheckpointRefusesEachNonQuiescentCondition(t *testing.T) {
 	t.Parallel()
 	for condition, statement := range map[string]string{
-		"run.active":                "UPDATE operational_runs SET status = 'active'",
-		"effect.pending":            `INSERT INTO pending_effects (run_id, effect_id, kind, payload, created_at, updated_at) VALUES ('run-1', 'effect-1', 'status_comment', '{}', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
-		"invocation.active":         `INSERT INTO invocations (id, run_id, harness, role, stage, status, created_at, updated_at) VALUES ('inv-1', 'run-1', 'codex', 'implementation', 'implementation', 'active', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
-		"session_invocation.active": `INSERT INTO ideation_invocations (session_id, id, role, trigger_id, session_revision, context_revision, harness, prompt_version, prompt_sha256, worker_id, status, created_at, updated_at) VALUES ('session-1', 'session-inv-1', 'ideation', 'turn-1', 1, 'context-1', 'codex', 'ideation-v1', 'digest', 'worker-1', 'active', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
-		"session_command.queued":    `INSERT INTO ideation_commands (request_id, session_id, kind, expected_revision, payload, state, accepted_at) VALUES ('request-1', 'session-1', 'submit_turn', 1, '{}', 'accepted', '2026-11-01T00:00:00Z')`,
-		"publication.in_progress":   `INSERT INTO ideation_sessions (id, repository_path, state, revision, created_at, updated_at) VALUES ('session-1', '/work/service', 'publishing', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+		"run.active":                    "UPDATE operational_runs SET status = 'active'",
+		"effect.pending":                `INSERT INTO pending_effects (run_id, effect_id, kind, payload, created_at, updated_at) VALUES ('run-1', 'effect-1', 'status_comment', '{}', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+		"invocation.active":             `INSERT INTO invocations (id, run_id, harness, role, stage, status, created_at, updated_at) VALUES ('inv-1', 'run-1', 'codex', 'implementation', 'implementation', 'active', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+		"session_invocation.active":     `INSERT INTO ideation_invocations (session_id, id, role, trigger_id, session_revision, context_revision, harness, prompt_version, prompt_sha256, worker_id, status, created_at, updated_at) VALUES ('session-1', 'session-inv-1', 'ideation', 'turn-1', 1, 'context-1', 'codex', 'ideation-v1', 'digest', 'worker-1', 'active', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+		"session_invocation.unreleased": `INSERT INTO ideation_invocations (session_id, id, role, trigger_id, session_revision, context_revision, harness, prompt_version, prompt_sha256, worker_id, status, created_at, updated_at) VALUES ('session-1', 'session-inv-1', 'ideation', 'turn-1', 1, 'context-1', 'codex', 'ideation-v1', 'digest', 'worker-1', 'accepted', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+		"session_command.queued":        `INSERT INTO ideation_commands (request_id, session_id, kind, expected_revision, payload, state, accepted_at) VALUES ('request-1', 'session-1', 'submit_turn', 1, '{}', 'accepted', '2026-11-01T00:00:00Z')`,
+		"publication.in_progress":       `INSERT INTO ideation_sessions (id, repository_path, state, revision, created_at, updated_at) VALUES ('session-1', '/work/service', 'publishing', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
 	} {
 		fixture := newCheckpointFixture(t)
 		fixture.execStore(t, statement)
 		result, err := CreateCheckpoint(context.Background(), fixture.request("first"))
+		assertRefusal(t, result, err, CheckpointNotQuiescent)
+		if !strings.HasPrefix(result.Refusals[0].Detail, condition+": ") {
+			t.Fatalf("%s refusal detail = %q, want it to name the condition", condition, result.Refusals[0].Detail)
+		}
+		fixture.assertNothingWritten(t)
+	}
+}
+
+// TestCreateCheckpointRefusesALiveWorkerAndUnknownDocker verifies that a
+// harness process in a worker of the store, with no active invocation, and
+// an unreachable Docker daemon refuse the checkpoint and write nothing.
+func TestCreateCheckpointRefusesALiveWorkerAndUnknownDocker(t *testing.T) {
+	t.Parallel()
+	for condition, workers := range map[string]WorkerProbe{
+		FindingWorkerActive:      liveWorkers{},
+		FindingDockerUnreachable: liveWorkers{err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		fixture := newCheckpointFixture(t)
+		fixture.execStore(t, `INSERT INTO invocations (id, run_id, harness, role, stage, status, created_at, updated_at) VALUES ('inv-1', 'run-1', 'codex', 'implementation', 'implementation', 'completed', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`)
+		request := fixture.request("first")
+		request.Workers = workers
+		result, err := CreateCheckpoint(context.Background(), request)
 		assertRefusal(t, result, err, CheckpointNotQuiescent)
 		if !strings.HasPrefix(result.Refusals[0].Detail, condition+": ") {
 			t.Fatalf("%s refusal detail = %q, want it to name the condition", condition, result.Refusals[0].Detail)

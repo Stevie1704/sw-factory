@@ -8,8 +8,10 @@ procedure with the target binary, unless a step names the old binary.
 
 - Upgrade only an installation that passes the migration gate: no process
   holds the coordinator lock, no run is non-terminal, no effect is pending,
-  and no invocation, session-role invocation, or session command is in
-  progress. Finish every active run, or cancel it deliberately, with the old
+  no invocation, session-role invocation, or session command is in
+  progress, every ended session-role invocation has released its worker, and
+  Docker proves that no harness process runs in a worker of this store. Docker
+  must be reachable; an unknown worker state never passes. Finish every active run, or cancel it deliberately, with the old
   binary before you start. The upgrade never moves a claimed run to a new
   worker or policy, and never resumes an old harness session with a new
   image. The migration gate is narrower than the full quiescence that a
@@ -72,6 +74,9 @@ store, a lock file, or the onboarding plan to remove a blocker.
 | Code | Meaning |
 | --- | --- |
 | `run.active`, `invocation.active`, `effect.pending`, `session_invocation.active`, `session_command.queued` | Active work fails the migration gate. Finish or cancel it with the binary that reads the store schema. |
+| `session_invocation.unreleased` | An ended session role has not released its worker. Start the coordinator that owns the store until its reconcile pass releases it, then stop it. |
+| `worker.active` | A harness process still runs in a worker of this store, with no active invocation. Let the owning coordinator finish or cancel it; do not stop the worker by hand while its process writes. |
+| `docker.unreachable`, `worker.unobserved` | Docker cannot be reached, or the helper state of a running worker cannot be read. Repair the access to Docker, then plan again. |
 | `coordinator.worker_mismatch` | The lock record names a coordinator of another release. Stop it. Start the target coordinator only at `start_coordinator`. |
 | `coordinator.unobserved` | The lock or its record cannot be read, for example because the record is invalid. Do not edit the lock; follow `factory guide debug`. |
 | `coordinator.running` | A coordinator of the target runs before the upgrade is done. Stop it. |

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/version"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -287,5 +288,67 @@ func TestUpgradePlanRefusesAnOnboardingPlanOfAnotherConfiguration(t *testing.T) 
 	}
 	if code != 1 || !found {
 		t.Fatalf("plan = exit %d, %+v; want onboarding.plan_registration_mismatch", code, document.Blockers)
+	}
+}
+
+// liveUpgradeWorkers is a Docker view in which every asked worker runs a
+// live harness helper, or Docker fails with err.
+type liveUpgradeWorkers struct{ err error }
+
+// RunningWorkers reports every asked worker as running, or fails.
+func (w liveUpgradeWorkers) RunningWorkers(_ context.Context, workerIDs []string) ([]string, error) {
+	return workerIDs, w.err
+}
+
+// InspectHeadless reports a running helper.
+func (liveUpgradeWorkers) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
+	return worker.HeadlessInspection{Status: worker.HeadlessStatusRunning}, nil
+}
+
+// withEndedInvocation records a completed invocation of run-1, so the store
+// knows one worker, and makes Docker report it through workers.
+func withEndedInvocation(t *testing.T, storePath string, workers factory.WorkerProbe) {
+	t.Helper()
+	opened, err := store.Open(context.Background(), storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := store.Invocation{ID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted}
+	if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	previous := upgradeWorkersForCLI
+	t.Cleanup(func() { upgradeWorkersForCLI = previous })
+	upgradeWorkersForCLI = func() factory.WorkerProbe { return workers }
+}
+
+// TestUpgradeRefusesALiveWorkerAndUnknownDocker verifies that a harness
+// process in a worker of the store, with no active invocation, and an
+// unreachable Docker daemon block the plan and refuse migrate-store.
+func TestUpgradeRefusesALiveWorkerAndUnknownDocker(t *testing.T) {
+	for code, workers := range map[string]factory.WorkerProbe{
+		"worker.active":      liveUpgradeWorkers{},
+		"docker.unreachable": liveUpgradeWorkers{err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+		withEndedInvocation(t, fixture.store, workers)
+
+		var plan upgradeDocument
+		exit := runUpgradeCommand(t, &plan, "plan", "--config", fixture.hostConfig, "--json")
+		blocked := false
+		for _, blocker := range plan.Blockers {
+			blocked = blocked || blocker.Code == code
+		}
+		if exit != 1 || !blocked {
+			t.Fatalf("plan = exit %d, %+v; want a %s blocker", exit, plan, code)
+		}
+		var migration migrateStoreDocument
+		exit = runUpgradeCommand(t, &migration, "migrate-store", "--config", fixture.hostConfig, "--json")
+		if exit != 1 || migration.Outcome != "refused" || len(migration.Refusals) != 1 || migration.Refusals[0].Code != code {
+			t.Fatalf("migrate-store = exit %d, %+v; want a %s refusal", exit, migration, code)
+		}
 	}
 }

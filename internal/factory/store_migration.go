@@ -24,9 +24,11 @@ type StoreMigrationResult struct {
 // MigrateStore is the supported store migration entry point of an upgrade.
 // It holds the coordinator lock for its whole duration, so no coordinator
 // can start, rolls back an interrupted write, and refuses unless the store
-// passes the migration gate and its schema is supported. Only then does it back up and
-// migrate the store in one transaction.
-func MigrateStore(ctx context.Context, registration config.RepositoryRegistration) (StoreMigrationResult, error) {
+// passes the migration gate and its schema is supported. The gate includes
+// the worker-activity check through workers, so no harness process of the
+// old release still runs. Only then does it back up and migrate the store in
+// one transaction.
+func MigrateStore(ctx context.Context, registration config.RepositoryRegistration, workers WorkerProbe) (StoreMigrationResult, error) {
 	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderStoreMigration)
 	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
 		return StoreMigrationResult{Refusals: []store.UpgradeFinding{{Code: "coordinator.running", Detail: "a live coordinator holds the repository lock"}}}, nil
@@ -50,7 +52,7 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 			return StoreMigrationResult{}, fmt.Errorf("inspect the operational store: %w", err)
 		}
 	}
-	if result.Refusals = migrationRefusals(inspection); len(result.Refusals) != 0 {
+	if result.Refusals = migrationRefusals(ctx, inspection, workers); len(result.Refusals) != 0 {
 		return result, nil
 	}
 	identity := version.Current()
@@ -63,9 +65,9 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 
 // migrationRefusals lists every reason why the inspected store must not be
 // migrated now.
-func migrationRefusals(inspection store.UpgradeInspection) []store.UpgradeFinding {
+func migrationRefusals(ctx context.Context, inspection store.UpgradeInspection, workers WorkerProbe) []store.UpgradeFinding {
 	if finding := inspection.SchemaFinding(); finding != nil {
 		return []store.UpgradeFinding{*finding}
 	}
-	return inspection.ActivityFindings()
+	return append(inspection.ActivityFindings(), WorkerActivityFindings(ctx, inspection.WorkerProcesses, workers)...)
 }
