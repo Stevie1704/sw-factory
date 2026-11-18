@@ -1,18 +1,18 @@
 # Factory acceptance report
 
-- Release: development (development), revision a27ac52ec0f0a640a85c80b4047902520ae03a99, modified false
+- Release: development (development), revision 5d00e20f8f66ddb86a35e9837246e9242d6fea85, modified false
 - Platform: darwin/arm64
 - Host harness: not observed
 - Worker digest: not observed
-- Generated: 2026-10-15T13:15:54Z
+- Generated: 2026-11-18T20:04:30Z
 - Recorded duration: 0s
 
 A deterministic pass uses fake adapters. It is not evidence that an agent can use the release; only a live pass is.
 
 | Evidence | pass | fail | blocked | not-run |
 | --- | --- | --- | --- | --- |
-| live | 0 | 0 | 0 | 10 |
-| deterministic | 9 | 0 | 1 | 0 |
+| live | 0 | 0 | 0 | 21 |
+| deterministic | 10 | 0 | 0 | 11 |
 
 ## Scenarios
 
@@ -22,12 +22,23 @@ A deterministic pass uses fake adapters. It is not evidence that an agent can us
 | `onboard-instructions-only` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
 | `resume-interrupted-onboarding` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
 | `diagnose-failures` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
-| `recover-operations` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass: covers recovery semantics only; durable-effect failure injection stays with #181 | #181 |
+| `recover-operations` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
 | `inspect-history` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
-| `upgrade-maintenance` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | blocked: only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships | #257, #258, #204 |
+| `upgrade-maintenance` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | #204 |
 | `defect-report` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
 | `scoped-authority` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
 | `contributor-maintenance` | not-run: no live run yet; needs an operator-approved target repository, host harness, and spending limit | pass | none |
+| `ideation-publish-github` | not-run | not-run | none |
+| `ideation-publish-azure-devops` | not-run | not-run | none |
+| `ideation-without-backlog` | not-run | not-run | none |
+| `ideation-recovery` | not-run | not-run | #265 |
+| `copilot-mixed-harness-recovery` | not-run | not-run | #281 |
+| `local-backlog-publish-and-start` | not-run | not-run | none |
+| `local-backlog-authorize-committed` | not-run | not-run | none |
+| `local-backlog-recovery` | not-run | not-run | none |
+| `local-backlog-code-host-access` | not-run | not-run | #300, #301 |
+| `azure-extension-publish-and-execute` | not-run | not-run | none |
+| `azure-extension-repository-assignment` | not-run | not-run | #302 |
 
 ## Interventions by cause
 
@@ -69,7 +80,6 @@ None recorded.
 
 ### `recover-operations` (deterministic): pass
 
-- Reason: covers recovery semantics only; durable-effect failure injection stays with #181
 
 ### `inspect-history` (live): not-run
 
@@ -82,9 +92,8 @@ None recorded.
 
 - Reason: no live run yet; needs an operator-approved target repository, host harness, and spending limit
 
-### `upgrade-maintenance` (deterministic): blocked
+### `upgrade-maintenance` (deterministic): pass
 
-- Reason: only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships
 
 ### `defect-report` (live): not-run
 
