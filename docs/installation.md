@@ -142,13 +142,15 @@ image of its own release. Until the rebuild, `factory doctor` reports
 rebuild, the digest pin, the skill smoke, and the doctor. It repeats a paid
 smoke only for a skill without a record for the new digest.
 
-Recovery limits: Factory has no supported restore. The automatic
+Recovery limits: the only supported restore is `factory checkpoint restore`
+of a maintenance checkpoint of the same host, registration, and release; it
+does not restore across an upgrade. The automatic
 `<store>.bak-<timestamp>` snapshot and its `.json` provenance file that the
 migration writes are provenance, not a restore point; never copy it over the store. After the migration, the old
 binary refuses the store, so it is not a rollback. A database copy does not
 rewind branches, pull requests, comments, labels, workers, or harness
 sessions. [ADR 0032](https://github.com/Stevie1704/sw-factory/blob/main/docs/adr/0032-quiescent-maintenance-checkpoint-and-restore-boundary.md)
-sets the boundary for a future checkpoint and restore.
+sets the checkpoint and restore boundary.
 
 The worker base images of a release with base image variants carry no Node,
 npm, or Yarn. An earlier base image was built on `node:22-bookworm-slim`. A

@@ -131,7 +131,7 @@ const LockHolderCoordinator = "coordinator"
 // holder recorded it.
 type LockObservation struct {
 	Held bool
-	// Holder is coordinator, store_migration, reset, or checkpoint.
+	// Holder is coordinator, store_migration, reset, checkpoint, or restore.
 	Holder   string
 	Version  string
 	Revision string
@@ -260,7 +260,7 @@ type Plan struct {
 // RecoveryLimits states what an upgrade cannot undo. ADR 0032 owns the
 // backup and restore boundary.
 var RecoveryLimits = []string{
-	"Factory has no supported restore. A pre-migration backup <store>.bak-* is migration provenance, not a restore point: never copy it over the store (ADR 0032).",
+	"No restore crosses an upgrade: factory checkpoint restore accepts only a maintenance checkpoint of the running release. A pre-migration backup <store>.bak-* is migration provenance, not a restore point: never copy it over the store (ADR 0032).",
 	"After migrate_store, the old binary refuses the store because its schema is newer. Running the old binary is not a rollback; continue forward with the target binary.",
 	"A database copy does not rewind branches, pull requests, comments, labels, workers, or harness sessions.",
 	"A claimed run keeps its frozen worker and policy. The upgrade never moves an active run to the new worker or resumes an old session with a new image.",

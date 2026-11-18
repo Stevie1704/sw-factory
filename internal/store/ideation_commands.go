@@ -483,6 +483,9 @@ func checkExistingStoreFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve operational store path: %w", err)
 	}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return "", err
+	}
 	storeDirectory := filepath.Dir(absolutePath)
 	if info, err := os.Stat(storeDirectory); err != nil {
 		return "", fmt.Errorf("inspect operational store directory: %w", err)

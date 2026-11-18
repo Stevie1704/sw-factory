@@ -19,10 +19,10 @@ procedure with the target binary, unless a step names the old binary.
 - The coordinator runs in the foreground. A supervised service is not
   supported yet. Stop the coordinator with Ctrl-C in its terminal, or with
   `factory stop --config <path>`. A coordinator, a store migration, a
-  reset, and a checkpoint write one lock record with their PID, kind, and release, and the plan
+  reset, a checkpoint, and a restore write one lock record with their PID, kind, and release, and the plan
   reads that record. A lock record without that identity is invalid.
-- There is no automatic update, no live-run migration, and no restore
-  command.
+- There is no automatic update and no live-run migration. A restore puts
+  back only a maintenance checkpoint of the same release (see below).
 
 ## 1. Plan
 
@@ -199,15 +199,71 @@ with `path` and `manifest` when it verifies, and `refusals` with `code` and
 | `checkpoint.store_missing` | No operational store exists. |
 | `checkpoint.destination_refused` | `--output` exists, is not private, or lies inside the checkout or the store directory. |
 
-Factory never prunes checkpoints. This release has no restore command yet.
+Factory never prunes checkpoints.
+
+### Restore a checkpoint
+
+A restore replaces the operational store with the snapshot of a checkpoint
+of the same host, registration, and release. Stop the coordinator first.
+Preview the plan:
+
+```sh
+factory checkpoint restore --config <host config> --path <checkpoint directory> --json
+```
+
+The preview changes nothing. It verifies the checkpoint, holds the repository
+lock, checks the live store, Docker, the work tracker, the code host, and the
+remote, and prints `plan` with `steps`, `preserved_paths`, and `digest`. To
+apply exactly that plan, run the command again with
+`--confirm <digest>`. A changed live store or another changed situation gives
+another digest, and the confirm refuses with `restore.plan_stale`; preview
+again.
+
+The document has `schema_version: 1`, `outcome` (`preview`, `restored`,
+`refused`, `interrupted`, or `error`), `plan`, `refusals` with `code` and
+`detail`, and `journal` for a continued restore. It exits 0 only for
+`preview` and `restored`.
+
+The restore writes the restore journal `<store>.restore.json` before each
+rename and keeps the original store and its sidecars in
+`<store directory>/.restore-<checkpoint_id>/original/`. Remove that directory
+yourself after you checked the restored installation. While a journal exists,
+every command that opens the store refuses, and `factory doctor` reports
+`store.sqlite.restore_in_progress`. Run the same restore command with the
+same release: it continues the interrupted restore first, to the unchanged
+original or to the verified replacement, and reports `interrupted`. The
+restore never starts the coordinator, resumes a harness, or replays an
+effect. Afterwards run `factory doctor`, then `factory start`.
+
+| Code | Meaning |
+| --- | --- |
+| `restore.checkpoint_incomplete` | A checkpoint file or the manifest is missing. |
+| `restore.checkpoint_corrupt` | A checksum, the integrity check, the file set, or the manifest schema fails. Nothing is written. |
+| `restore.schema_newer` | The snapshot schema is newer than this release. |
+| `restore.release_mismatch` | The checkpoint is of another release or revision, or of an older schema; or the interrupted restore was started by another release. Restore with the creating release, then migrate with `factory upgrade migrate-store`. |
+| `restore.registration_changed` | The registration or the host configuration path differs from the checkpoint. |
+| `restore.coordinator_running` | A coordinator or another maintenance command holds the repository lock. |
+| `restore.worker_active` | A harness runs in a worker of this store, a role session has no proved resource release, or Docker cannot prove that none runs. |
+| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. |
+| `restore.external_divergence` | A known branch, pull request, issue, or status comment changed after the checkpoint, or a `factory/*` branch, a pull request from one, or an issue with a run-state label is unknown to it; `detail` names each object. |
+| `restore.divergence_unverified` | A known object or a listing cannot be read. Unknown evidence never passes. |
+| `restore.plan_stale` | The `--confirm` digest is not the digest of the current plan. |
+| `restore.work_directory_exists` | The work directory of an earlier restore of this checkpoint exists. Move it away after you review its original. |
+
+A missing store directory is created when the registration is the one of the
+checkpoint; the preview names it. A missing worker image does not stop a
+restore; `factory doctor` reports it afterwards. The `agent-ready` label alone
+is a human authorization, not a factory effect, so it never diverges. Only
+the GitHub adapters list factory-owned objects; with another tracker or code
+host, the restore refuses with `restore.divergence_unverified`.
 
 ## Recovery limits
 
-- Factory has no supported restore yet. A maintenance checkpoint is not a
-  restore. A `<store>.bak-*` file is migration provenance, not a restore
-  point. Never copy it over the store. Decision
-  record ADR 0032 in the source repository sets the future checkpoint and
-  restore boundary.
+- The only supported restore is `factory checkpoint restore` of a
+  maintenance checkpoint of the same host, registration, and release. A
+  `<store>.bak-*` file is migration provenance, not a restore point. Never
+  copy it or any other file over the store. Decision record ADR 0032 in the
+  source repository sets the checkpoint and restore boundary.
 - A database copy does not rewind branches, pull requests, comments, labels,
   workers, or harness sessions. An older store can repeat those effects.
 - Never downgrade the binary to escape a blocker. When compatibility or

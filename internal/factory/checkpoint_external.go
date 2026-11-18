@@ -108,3 +108,93 @@ func (r externalStateReader) StatusComment(ctx context.Context, issueNumber int,
 	}
 	return checkpoint.StatusCommentState{RunID: runID, IssueNumber: issueNumber, ID: comment.ID, UpdatedAt: comment.UpdatedAt.UTC()}, nil
 }
+
+// factoryBranchPrefix is the prefix of every factory-owned branch.
+const factoryBranchPrefix = "factory/"
+
+// RemoteBranchLister lists the branches on the Git remote below a prefix.
+type RemoteBranchLister interface {
+	RemoteBranches(ctx context.Context, worktreePath, prefix string) ([]string, error)
+}
+
+// PullRequestHeadLister lists the pull requests, in every state, whose head
+// branch starts with a prefix.
+type PullRequestHeadLister interface {
+	ListPullRequestsByHeadPrefix(ctx context.Context, repository tracker.Repository, prefix string) ([]codehost.PullRequest, error)
+}
+
+// LabeledIssueLister lists the issues, in every state, that carry any of
+// the labels.
+type LabeledIssueLister interface {
+	ListIssuesWithLabels(ctx context.Context, repository tracker.Repository, labels []string) ([]tracker.Issue, error)
+}
+
+// NewOwnedObjectLister returns the checkpoint.OwnedObjectLister of one
+// registration. A source that cannot list its factory-owned objects makes
+// that listing fail, so a restore refuses as unverified.
+func NewOwnedObjectLister(registration config.RepositoryRegistration, sources ExternalStateSources) checkpoint.OwnedObjectLister {
+	return externalStateReader{registration: registration, repository: registeredRepository(registration), sources: sources}
+}
+
+// runStateLabels are the factory state labels that only a run sets. The
+// ready label is a human authorization, not a factory effect, so an issue
+// that carries only it has no run to know.
+func runStateLabels() []string {
+	var labels []string
+	for _, label := range tracker.FactoryStateLabels {
+		if label != tracker.LabelAgentReady {
+			labels = append(labels, label)
+		}
+	}
+	return labels
+}
+
+// FactoryBranches lists the remote branches below factory/.
+func (r externalStateReader) FactoryBranches(ctx context.Context) ([]string, error) {
+	lister, ok := r.sources.Remote.(RemoteBranchLister)
+	if !ok {
+		return nil, errors.New("the Git remote reader cannot list branches")
+	}
+	return lister.RemoteBranches(ctx, r.registration.Path, factoryBranchPrefix)
+}
+
+// FactoryPullRequests lists the pull requests from factory/ branches.
+func (r externalStateReader) FactoryPullRequests(ctx context.Context) ([]checkpoint.PullRequestState, error) {
+	lister, ok := r.sources.PullRequests.(PullRequestHeadLister)
+	if !ok {
+		return nil, errors.New("the code host cannot list pull requests by head branch")
+	}
+	found, err := lister.ListPullRequestsByHeadPrefix(ctx, r.repository, factoryBranchPrefix)
+	if err != nil {
+		return nil, err
+	}
+	states := make([]checkpoint.PullRequestState, 0, len(found))
+	for _, pullRequest := range found {
+		states = append(states, checkpoint.PullRequestState{Number: pullRequest.Number, HeadBranch: pullRequest.HeadBranch, HeadSHA: pullRequest.HeadSHA, State: pullRequest.State, Draft: pullRequest.Draft})
+	}
+	return states, nil
+}
+
+// FactoryLabeledIssues lists the issues with a factory run-state label.
+func (r externalStateReader) FactoryLabeledIssues(ctx context.Context) ([]checkpoint.IssueState, error) {
+	lister, ok := r.sources.Tracker.(LabeledIssueLister)
+	if !ok {
+		return nil, errors.New("the work tracker cannot list issues by label")
+	}
+	labels := runStateLabels()
+	found, err := lister.ListIssuesWithLabels(ctx, r.repository, labels)
+	if err != nil {
+		return nil, err
+	}
+	states := make([]checkpoint.IssueState, 0, len(found))
+	for _, issue := range found {
+		var factoryLabels []string
+		for _, label := range issue.Labels {
+			if slices.Contains(labels, label) {
+				factoryLabels = append(factoryLabels, label)
+			}
+		}
+		states = append(states, checkpoint.IssueState{Number: issue.Number, Open: strings.EqualFold(issue.State, "open"), FactoryLabels: factoryLabels})
+	}
+	return states, nil
+}

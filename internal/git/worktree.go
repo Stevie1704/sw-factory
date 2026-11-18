@@ -691,6 +691,36 @@ func (m *LocalWorktreeManager) RemoteBranchHead(ctx context.Context, request Pus
 	return fields[0], nil
 }
 
+// RemoteBranches lists, in name order, the origin branches below prefix
+// without changing the local checkout. A failed read is an error, never an
+// empty list.
+func (m *LocalWorktreeManager) RemoteBranches(ctx context.Context, worktreePath, prefix string) ([]string, error) {
+	if !filepath.IsAbs(worktreePath) {
+		return nil, errors.New("remote branch worktree path must be absolute")
+	}
+	if err := validateRefPart(strings.TrimSuffix(prefix, "/")); err != nil {
+		return nil, fmt.Errorf("remote branch prefix: %w", err)
+	}
+	output, err := m.runner().Run(ctx, worktreePath, []string{"ls-remote", "--heads", DefaultRemoteName, "refs/heads/" + prefix + "*"})
+	if err != nil {
+		return nil, fmt.Errorf("list remote branches below %q: %w", prefix, err)
+	}
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		branch, ok := strings.CutPrefix(fields[1], "refs/heads/")
+		if !ok || !validCommitSHA(fields[0]) {
+			return nil, errors.New("remote branch listing did not contain a full commit identity and branch")
+		}
+		branches = append(branches, branch)
+	}
+	slices.Sort(branches)
+	return branches, nil
+}
+
 // IsAncestor reports whether ancestor is reachable from descendant without
 // changing the local checkout. An unknown commit is reported as not reachable
 // rather than as an error, so a pruned remote object cannot claim agreement.

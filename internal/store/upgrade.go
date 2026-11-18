@@ -133,6 +133,9 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 		return UpgradeInspection{}, fmt.Errorf("resolve operational store path: %w", err)
 	}
 	inspection := UpgradeInspection{Path: absolutePath}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return inspection, err
+	}
 	if _, err := os.Lstat(absolutePath); errors.Is(err, os.ErrNotExist) {
 		return inspection, nil
 	}

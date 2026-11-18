@@ -57,17 +57,30 @@ type checkpointInspectDocument struct {
 // tracker, the code host, and the Git remote of one registration. A test
 // replaces it so the CLI contract runs without network access.
 var checkpointExternalForCLI = func(configPath string, registration config.RepositoryRegistration, targetBranch string) checkpoint.ExternalReader {
+	return factory.NewExternalStateReader(registration, checkpointSources(configPath, targetBranch))
+}
+
+// checkpointOwnedForCLI is the owned-object seam of restore: it lists the
+// factory-owned objects of one registration. A test replaces it so the CLI
+// contract runs without network access.
+var checkpointOwnedForCLI = func(configPath string, registration config.RepositoryRegistration, targetBranch string) checkpoint.OwnedObjectLister {
+	return factory.NewOwnedObjectLister(registration, checkpointSources(configPath, targetBranch))
+}
+
+// checkpointSources returns the tracker, code host, and remote read seams
+// of the configured installation.
+func checkpointSources(configPath, targetBranch string) factory.ExternalStateSources {
 	dependencies := serviceDependencies(configPath)
 	pullRequests := dependencies.PullRequests
 	if pullRequests == nil {
 		pullRequests, _ = dependencies.Tracker.(codehost.PullRequestClient)
 	}
-	return factory.NewExternalStateReader(registration, factory.ExternalStateSources{
+	return factory.ExternalStateSources{
 		Tracker:      dependencies.Tracker,
 		PullRequests: pullRequests,
 		Remote:       gitadapter.NewWorktreeManager(),
 		TargetBranch: targetBranch,
-	})
+	}
 }
 
 // checkpointWorkersForCLI is the Docker seam of the worker-activity
@@ -82,7 +95,10 @@ func runCheckpoint(ctx context.Context, args []string, defaultConfigPath string,
 	if len(args) > 0 && args[0] == "inspect" {
 		return runCheckpointInspect(ctx, args[1:], output, errorsOutput)
 	}
-	writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create or inspect; read factory guide maintenance"))
+	if len(args) > 0 && args[0] == "restore" {
+		return runCheckpointRestore(ctx, args[1:], defaultConfigPath, output, errorsOutput)
+	}
+	writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create, inspect, or restore; read factory guide maintenance"))
 	return 2
 }
 
@@ -148,19 +164,26 @@ func runCheckpointCreate(ctx context.Context, args []string, defaultConfigPath s
 	return 0
 }
 
-// createCheckpoint loads the registration and its policy and creates the
-// checkpoint.
-func createCheckpoint(ctx context.Context, configPath, destination string) (factory.CheckpointResult, error) {
+// checkpointInstallation is the registration and repository policy of one
+// host configuration.
+type checkpointInstallation struct {
+	configPath   string
+	registration config.RepositoryRegistration
+	policy       config.RepositoryConfig
+}
+
+// loadCheckpointInstallation reads the first registration and its policy.
+func loadCheckpointInstallation(configPath string) (checkpointInstallation, error) {
 	absoluteConfig, err := filepath.Abs(configPath)
 	if err != nil {
-		return factory.CheckpointResult{}, fmt.Errorf("resolve %s: %w", configPath, err)
+		return checkpointInstallation{}, fmt.Errorf("resolve %s: %w", configPath, err)
 	}
 	host, err := config.LoadHost(absoluteConfig)
 	if err == nil && len(host.Repositories) == 0 {
 		err = errors.New("the host configuration registers no repository")
 	}
 	if err != nil {
-		return factory.CheckpointResult{}, err
+		return checkpointInstallation{}, err
 	}
 	registration := host.Repositories[0]
 	policyPath := registration.RepositoryConfigPath
@@ -169,8 +192,19 @@ func createCheckpoint(ctx context.Context, configPath, destination string) (fact
 	}
 	policy, err := config.LoadRepository(policyPath)
 	if err != nil {
-		return factory.CheckpointResult{}, fmt.Errorf("read factory.yaml: %w", err)
+		return checkpointInstallation{}, fmt.Errorf("read factory.yaml: %w", err)
 	}
+	return checkpointInstallation{configPath: absoluteConfig, registration: registration, policy: policy}, nil
+}
+
+// createCheckpoint loads the registration and its policy and creates the
+// checkpoint.
+func createCheckpoint(ctx context.Context, configPath, destination string) (factory.CheckpointResult, error) {
+	installation, err := loadCheckpointInstallation(configPath)
+	if err != nil {
+		return factory.CheckpointResult{}, err
+	}
+	absoluteConfig, registration, policy := installation.configPath, installation.registration, installation.policy
 	return factory.CreateCheckpoint(ctx, factory.CheckpointRequest{
 		ConfigPath:   absoluteConfig,
 		Registration: registration,
@@ -181,5 +215,84 @@ func createCheckpoint(ctx context.Context, configPath, destination string) (fact
 		External:     checkpointExternalForCLI(absoluteConfig, registration, policy.TargetBranch),
 		Workers:      checkpointWorkersForCLI(),
 		Now:          time.Now,
+	})
+}
+
+// checkpointRestoreSchema is the version of the checkpoint restore document.
+const checkpointRestoreSchema = 1
+
+// checkpointRestoreDocument is the JSON result of checkpoint restore.
+type checkpointRestoreDocument struct {
+	SchemaVersion int                     `json:"schema_version"`
+	Command       string                  `json:"command"`
+	Outcome       string                  `json:"outcome"`
+	Plan          *factory.RestorePlan    `json:"plan,omitempty"`
+	Refusals      []store.UpgradeFinding  `json:"refusals"`
+	Journal       *restoreJournalDocument `json:"journal,omitempty"`
+	Error         *errorDocument          `json:"error,omitempty"`
+}
+
+// restoreJournalDocument reports the continuation of an interrupted
+// restore: the journal state it found and what it reached.
+type restoreJournalDocument struct {
+	Path   string `json:"path"`
+	State  string `json:"state"`
+	Result string `json:"result"`
+}
+
+// runCheckpointRestore previews the restore of one checkpoint, or applies
+// it with --confirm and the digest of the previewed plan. It exits 0 for a
+// preview and a restore, and 1 for a refusal, a continued earlier restore,
+// or an error.
+func runCheckpointRestore(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
+	flags := newFlagSet("checkpoint restore", errorsOutput)
+	configPath := flags.String("config", defaultConfigPath, "host configuration of the installation")
+	path := flags.String("path", "", "checkpoint directory to restore; required")
+	confirm := flags.String("confirm", "", "digest of the previewed plan; without it, restore only previews")
+	asJSON := flags.Bool("json", false, operationJSONUsage+"; required")
+	if !parseOnboardFlags(flags, args, errorsOutput) {
+		return 2
+	}
+	if !*asJSON || *path == "" {
+		writeError(errorsOutput, errors.New("checkpoint restore needs --path and --json"))
+		return 2
+	}
+	document := checkpointRestoreDocument{SchemaVersion: checkpointRestoreSchema, Command: "checkpoint restore", Refusals: []store.UpgradeFinding{}}
+	result, err := restoreCheckpoint(ctx, *configPath, *path, *confirm)
+	document.Plan = result.Plan
+	switch {
+	case err != nil:
+		document.Outcome, document.Error = "error", newErrorDocument("checkpoint.restore_failed", doctor.OriginUnknown, err)
+	case result.Outcome == factory.RestoreOutcomeRefused:
+		document.Outcome, document.Refusals = result.Outcome, result.Refusals
+	default:
+		document.Outcome = result.Outcome
+	}
+	if result.Journal != nil {
+		document.Journal = &restoreJournalDocument{Path: store.RestoreJournalPath(result.Journal.Journal.StorePath), State: result.Journal.State, Result: result.Journal.Result}
+	}
+	if !writeJSONDocument(output, errorsOutput, document) || (document.Outcome != factory.RestoreOutcomePreview && document.Outcome != factory.RestoreOutcomeRestored) {
+		return 1
+	}
+	return 0
+}
+
+// restoreCheckpoint loads the registration and its policy and previews or
+// applies the restore.
+func restoreCheckpoint(ctx context.Context, configPath, path, confirm string) (factory.RestoreResult, error) {
+	installation, err := loadCheckpointInstallation(configPath)
+	if err != nil {
+		return factory.RestoreResult{}, err
+	}
+	targetBranch := installation.policy.TargetBranch
+	return factory.RestoreCheckpoint(ctx, factory.RestoreRequest{
+		ConfigPath:   installation.configPath,
+		Registration: installation.registration,
+		Path:         path,
+		Confirm:      confirm,
+		Build:        version.Current(),
+		External:     checkpointExternalForCLI(installation.configPath, installation.registration, targetBranch),
+		Owned:        checkpointOwnedForCLI(installation.configPath, installation.registration, targetBranch),
+		Workers:      checkpointWorkersForCLI(),
 	})
 }
