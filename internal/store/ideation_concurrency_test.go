@@ -11,16 +11,16 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 )
 
-// inboxBusyTimeoutForTest is the busy timeout of OpenCommandInbox. SQLite's
-// busy handler gives up after this long.
-const inboxBusyTimeoutForTest = 5 * time.Second
-
 // TestCommandInboxAppendOutlastsOneBusyTimeout verifies that an append still
 // succeeds when another connection holds SQLite's write lock for longer than
-// one busy timeout. The first attempt gives up at the timeout; the append
-// then retries its transaction once the lock is free.
+// one busy timeout. The first attempt fails with SQLITE_BUSY at the timeout;
+// the retry then waits for the release. The test does not run in parallel: it
+// changes the package busy timeout that OpenCommandInbox reads.
 func TestCommandInboxAppendOutlastsOneBusyTimeout(t *testing.T) {
-	t.Parallel()
+	const busyTimeout = 200 * time.Millisecond
+	const hold = busyTimeout + busyTimeout/2
+	previous := store.SetInboxBusyTimeoutForTest(busyTimeout)
+	t.Cleanup(func() { store.SetInboxBusyTimeoutForTest(previous) })
 
 	opened, path := openIdeationStoreForTest(t)
 	approvedSessionForTest(t, opened, "session-1")
@@ -29,10 +29,16 @@ func TestCommandInboxAppendOutlastsOneBusyTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = inbox.Close() })
-	holdWriteLockForTest(t, path, inboxBusyTimeoutForTest+500*time.Millisecond)
+	holdWriteLockForTest(t, path, hold)
 
+	start := time.Now()
 	if _, _, err := inbox.AcceptIdeationCommand(t.Context(), commandForTest("request-busy", "session-1", 1)); err != nil {
 		t.Fatalf("append while the store stays busy past one timeout: %v", err)
+	}
+	// A single attempt gives up at busyTimeout. Success only after the release
+	// at hold proves that a retry ran after the first attempt failed.
+	if elapsed := time.Since(start); elapsed <= busyTimeout {
+		t.Fatalf("append returned after %v, within one busy timeout of %v: no attempt met the held lock", elapsed, busyTimeout)
 	}
 }
 

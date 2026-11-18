@@ -132,6 +132,11 @@ const ideationCommandColumns = `request_id, session_id, kind, expected_revision,
 // waiting for the whole busy timeout, and each new attempt starts a new wait.
 const inboxAppendAttempts = 3
 
+// inboxBusyTimeout is how long an inbox connection waits for SQLite's write
+// lock before it fails with SQLITE_BUSY. The test seam in export_test.go
+// shortens it; production never changes it.
+var inboxBusyTimeout = 5 * time.Second
+
 // AcceptIdeationCommand appends command to the inbox in the accepted state. A
 // stored command with the same request ID and content is a replay: it returns
 // the stored command, with any outcome, and true. The same ID with other
@@ -441,7 +446,8 @@ func OpenCommandInbox(ctx context.Context, path string) (*CommandInbox, error) {
 	}
 	// _txlock=immediate starts each append with BEGIN IMMEDIATE, which takes the
 	// write lock at BEGIN rather than at the first write of a deferred transaction.
-	dsn := (&url.URL{Scheme: "file", Path: absolutePath, RawQuery: "mode=rw&_txlock=immediate&_pragma=busy_timeout(5000)"}).String()
+	busyPragma := fmt.Sprintf("busy_timeout(%d)", inboxBusyTimeout.Milliseconds())
+	dsn := (&url.URL{Scheme: "file", Path: absolutePath, RawQuery: "mode=rw&_txlock=immediate&_pragma=" + busyPragma}).String()
 	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open command inbox: %w", err)
