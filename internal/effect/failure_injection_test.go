@@ -519,6 +519,9 @@ type effectContract struct {
 	makeUnsafe func(*effectWorld)
 	// workflowOwned reports that the unsafe replay is a workflow conflict.
 	workflowOwned bool
+	// verify asserts the durable run and the external world that the
+	// completed effect leaves behind.
+	verify func(*effectWorld)
 }
 
 // effectContracts lists every durable effect kind the journal applies. The
@@ -528,6 +531,7 @@ func effectContracts() []effectContract {
 	return []effectContract{
 		{
 			name: "state transition", kind: store.PendingEffectKindStateTransition, operation: opLabels,
+			verify: verifyStateTransition,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				next := advanced(w.run, store.StatusWaitingForHuman)
 				_, err := w.journal().ApplyStateTransition(ctx, w.store, effect.StateTransition{
@@ -539,6 +543,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "issue projection creating the status comment", kind: store.PendingEffectKindStateTransition, operation: opCommentCreate,
+			verify:  verifyCreatedStatusComment,
 			prepare: func(w *effectWorld) { w.comments = nil },
 			apply: func(ctx context.Context, w *effectWorld) error {
 				next := advanced(w.run, store.StatusActive)
@@ -553,6 +558,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "status comment", kind: store.PendingEffectKindStatusComment, operation: opCommentEdit,
+			verify: verifyCommandProjection,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				next := advanced(w.run, store.StatusActive)
 				next.ProcessedCommentID = "command-8"
@@ -563,6 +569,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "clarification comment", kind: store.PendingEffectKindClarificationComment, operation: opCommentCreate,
+			verify: verifyClarificationComment,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				body := contractPresentation{}.ClarificationCommentMarker(w.run.ID, 2) + "\nWhich API version?"
 				_, err := w.journal().PublishClarificationComment(ctx, w.store, contractRepository, w.run.IssueNumber, w.run, 2, body)
@@ -572,6 +579,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "label transition", kind: store.PendingEffectKindLabelTransition, operation: opLabels,
+			verify: verifyLabelTransition,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				return w.journal().ApplyLabels(ctx, w.store, w.run.ID, contractRepository, w.run.IssueNumber, []string{"ordinary", "agent-failed"})
 			},
@@ -579,6 +587,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "commit status", kind: store.PendingEffectKindCommitStatus, operation: opCommitStatus,
+			verify: verifyCommitStatus,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				publisher := w.journal().CommitStatusPublisher(w.store, w.run.ID, w)
 				return publisher.CreateCommitStatus(ctx, contractRepository, codehost.CommitStatus{
@@ -589,6 +598,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "push", kind: store.PendingEffectKindPush, operation: opPush,
+			verify:  verifyPush,
 			prepare: func(w *effectWorld) { w.localHead = commitSHA(2) },
 			apply: func(ctx context.Context, w *effectWorld) error {
 				return w.journal().Push(ctx, w.store, w.run.ID, gitadapter.PushRequest{WorktreePath: w.run.Worktree, Branch: w.run.Branch}, commitSHA(2))
@@ -597,6 +607,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "checkpoint", kind: store.PendingEffectKindCheckpoint, operation: opCheckpoint,
+			verify: verifyCheckpoint,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				_, _, err := w.journal().Checkpoint(ctx, w.store, gitadapter.CheckpointRequest{
 					RunID: w.run.ID, WorktreePath: w.run.Worktree, ParentSHA: w.run.CheckpointSHA,
@@ -608,6 +619,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "pull request creation", kind: store.PendingEffectKindPullRequest, operation: opPullCreate,
+			verify: verifyCreatedPullRequest,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				_, _, err := w.journal().UpsertPullRequestAndPersist(ctx, w.store, contractRepository, w.issue, w.run,
 					advanced(w.run, store.StatusActive), contractPullRequest("body"), 0)
@@ -617,6 +629,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "pull request update", kind: store.PendingEffectKindPullRequest, operation: opPullUpdate,
+			verify: verifyUpdatedPullRequest,
 			prepare: func(w *effectWorld) {
 				w.pulls = []codehost.PullRequest{pullRequestFrom(11, contractPullRequest("old"))}
 			},
@@ -629,6 +642,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "worker launch", kind: store.PendingEffectKindWorkerLaunch, operation: opWorkerLaunch,
+			verify: verifyWorkerLaunch,
 			apply: func(ctx context.Context, w *effectWorld) error {
 				return w.journal().StartWorker(ctx, w.store, contractWorkerRequest(w.run.ID, "/invocation"))
 			},
@@ -639,6 +653,7 @@ func effectContracts() []effectContract {
 		},
 		{
 			name: "result acceptance", kind: store.PendingEffectKindResultAcceptance, operation: opLabels,
+			verify:  verifyResultAcceptance,
 			prepare: func(w *effectWorld) { w.saveInvocation(contractInvocation(w.run.ID)) },
 			apply: func(ctx context.Context, w *effectWorld) error {
 				accepted := contractInvocation(w.run.ID)
@@ -654,6 +669,128 @@ func effectContracts() []effectContract {
 			makeUnsafe: (*effectWorld).supersede, workflowOwned: true,
 		},
 	}
+}
+
+// require fails the test with the observed value when ok is false.
+func (w *effectWorld) require(ok bool, what string, observed any) {
+	w.t.Helper()
+	if !ok {
+		w.t.Fatalf("%s: observed %#v", what, observed)
+	}
+}
+
+// commentsWith returns every comment that carries marker.
+func (w *effectWorld) commentsWith(marker string) []tracker.Comment {
+	var found []tracker.Comment
+	for _, comment := range w.comments {
+		if strings.Contains(comment.Body, marker) {
+			found = append(found, comment)
+		}
+	}
+	return found
+}
+
+// requireAdvancedRun requires the persisted run at the next revision with
+// status, and returns it.
+func (w *effectWorld) requireAdvancedRun(status store.Status) store.Run {
+	w.t.Helper()
+	run := w.persisted()
+	w.require(run.Revision == w.run.Revision+1 && run.Status == status, "persisted run revision and status", run)
+	return run
+}
+
+// requireIssueProjection requires one status comment that renders run and
+// the state label of its status.
+func (w *effectWorld) requireIssueProjection(run store.Run) {
+	w.t.Helper()
+	presentation := contractPresentation{}
+	comments := w.commentsWith(presentation.StatusCommentMarker(run.ID))
+	w.require(len(comments) == 1 && comments[0].ID == run.StatusCommentID && comments[0].Body == presentation.StatusCommentBody(run),
+		"status comment of the persisted run", comments)
+	w.require(reflect.DeepEqual(w.issue.Labels, []string{"ordinary", "state:" + string(run.Status)}), "issue labels", w.issue.Labels)
+}
+
+// verifyStateTransition requires the waiting run and its issue projection.
+func verifyStateTransition(w *effectWorld) {
+	w.requireIssueProjection(w.requireAdvancedRun(store.StatusWaitingForHuman))
+}
+
+// verifyCreatedStatusComment requires the run to record the one status
+// comment the transition created.
+func verifyCreatedStatusComment(w *effectWorld) {
+	run := w.requireAdvancedRun(store.StatusActive)
+	w.require(run.StatusCommentID != "", "persisted status comment identity", run.StatusCommentID)
+	w.requireIssueProjection(run)
+}
+
+// verifyCommandProjection requires the command watermark and its status
+// comment.
+func verifyCommandProjection(w *effectWorld) {
+	run := w.requireAdvancedRun(store.StatusActive)
+	w.require(run.ProcessedCommentID == "command-8", "processed command watermark", run.ProcessedCommentID)
+	w.requireIssueProjection(run)
+}
+
+// verifyClarificationComment requires one question comment and its identity
+// on the run.
+func verifyClarificationComment(w *effectWorld) {
+	comments := w.commentsWith(contractPresentation{}.ClarificationCommentMarker(w.run.ID, 2))
+	w.require(len(comments) == 1, "clarification comments", comments)
+	run := w.persisted()
+	w.require(run.ClarificationCommentID == comments[0].ID, "persisted clarification comment identity", run.ClarificationCommentID)
+}
+
+// verifyLabelTransition requires the complete replacement label set.
+func verifyLabelTransition(w *effectWorld) {
+	w.require(reflect.DeepEqual(w.issue.Labels, []string{"ordinary", "agent-failed"}), "issue labels", w.issue.Labels)
+}
+
+// verifyCommitStatus requires exactly the one published status.
+func verifyCommitStatus(w *effectWorld) {
+	want := []codehost.CommitStatus{{SHA: w.run.CheckpointSHA, State: codehost.CommitStatusSuccess, Context: "factory/test", Description: "passed"}}
+	w.require(reflect.DeepEqual(w.statuses, want), "commit statuses", w.statuses)
+}
+
+// verifyPush requires the remote branch at the pushed checkpoint.
+func verifyPush(w *effectWorld) {
+	w.require(w.remoteHead == commitSHA(2), "remote branch head", w.remoteHead)
+}
+
+// verifyCheckpoint requires the run to record the one checkpoint commit as
+// its current and its test checkpoint.
+func verifyCheckpoint(w *effectWorld) {
+	run := w.requireAdvancedRun(store.StatusActive)
+	w.require(codehost.ValidCommitSHA(w.localHead) && w.localHead != w.run.CheckpointSHA, "worktree head", w.localHead)
+	w.require(run.CheckpointSHA == w.localHead && run.TestCheckpointSHA == w.localHead, "persisted checkpoint identities", run)
+	w.requireIssueProjection(run)
+}
+
+// verifyCreatedPullRequest requires one pull request and its identity on the
+// run.
+func verifyCreatedPullRequest(w *effectWorld) {
+	run := w.requireAdvancedRun(store.StatusActive)
+	w.require(len(w.pulls) == 1 && w.pulls[0].Body == "body", "pull requests", w.pulls)
+	w.require(run.PullRequestNumber == w.pulls[0].Number && run.PullRequestURL == w.pulls[0].URL, "persisted pull request identity", run)
+	w.requireIssueProjection(run)
+}
+
+// verifyUpdatedPullRequest requires the same pull request with the new body.
+func verifyUpdatedPullRequest(w *effectWorld) {
+	w.require(len(w.pulls) == 1 && w.pulls[0].Number == 11 && w.pulls[0].Body == "new", "pull requests", w.pulls)
+}
+
+// verifyWorkerLaunch requires the one launched worker of the request.
+func verifyWorkerLaunch(w *effectWorld) {
+	request := contractWorkerRequest(w.run.ID, "/invocation")
+	w.require(len(w.workers) == 1 && reflect.DeepEqual(w.workers[workerIdentity(request)], request), "launched workers", w.workers)
+}
+
+// verifyResultAcceptance requires the accepted invocation and the waiting
+// run with its issue projection.
+func verifyResultAcceptance(w *effectWorld) {
+	invocation := w.invocation("inv-contract")
+	w.require(invocation.Status == store.InvocationStatusCompleted, "accepted invocation status", invocation.Status)
+	w.requireIssueProjection(w.requireAdvancedRun(store.StatusWaitingForHuman))
 }
 
 // contractPullRequest returns the draft pull-request request of the run.
@@ -729,6 +866,7 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				}
 				w.assertJournalEmpty()
 				w.assertApplied(contract.operation, 1)
+				contract.verify(w)
 			})
 			t.Run("failure before the external call", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -736,6 +874,7 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				w.assertApplied(contract.operation, 0)
 				w.replay(ctx, pending)
 				w.assertApplied(contract.operation, 1)
+				contract.verify(w)
 			})
 			t.Run("failure after the external call", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -743,6 +882,7 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				w.assertApplied(contract.operation, 1)
 				w.replay(ctx, pending)
 				w.assertApplied(contract.operation, 1)
+				contract.verify(w)
 			})
 			t.Run("failure during replay", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -755,6 +895,7 @@ func TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure(t *testing.T) {
 				w.assertApplied(contract.operation, 0)
 				w.replay(ctx, pending)
 				w.assertApplied(contract.operation, 1)
+				contract.verify(w)
 			})
 		})
 	}
@@ -787,15 +928,27 @@ func TestEveryEffectRefusesAnUnsafeReplay(t *testing.T) {
 // replay drains one journal entry and requires an empty journal afterwards.
 func (w *effectWorld) replay(ctx context.Context, pending store.PendingEffect) {
 	w.t.Helper()
-	if _, err := w.journal().Replay(ctx, w.store, pending); err != nil {
+	returned, err := w.journal().Replay(ctx, w.store, pending)
+	if err != nil {
 		w.t.Fatalf("Replay() error = %v", err)
 	}
 	w.assertJournalEmpty()
+	persisted := w.persisted()
+	w.require(sameRunProjection(returned, persisted), "replayed run against the persisted run "+fmt.Sprintf("%#v", persisted), returned)
 	for operation, count := range w.applied {
 		if count > 1 {
 			w.t.Fatalf("%s applied %d times after replay, want at most once", operation, count)
 		}
 	}
+}
+
+// sameRunProjection compares the run fields that durable effects write.
+func sameRunProjection(left, right store.Run) bool {
+	return left.ID == right.ID && left.Revision == right.Revision && left.Status == right.Status &&
+		left.CheckpointSHA == right.CheckpointSHA && left.TestCheckpointSHA == right.TestCheckpointSHA &&
+		left.PullRequestNumber == right.PullRequestNumber && left.PullRequestURL == right.PullRequestURL &&
+		left.StatusCommentID == right.StatusCommentID && left.ClarificationCommentID == right.ClarificationCommentID &&
+		left.ProcessedCommentID == right.ProcessedCommentID
 }
 
 // assertApplied requires an exact count of one external mutation.
@@ -863,6 +1016,19 @@ func (w *effectWorld) interruptResume(ctx context.Context, manual bool, phase fa
 	return *pending
 }
 
+// requireResumeGeneration requires the persisted invocation to record want
+// consumed resumes of the mode and to keep its native session.
+func (w *effectWorld) requireResumeGeneration(manual bool, want int) {
+	w.t.Helper()
+	invocation := w.invocation("inv-contract")
+	automatic, operator := want, 0
+	if manual {
+		automatic, operator = 0, want
+	}
+	w.require(invocation.RecoveryResumeCount == automatic && invocation.ManualResumeCount == operator &&
+		invocation.NativeSessionID == "native-contract", "persisted resume generation", invocation)
+}
+
 // TestHarnessResumeFailureInjection verifies the native-resume contract. The
 // resume generation is reserved before the native call. A replay resumes
 // exactly once when the process stopped before that reservation was stored,
@@ -877,6 +1043,7 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 				pending := w.interruptResume(ctx, mode.manual, faultAfter)
 				w.replay(ctx, pending)
 				w.assertApplied(opResume, 1)
+				w.requireResumeGeneration(mode.manual, 1)
 			})
 			t.Run("stop before the generation reservation", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -886,12 +1053,14 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 				w.saveInvocation(contractInvocation(w.run.ID))
 				w.replay(ctx, pending)
 				w.assertApplied(opResume, 1)
+				w.requireResumeGeneration(mode.manual, 1)
 			})
 			t.Run("ambiguous failure after the generation reservation", func(t *testing.T) {
 				w := newEffectWorld(t)
 				pending := w.interruptResume(ctx, mode.manual, faultBefore)
 				w.replay(ctx, pending)
 				w.assertApplied(opResume, 0)
+				w.requireResumeGeneration(mode.manual, 1)
 			})
 			t.Run("failure during replay", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -906,6 +1075,7 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 				w.assertStillPending(pending)
 				w.replay(ctx, pending)
 				w.assertApplied(opResume, 0)
+				w.requireResumeGeneration(mode.manual, 1)
 			})
 			t.Run("refusal before the native boundary", func(t *testing.T) {
 				w := newEffectWorld(t)
@@ -919,6 +1089,7 @@ func TestHarnessResumeFailureInjection(t *testing.T) {
 					t.Fatalf("retried resume error = %v", err)
 				}
 				w.assertApplied(opResume, 1)
+				w.requireResumeGeneration(mode.manual, 1)
 			})
 			t.Run("refusal before the native boundary during replay", func(t *testing.T) {
 				w := newEffectWorld(t)
