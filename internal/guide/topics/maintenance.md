@@ -13,11 +13,11 @@ procedure with the target binary, unless a step names the old binary.
   binary before you start. The upgrade never moves a claimed run to a new
   worker or policy, and never resumes an old harness session with a new
   image. The migration gate is narrower than the full quiescence that a
-  future maintenance checkpoint needs.
+  maintenance checkpoint needs.
 - The coordinator runs in the foreground. A supervised service is not
   supported yet. Stop the coordinator with Ctrl-C in its terminal, or with
-  `factory stop --config <path>`. A coordinator, a store migration, and a
-  reset write one lock record with their PID, kind, and release, and the plan
+  `factory stop --config <path>`. A coordinator, a store migration, a
+  reset, and a checkpoint write one lock record with their PID, kind, and release, and the plan
   reads that record. A lock record without that identity is invalid.
 - There is no automatic update, no live-run migration, and no restore
   command.
@@ -75,7 +75,7 @@ store, a lock file, or the onboarding plan to remove a blocker.
 | `coordinator.worker_mismatch` | The lock record names a coordinator of another release. Stop it. Start the target coordinator only at `start_coordinator`. |
 | `coordinator.unobserved` | The lock or its record cannot be read, for example because the record is invalid. Do not edit the lock; follow `factory guide debug`. |
 | `coordinator.running` | A coordinator of the target runs before the upgrade is done. Stop it. |
-| `maintenance.running` | A store migration or a reset holds the repository lock. Wait until it ends. |
+| `maintenance.running` | A store migration, a reset, or a checkpoint holds the repository lock. Wait until it ends. |
 | `worker.release_unreadable` | The release label of the pinned worker image cannot be read. Check that this account can inspect the image. |
 | `store.schema_newer` | A newer release migrated the store. Use that release or a newer one as the target. |
 | `store.schema_unsupported`, `store.unreadable`, `store.missing` | The target cannot prove the store state. Keep the current binary and follow `factory guide debug` or `factory guide reporting`. |
@@ -143,10 +143,48 @@ current store, a recorded doctor of the target, and a coordinator whose lock
 record names the target release and revision. `factory status --config
 <path> --json` shows the supervisor heartbeat.
 
+## Maintenance checkpoint
+
+A maintenance checkpoint is a consistent snapshot of the operational store
+with a manifest. It needs full quiescence: the migration gate, and no
+ideation session that publishes or has an incomplete publication. Run:
+
+```sh
+factory checkpoint create --config <host config> --output <new directory> --json
+```
+
+`--output` names a directory that does not exist yet. Its parent must be
+private to the operator (no group or other permissions), and it must not lie
+inside the registered checkout or the store directory. The command holds the
+repository lock for its whole duration, takes the snapshot while it holds the
+SQLite write lock, and reads the state of every branch, pull request, issue,
+and status comment that the store knows. The checkpoint directory has mode
+`0700` and holds `store.db` and `manifest.json`, each with mode `0600`. The
+manifest records the checksums, the release, the registration identity, and
+that external state. It holds no credential and no credential path, but it
+holds issue and specification text: keep the checkpoint private, and never
+attach it to a bug report.
+
+The document has `schema_version: 1`, `outcome` (`created`, `refused`, or
+`error`), `checkpoint` with `path` and `manifest`, and `refusals` with `code`
+and `detail`. A refusal writes nothing. It exits 0 only for `created`.
+
+| Code | Meaning |
+| --- | --- |
+| `checkpoint.not_quiescent` | One full-quiescence condition fails; `detail` names it. Finish or cancel that work first. |
+| `checkpoint.coordinator_running` | A coordinator or another maintenance command holds the repository lock. Stop it or wait. |
+| `checkpoint.migration_required` | The store schema is older than this release. Checkpoint with the release that wrote it. |
+| `checkpoint.external_unverified` | A known external object, or the target branch, cannot be read; `detail` names it. |
+| `checkpoint.store_missing` | No operational store exists. |
+| `checkpoint.destination_refused` | `--output` exists, is not private, or lies inside the checkout or the store directory. |
+
+Factory never prunes checkpoints. This release has no restore command yet.
+
 ## Recovery limits
 
-- Factory has no supported restore. A `<store>.bak-*` file is migration
-  provenance, not a restore point. Never copy it over the store. Decision
+- Factory has no supported restore yet. A maintenance checkpoint is not a
+  restore. A `<store>.bak-*` file is migration provenance, not a restore
+  point. Never copy it over the store. Decision
   record ADR 0032 in the source repository sets the future checkpoint and
   restore boundary.
 - A database copy does not rewind branches, pull requests, comments, labels,
