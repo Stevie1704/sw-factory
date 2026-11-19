@@ -139,7 +139,11 @@ Docker only when the store records worker processes. A store that records
 none has no worker name that a container can match, so the check passes
 without Docker. When the store records worker processes, a Docker daemon
 that cannot be reached is always the typed blocker `docker.unreachable`.
-Restore precondition 5 uses the same check.
+The check writes nothing: it reads the helper state files and tests the
+recorded process through `docker exec`, and never runs the helper's
+`inspect` command, which records `running` or `lost`. So `upgrade plan` and
+the restore preview stay read-only. Restore precondition 5 uses the same
+check.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
 condition. The operator finishes or cancels the work with the current binary

@@ -328,9 +328,9 @@ func (w liveUpgradeWorkers) RunningWorkers(_ context.Context, workerIDs []string
 	return workerIDs, w.err
 }
 
-// InspectHeadless reports a running helper.
-func (liveUpgradeWorkers) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
-	return worker.HeadlessInspection{Status: worker.HeadlessStatusRunning}, nil
+// ObserveHeadless reports a running helper.
+func (liveUpgradeWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusRunning, nil
 }
 
 // withEndedInvocation records a completed invocation of run-1, so the store
