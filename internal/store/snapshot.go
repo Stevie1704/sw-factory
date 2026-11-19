@@ -44,6 +44,9 @@ type SnapshotInspection struct {
 	Watermarks Watermarks
 	// KnownRuns names the external objects of every run in the snapshot.
 	KnownRuns []KnownRun
+	// KnownPublications names the external objects that the publication
+	// ledger of the snapshot records.
+	KnownPublications []KnownPublication
 }
 
 // vacuumInto writes the online snapshot of the database of conn to
@@ -215,6 +218,9 @@ func InspectSnapshot(ctx context.Context, path string) (SnapshotInspection, erro
 		return SnapshotInspection{}, err
 	}
 	if inspection.KnownRuns, err = ReadKnownRuns(ctx, database); err != nil {
+		return SnapshotInspection{}, err
+	}
+	if inspection.KnownPublications, err = ReadKnownPublications(ctx, database); err != nil {
 		return SnapshotInspection{}, err
 	}
 	return inspection, nil

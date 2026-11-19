@@ -78,7 +78,7 @@ func TestReadExternalStateRecordsEveryKnownObject(t *testing.T) {
 	t.Parallel()
 	reader := knownExternal()
 
-	state, unread := checkpoint.ReadExternalState(context.Background(), reader, "main", []store.KnownRun{knownRun})
+	state, unread := checkpoint.ReadExternalState(context.Background(), reader, "main", []store.KnownRun{knownRun}, nil)
 	if len(unread) != 0 {
 		t.Fatalf("unread = %v, want none", unread)
 	}
@@ -110,7 +110,7 @@ func TestReadExternalStateNamesEachUnreadableObject(t *testing.T) {
 	} {
 		reader := knownExternal()
 		damage(&reader)
-		_, unread := checkpoint.ReadExternalState(context.Background(), reader, "main", []store.KnownRun{knownRun})
+		_, unread := checkpoint.ReadExternalState(context.Background(), reader, "main", []store.KnownRun{knownRun}, nil)
 		if len(unread) != 1 || !slices.ContainsFunc(unread, func(detail string) bool { return len(detail) > len(object) && detail[:len(object)] == object }) {
 			t.Fatalf("%s: unread = %v, want exactly that object", object, unread)
 		}

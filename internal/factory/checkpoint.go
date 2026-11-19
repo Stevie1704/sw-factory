@@ -156,7 +156,7 @@ func fillCheckpoint(ctx context.Context, request CheckpointRequest, staging stri
 	if request.afterSnapshot != nil {
 		request.afterSnapshot()
 	}
-	external, unread := checkpoint.ReadExternalState(ctx, request.External, request.TargetBranch, snapshot.KnownRuns)
+	external, unread := checkpoint.ReadExternalState(ctx, request.External, request.TargetBranch, snapshot.KnownRuns, snapshot.KnownPublications)
 	if len(unread) != 0 {
 		result := CheckpointResult{}
 		for _, detail := range unread {
