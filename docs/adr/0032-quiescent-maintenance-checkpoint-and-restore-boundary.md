@@ -86,10 +86,11 @@ quiescence check and the snapshot:
 1. Acquire the coordinator lock without waiting. A held lock refuses with
    `checkpoint.coordinator_running`. The lock stays held until the manifest
    is written, so no coordinator can start during the checkpoint.
-2. Read the schema version through the read-only path. An older schema
-   refuses with `checkpoint.migration_required`; a checkpoint never migrates.
-   Then open connection A read-write without migration. This rolls back a hot
-   `-journal` from an interrupted writer.
+2. Open connection A read-write without migration. Its first read rolls
+   back a hot `-journal` from an interrupted writer; a read-only open cannot
+   do that and refuses such a store. Read the schema version on A. An older
+   schema refuses with `checkpoint.migration_required`; a checkpoint never
+   migrates and writes nothing to the store.
 3. On connection A, run `BEGIN IMMEDIATE`. A now holds the SQLite write lock,
    so no other connection can commit a write. Check full quiescence (below)
    on A.

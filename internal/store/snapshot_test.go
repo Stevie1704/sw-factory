@@ -91,7 +91,7 @@ func TestSnapshotRefusalWritesNothing(t *testing.T) {
 }
 
 // TestSnapshotRefusesAnOlderSchemaWithoutChangingTheStore verifies that a
-// snapshot never migrates and never opens an older store read-write.
+// snapshot never migrates and never changes the bytes of an older store.
 func TestSnapshotRefusesAnOlderSchemaWithoutChangingTheStore(t *testing.T) {
 	t.Parallel()
 	path := quiescentStore(t, completedRun("run-1", 7))

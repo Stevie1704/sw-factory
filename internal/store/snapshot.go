@@ -58,11 +58,13 @@ type vacuumInto func(ctx context.Context, conn *sql.Conn, destination string) er
 // snapshot. A wrote nothing and ends with ROLLBACK. The snapshot gets mode
 // 0600 at once and passes an integrity check before Snapshot returns.
 //
-// Snapshot reads the schema version read-only first and refuses an older or
-// newer schema with *MigrationRequiredError or *UnknownSchemaVersionError,
-// without opening the store read-write. A nil check checks nothing. On any
-// error, the destination does not exist. The caller holds the coordinator
-// lock, and the destination directory must be private.
+// Snapshot opens connection A read-write without migration, so its first
+// read rolls back a hot rollback journal of an interrupted writer. It reads
+// the schema version on A and refuses an older or newer schema with
+// *MigrationRequiredError or *UnknownSchemaVersionError before it takes the
+// write lock; it never migrates and writes nothing to the store. A nil check
+// checks nothing. On any error, the destination does not exist. The caller
+// holds the coordinator lock, and the destination directory must be private.
 func Snapshot(ctx context.Context, source, destination string, check SnapshotCheck) (SnapshotInspection, error) {
 	return snapshot(ctx, source, destination, check, false, vacuumOnConnection)
 }
@@ -71,14 +73,14 @@ func Snapshot(ctx context.Context, source, destination string, check SnapshotChe
 // lets the pre-migration backup copy a store that is older than this build
 // with the same online sequence; no other caller sets it.
 func snapshot(ctx context.Context, source, destination string, check SnapshotCheck, allowOlderSchema bool, vacuum vacuumInto) (SnapshotInspection, error) {
-	path, err := checkSnapshotSource(ctx, source, allowOlderSchema)
+	path, err := checkExistingStoreFile(source)
 	if err != nil {
 		return SnapshotInspection{}, err
 	}
 	if _, err := os.Lstat(destination); !errors.Is(err, os.ErrNotExist) {
 		return SnapshotInspection{}, fmt.Errorf("snapshot destination %q already exists or is not readable: %v", destination, err)
 	}
-	if err := lockedVacuum(ctx, path, destination, check, vacuum); err != nil {
+	if err := lockedVacuum(ctx, path, destination, check, allowOlderSchema, vacuum); err != nil {
 		_ = os.Remove(destination)
 		return SnapshotInspection{}, err
 	}
@@ -90,37 +92,23 @@ func snapshot(ctx context.Context, source, destination string, check SnapshotChe
 	return inspection, nil
 }
 
-// checkSnapshotSource returns the absolute path of a store, read through the
-// read-only path so an older store is never opened read-write. An older schema
-// is refused unless allowOlderSchema is set; a newer one is always refused.
-func checkSnapshotSource(ctx context.Context, source string, allowOlderSchema bool) (string, error) {
-	path, err := checkExistingStoreFile(source)
-	if err != nil {
-		return "", err
-	}
-	database, err := openReadOnlyDatabase(ctx, path)
-	if err != nil {
-		return "", err
-	}
-	version, err := readSchemaVersion(ctx, database, path)
-	if closeErr := database.Close(); err == nil && closeErr != nil {
-		err = fmt.Errorf("close operational store after the schema read: %w", closeErr)
-	}
-	if err != nil {
-		return "", err
-	}
+// checkSnapshotSchema refuses a newer schema always and an older schema
+// unless allowOlderSchema is set.
+func checkSnapshotSchema(version int, allowOlderSchema bool) error {
 	if version > CurrentSchemaVersion {
-		return "", &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
+		return &UnknownSchemaVersionError{Version: version, Supported: CurrentSchemaVersion}
 	}
 	if version < CurrentSchemaVersion && !allowOlderSchema {
-		return "", &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
+		return &MigrationRequiredError{Version: version, Supported: CurrentSchemaVersion}
 	}
-	return path, nil
+	return nil
 }
 
-// lockedVacuum runs the check on connection A under BEGIN IMMEDIATE and the
-// snapshot on connection B while A holds the lock.
-func lockedVacuum(ctx context.Context, path, destination string, check SnapshotCheck, vacuum vacuumInto) (err error) {
+// lockedVacuum opens connection A read-write without migration, checks the
+// schema version on it, runs the check on A under BEGIN IMMEDIATE, and takes
+// the snapshot on connection B while A holds the lock. The first read on A
+// rolls back a hot rollback journal, which a read-only open cannot do.
+func lockedVacuum(ctx context.Context, path, destination string, check SnapshotCheck, allowOlderSchema bool, vacuum vacuumInto) (err error) {
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "mode=rw&_pragma=busy_timeout(5000)"}).String()
 	database, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -133,6 +121,13 @@ func lockedVacuum(ctx context.Context, path, destination string, check SnapshotC
 		return fmt.Errorf("open the snapshot lock connection: %w", err)
 	}
 	defer func() { _ = lock.Close() }()
+	version, err := readSchemaVersion(ctx, lock, path)
+	if err != nil {
+		return err
+	}
+	if err := checkSnapshotSchema(version, allowOlderSchema); err != nil {
+		return err
+	}
 	if _, err := lock.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return fmt.Errorf("take the store write lock: %w", err)
 	}
