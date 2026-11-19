@@ -211,6 +211,61 @@ func (r *DockerRuntime) InspectHeadless(ctx context.Context, request HeadlessReq
 	return r.inspectHeadless(ctx, request)
 }
 
+// observeHeadlessScript prints the status of one helper state directory,
+// classified as the helper's inspect command classifies it, but writes
+// nothing: a vanished process is reported lost without recording it. $1 is
+// the state directory. A live process in the cancelled state still runs.
+const observeHeadlessScript = `dir=$1
+[ -e "$dir/status" ] || { echo missing; exit 0; }
+status=$(cat "$dir/status") || exit 1
+case $status in
+starting|running|cancelled)
+	pid=$(cat "$dir/pid" 2>/dev/null) || pid=
+	case $pid in
+	''|*[!0-9]*|0) ;;
+	*)
+		if kill -0 "$pid" 2>/dev/null || [ -d "/proc/$pid" ]; then
+			status=running
+		elif [ "$status" != cancelled ]; then
+			status=lost
+		fi
+		;;
+	esac
+	;;
+esac
+echo "$status"`
+
+// ObserveHeadless reads the status of one detached process without the
+// helper's inspect command, which records state changes. The read-only
+// maintenance checks (upgrade plan, checkpoint restore preview, ADR 0032)
+// use it; the coordinator's recovery keeps InspectHeadless.
+func (r *DockerRuntime) ObserveHeadless(ctx context.Context, request HeadlessRequest) (HeadlessStatus, error) {
+	if err := validateHeadlessRequest(request, false); err != nil {
+		return "", err
+	}
+	name := containerName(workerResourceID(request.RunID, request.WorkerID))
+	containerInspection, err := r.inspectContainer(ctx, name)
+	if err != nil {
+		if isContainerNotFound(err) {
+			return HeadlessStatusMissing, nil
+		}
+		return "", fmt.Errorf("inspect worker for headless process: %w", err)
+	}
+	if !containerInspection.Running {
+		return HeadlessStatusLost, nil
+	}
+	result, err := r.runDocker(ctx, []string{"exec", name, "/bin/sh", "-c", observeHeadlessScript, "factory-headless-observe", headlessStatePath(request.InvocationID)})
+	if err != nil {
+		return "", fmt.Errorf("read headless process state: %w", dockerStderrDetail(err))
+	}
+	status := HeadlessStatus(strings.TrimSpace(result.Stdout))
+	switch status {
+	case HeadlessStatusMissing, HeadlessStatusStarting, HeadlessStatusRunning, HeadlessStatusExited, HeadlessStatusCancelled, HeadlessStatusLost:
+		return status, nil
+	}
+	return "", fmt.Errorf("unknown headless status %q", status)
+}
+
 // CancelHeadless requests cancellation and treats missing or stopped workers
 // as already cancelled, making cleanup safe to replay after a restart.
 func (r *DockerRuntime) CancelHeadless(ctx context.Context, request HeadlessRequest) error {

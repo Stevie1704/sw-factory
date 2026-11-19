@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -212,11 +211,6 @@ func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeIn
 	return nil
 }
 
-// backupNamePattern matches the name suffix after "<store>.bak-" of one
-// backup: its UTC timestamp, an optional attempt counter, and an optional
-// staging suffix. Another file that only shares the prefix is not a backup.
-var backupNamePattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}\.[0-9]{9}Z(-[0-9]+)?(\.partial)?$`)
-
 // migrationBackups lists the pre-migration backups whose name proves they
 // belong to the store at path. A backup is listed only when its provenance
 // file exists and matches its bytes. A backup without that proof, and a
@@ -228,10 +222,9 @@ func migrationBackups(path string) (verified, incomplete []string, err error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("list operational store backups: %w", err)
 	}
-	prefix := filepath.Base(path) + ".bak-"
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasPrefix(name, prefix) || !backupNamePattern.MatchString(strings.TrimPrefix(name, prefix)) || !entry.Type().IsRegular() {
+		if !IsMigrationBackupName(filepath.Base(path), name) || strings.HasSuffix(name, backupProvenanceSuffix) || !entry.Type().IsRegular() {
 			continue
 		}
 		backup := filepath.Join(directory, name)

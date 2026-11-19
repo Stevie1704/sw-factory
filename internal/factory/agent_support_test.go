@@ -210,6 +210,8 @@ type agentWorker struct {
 	dockerErr error
 	// stopErr is returned by every worker stop.
 	stopErr error
+	// stoppedIDs records the worker ID of every stop request.
+	stoppedIDs []string
 }
 
 // CheckDocker reports the configured Docker availability.
@@ -240,7 +242,11 @@ func (w *agentWorker) RunCommand(_ context.Context, request worker.CommandReques
 }
 
 // Stop records one worker stop and returns the configured stop failure.
-func (w *agentWorker) Stop(context.Context, string) error { w.stops++; return w.stopErr }
+func (w *agentWorker) Stop(_ context.Context, workerID string) error {
+	w.stops++
+	w.stoppedIDs = append(w.stoppedIDs, workerID)
+	return w.stopErr
+}
 
 // Inspect returns the configured worker state.
 func (w *agentWorker) Inspect(context.Context, string) (worker.Inspection, error) {

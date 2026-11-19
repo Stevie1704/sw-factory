@@ -223,6 +223,8 @@ scenarios:
     deterministic_tests:
       - "internal/worker:TestReleaseCheckRequiresTheWorkerOfTheCoordinatorRelease"
       - "internal/upgrade:TestBuildPlansAHealthyIdleUpgrade"
+      - "internal/upgrade:TestBuildContinuesAfterEachStep"
+      - "internal/upgrade:TestBuildVerifiesACompleteUpgrade"
       - "internal/cli:TestUpgradePlanBlocksAnActiveRunAndAMissingBaseImage"
       - "internal/cli:TestUpgradePlanAdvancesAfterPrepare"
       - "internal/cli:TestUpgradePlanListsTheNewestMatchingCheckpoint"

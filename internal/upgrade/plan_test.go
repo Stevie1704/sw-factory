@@ -464,3 +464,47 @@ func TestBuildEmitsOnlyExecutableCommands(t *testing.T) {
 		t.Fatalf("doctor command = %q", doctorStep.Command)
 	}
 }
+
+// TestBuildKeepsWorkerBlockersWhileCoordinatorStartupIsPending verifies that
+// evidence of the later operations never hides a live harness helper, an
+// unreleased session-role worker, or missing Docker evidence: before the
+// target coordinator runs, each one blocks and the migration gate stays
+// unproved.
+func TestBuildKeepsWorkerBlockersWhileCoordinatorStartupIsPending(t *testing.T) {
+	for _, test := range []struct {
+		code    string
+		observe func(*upgrade.Observation)
+	}{
+		{code: "worker.active", observe: func(o *upgrade.Observation) {
+			o.WorkerActivity = []store.UpgradeFinding{{Code: "worker.active", Detail: "run-7 runs inv-1"}}
+		}},
+		{code: "docker.unreachable", observe: func(o *upgrade.Observation) {
+			o.WorkerActivity = []store.UpgradeFinding{{Code: "docker.unreachable", Detail: "no daemon"}}
+		}},
+		{code: "worker.unobserved", observe: func(o *upgrade.Observation) {
+			o.WorkerActivity = []store.UpgradeFinding{{Code: "worker.unobserved", Detail: "run-7 (exec failed)"}}
+		}},
+		{code: "session_invocation.unreleased", observe: func(o *upgrade.Observation) {
+			o.Store.UnreleasedSessionInvocations = 1
+		}},
+	} {
+		observation := upgradedAndRunning()
+		observation.Lock = upgrade.LockObservation{}
+		test.observe(&observation)
+		plan := upgrade.Build(observation)
+
+		if plan.Result != upgrade.ResultBlocked {
+			t.Fatalf("%s: result = %s, want blocked", test.code, plan.Result)
+		}
+		blocker(t, plan, test.code)
+		if gate := operation(t, plan, upgrade.OperationPassMigrationGate); gate.State == upgrade.OperationDone {
+			t.Fatalf("%s: pass_migration_gate is done while the blocker holds", test.code)
+		}
+	}
+
+	running := upgradedAndRunning()
+	running.WorkerActivity = []store.UpgradeFinding{{Code: "worker.active", Detail: "run-8 runs inv-2"}}
+	if plan := upgrade.Build(running); plan.Result != upgrade.ResultComplete {
+		t.Fatalf("result with the target coordinator = %s with %+v, want complete", plan.Result, plan.Blockers)
+	}
+}
