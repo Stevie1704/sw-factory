@@ -399,7 +399,10 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 
 - When A to C ship, `factory guide maintenance` adds an optional
   "checkpoint before the store migration" step, and the upgrade plan lists
-  the newest matching checkpoint. A checkpoint needs full quiescence, which
+  the newest matching checkpoint. A match has the registration and the live
+  store schema; the newest one of the installed release and revision wins,
+  else the newest schema match is listed, and the plan always names the
+  release that restores it. A checkpoint needs full quiescence, which
   is stricter than the migration gate, so the guide names the extra
   conditions. Until then the guide states that no
   supported restore exists.

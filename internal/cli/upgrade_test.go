@@ -67,10 +67,13 @@ func newUpgradeFixture(t *testing.T, status store.Status, images fakeUpgradeImag
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	identityFn, lookPath, imagesFn := upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI
+	identityFn, lookPath, imagesFn, installedFn := upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI, upgradeInstalledIdentityForCLI
 	t.Cleanup(func() {
-		upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI = identityFn, lookPath, imagesFn
+		upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI, upgradeInstalledIdentityForCLI = identityFn, lookPath, imagesFn, installedFn
 	})
+	upgradeInstalledIdentityForCLI = func(context.Context, string) (version.Identity, error) {
+		return version.Identity{SchemaVersion: 1, Version: "v1.3.0", Build: "release", Revision: "abc123"}, nil
+	}
 	upgradeIdentityForCLI = func() version.Identity {
 		return version.Identity{SchemaVersion: 1, Version: "v1.4.0", Build: "release", Revision: "abc123", WorkerBaseImage: "ghcr.io/stevie1704/sw-factory-base@sha256:" + sixtyFour("1")}
 	}

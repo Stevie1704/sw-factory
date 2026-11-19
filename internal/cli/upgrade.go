@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/config"
@@ -45,6 +47,30 @@ var upgradeMigrateStoreForCLI = factory.MigrateStore
 // upgradeIdentityForCLI is the build identity seam: the plan runs from the
 // target binary, so its identity is the target release.
 var upgradeIdentityForCLI = version.Current
+
+// upgradeInstalledIdentityForCLI reads the build identity of the installed
+// factory command that PATH names.
+var upgradeInstalledIdentityForCLI = installedIdentity
+
+// installedIdentityTimeout bounds the version call of the installed binary.
+const installedIdentityTimeout = 10 * time.Second
+
+// installedIdentity runs "<binary> version --json", which only prints the
+// build identity, and decodes it. An older release without that command
+// returns an error.
+func installedIdentity(ctx context.Context, binary string) (version.Identity, error) {
+	ctx, cancel := context.WithTimeout(ctx, installedIdentityTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binary, "version", "--json").Output()
+	if err != nil {
+		return version.Identity{}, fmt.Errorf("read the version of %s: %w", binary, err)
+	}
+	var identity version.Identity
+	if err := json.Unmarshal(output, &identity); err != nil || identity.Version == "" || identity.Revision == "" {
+		return version.Identity{}, fmt.Errorf("read the version of %s: the output is not a build identity", binary)
+	}
+	return identity, nil
+}
 
 // upgradeLookPathForCLI resolves the factory command that PATH names.
 var upgradeLookPathForCLI = exec.LookPath
@@ -235,6 +261,23 @@ func installedBinary(target string) (string, bool) {
 	return found, found == target
 }
 
+// installedRelease returns the release of the factory command that PATH
+// names, or an empty release when it is not known. Once the target is
+// installed, that is the target release.
+func installedRelease(ctx context.Context, observation upgrade.Observation) checkpoint.Release {
+	if observation.InstalledIsTarget {
+		return checkpoint.Release{Version: observation.Target.Version, Revision: observation.Target.Revision}
+	}
+	if observation.InstalledBinary == "" {
+		return checkpoint.Release{}
+	}
+	identity, err := upgradeInstalledIdentityForCLI(ctx, observation.InstalledBinary)
+	if err != nil {
+		return checkpoint.Release{}
+	}
+	return checkpoint.Release{Version: identity.Version, Revision: identity.Revision}
+}
+
 // observePolicy validates factory.yaml with the target parser and returns
 // it when it is valid.
 func observePolicy(registration config.RepositoryRegistration, observation *upgrade.Observation) *config.RepositoryConfig {
@@ -353,9 +396,12 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 }
 
 // observeCheckpoints lists the newest checkpoint of this registration and of
-// the schema of the live store in the named directory: the checkpoint that
-// the installed release created before the migration and can restore. The
-// target binary that runs the plan did not create it. Without a directory,
+// the schema of the live store in the named directory, and prefers one of the
+// installed release: the checkpoint that the installed release created
+// before the migration and can restore. The target binary that runs the plan
+// did not create it. When no checkpoint of the installed release exists, or
+// that release is not known, it lists the newest schema match, whose
+// restore_release names the release that restores it. Without a directory,
 // or without an inspected store, it observes nothing, so the plan lists no
 // checkpoint.
 func observeCheckpoints(ctx context.Context, directory string, registration config.RepositoryRegistration, observation *upgrade.Observation) error {
@@ -373,6 +419,7 @@ func observeCheckpoints(ctx context.Context, directory string, registration conf
 	observation.Checkpoint, err = checkpoint.FindNewest(ctx, absolute, checkpoint.Match{
 		RegistrationIdentity: identity,
 		StoreSchemaVersion:   observation.Store.SchemaVersion,
+		InstalledRelease:     installedRelease(ctx, *observation),
 	})
 	if err != nil {
 		return fmt.Errorf("list checkpoints: %w", err)
