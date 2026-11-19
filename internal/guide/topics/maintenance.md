@@ -64,7 +64,8 @@ pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
 | `operations` | The ordered steps with `state` (`done`, `pending`, `blocked`), `command`, `effect`, `paid`, `paid_calls`, `authorization`, and `expected_effects` |
 | `verification` | The checks of the final state and whether each holds |
 | `recovery_limits` | What the upgrade cannot undo |
-| `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it |
+| `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it whose SHA-256 matches the backup |
+| `store_incomplete_backups` | Files with a backup name but no matching provenance, such as the remains of an interrupted backup; they are not provenance, and `factory reset` removes them |
 | `checkpoint` | The newest matching maintenance checkpoint with `path` and `manifest`, or `null` when `--checkpoints` is not given or no checkpoint matches |
 
 `command` is always an executable shell command, or empty for a manual step

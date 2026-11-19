@@ -79,6 +79,11 @@ func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 	if err := os.WriteFile(path+".bak-20260101T000000.000000000Z", []byte("old"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	oldDigest := sha256.Sum256([]byte("old"))
+	provenance := fmt.Sprintf(`{"sha256": "%x", "size": 3}`, oldDigest)
+	if err := os.WriteFile(path+".bak-20260101T000000.000000000Z.json", []byte(provenance), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	before := fileState(t, path)
 
 	inspection, err := store.InspectForUpgrade(context.Background(), path)

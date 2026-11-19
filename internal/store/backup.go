@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -59,12 +60,19 @@ func migrationGateCheck(ctx context.Context, view Querier) error {
 	return nil
 }
 
+// backupStagingSuffix marks a backup file or provenance file that is still
+// being written. The final name appears only by an atomic rename, so a
+// stopped backup leaves at most staging files, which are never a backup.
+const backupStagingSuffix = ".partial"
+
 // backupDatabase takes the pre-migration backup of the store at path and
 // returns the backup path. The backup is an online snapshot that checks the
 // store facts of the migration gate again under the write lock, so it uses
 // the same sequence as Snapshot and never copies the live file. A failed
-// check returns *MigrationGateError. It then writes the provenance file
-// beside it. On any failure, neither file remains.
+// check returns *MigrationGateError. Both the backup and its provenance are
+// written to staging names first and then renamed into place, the provenance
+// last, so a backup with provenance is always complete. On any failure,
+// neither file remains.
 func backupDatabase(ctx context.Context, path string, release ReleaseIdentity) (string, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		backupPath := path + ".bak-" + backupTimestamp(attempt)
@@ -75,24 +83,71 @@ func backupDatabase(ctx context.Context, path string, release ReleaseIdentity) (
 		if !free {
 			continue
 		}
-		inspection, err := snapshot(ctx, path, backupPath, migrationGateCheck, true, vacuumOnConnection)
-		if err != nil {
-			return "", fmt.Errorf("back up the operational store before migration: %w", err)
-		}
-		provenance := backupProvenance{
-			SourceSchemaVersion: inspection.File.SchemaVersion,
-			TargetSchemaVersion: CurrentSchemaVersion,
-			MigratingRelease:    release,
-			SHA256:              inspection.File.SHA256,
-			Size:                inspection.File.Size,
-		}
-		if err := writeBackupProvenance(backupPath+backupProvenanceSuffix, provenance); err != nil {
-			_ = os.Remove(backupPath)
+		if err := writeBackup(ctx, path, backupPath, release); err != nil {
+			removeBackupFiles(backupPath)
 			return "", err
 		}
 		return backupPath, nil
 	}
 	return "", errors.New("could not choose a unique store backup path")
+}
+
+// writeBackup writes the snapshot and the provenance to their staging names,
+// then renames the snapshot and, last, the provenance into place and syncs
+// the directory.
+func writeBackup(ctx context.Context, path, backupPath string, release ReleaseIdentity) error {
+	provenancePath := backupPath + backupProvenanceSuffix
+	inspection, err := snapshot(ctx, path, backupPath+backupStagingSuffix, migrationGateCheck, true, vacuumOnConnection)
+	if err != nil {
+		return fmt.Errorf("back up the operational store before migration: %w", err)
+	}
+	provenance := backupProvenance{
+		SourceSchemaVersion: inspection.File.SchemaVersion,
+		TargetSchemaVersion: CurrentSchemaVersion,
+		MigratingRelease:    release,
+		SHA256:              inspection.File.SHA256,
+		Size:                inspection.File.Size,
+	}
+	if err := writeBackupProvenance(provenancePath+backupStagingSuffix, provenance); err != nil {
+		return err
+	}
+	for _, name := range []string{backupPath, provenancePath} {
+		if err := os.Rename(name+backupStagingSuffix, name); err != nil {
+			return fmt.Errorf("move store backup into place: %w", err)
+		}
+	}
+	return syncBackupDirectory(filepath.Dir(backupPath))
+}
+
+// removeBackupFiles removes the backup, its provenance, and their staging
+// files after a failed backup.
+func removeBackupFiles(backupPath string) {
+	for _, name := range backupFileNames(backupPath) {
+		_ = os.Remove(name)
+	}
+}
+
+// backupFileNames lists every name that one backup can use: the backup, its
+// provenance, and the staging name of each.
+func backupFileNames(backupPath string) []string {
+	provenancePath := backupPath + backupProvenanceSuffix
+	return []string{backupPath, provenancePath, backupPath + backupStagingSuffix, provenancePath + backupStagingSuffix}
+}
+
+// syncBackupDirectory syncs the directory so the renames survive a crash.
+func syncBackupDirectory(directory string) error {
+	handle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open store backup directory: %w", err)
+	}
+	syncErr := handle.Sync()
+	if closeErr := handle.Close(); syncErr == nil {
+		syncErr = closeErr
+	}
+	if syncErr != nil {
+		return fmt.Errorf("sync store backup directory: %w", syncErr)
+	}
+	return nil
 }
 
 // backupTimestamp names a backup by its UTC creation instant. A later attempt
@@ -105,11 +160,11 @@ func backupTimestamp(attempt int) string {
 	return suffix
 }
 
-// backupPathFree reports whether neither the backup nor its provenance file
-// at backupPath exists yet.
+// backupPathFree reports whether no file of the backup at backupPath exists
+// yet, staging files included.
 func backupPathFree(backupPath string) (bool, error) {
-	for _, name := range []string{backupPath, backupPath + backupProvenanceSuffix} {
-		_, err := os.Stat(name)
+	for _, name := range backupFileNames(backupPath) {
+		_, err := os.Lstat(name)
 		if err == nil {
 			return false, nil
 		}
@@ -118,6 +173,22 @@ func backupPathFree(backupPath string) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// verifiedBackup reports whether the backup at backupPath has a readable
+// provenance file whose SHA-256 and size match the backup bytes. Any read
+// error counts as unverified, so an incomplete backup is never listed.
+func verifiedBackup(backupPath string) bool {
+	content, err := os.ReadFile(backupPath + backupProvenanceSuffix)
+	if err != nil {
+		return false
+	}
+	var provenance backupProvenance
+	if err := json.Unmarshal(content, &provenance); err != nil || provenance.SHA256 == "" {
+		return false
+	}
+	size, digest, err := FileDigest(backupPath)
+	return err == nil && size == provenance.Size && digest == provenance.SHA256
 }
 
 // writeBackupProvenance creates the provenance file privately, syncs it, and

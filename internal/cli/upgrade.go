@@ -54,8 +54,13 @@ type upgradePlanDocument struct {
 	Command        string `json:"command"`
 	Config         string `json:"config"`
 	OnboardingPlan string `json:"onboarding_plan,omitempty"`
-	// StoreBackups lists the existing pre-migration backups, as provenance.
+	// StoreBackups lists the existing pre-migration backups whose provenance
+	// file matches their bytes, as provenance.
 	StoreBackups []string `json:"store_backups"`
+	// StoreIncompleteBackups lists the backup files without matching
+	// provenance, such as the remains of an interrupted backup. They are not
+	// provenance; factory reset removes them.
+	StoreIncompleteBackups []string `json:"store_incomplete_backups"`
 	upgrade.Plan
 }
 
@@ -109,9 +114,12 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 		return 1
 	}
 	plan := upgrade.Build(observation)
-	document := upgradePlanDocument{Command: "upgrade plan", Config: observation.ConfigPath, OnboardingPlan: observation.OnboardingPlanPath, StoreBackups: observation.Store.Backups, Plan: plan}
+	document := upgradePlanDocument{Command: "upgrade plan", Config: observation.ConfigPath, OnboardingPlan: observation.OnboardingPlanPath, StoreBackups: observation.Store.Backups, StoreIncompleteBackups: observation.Store.IncompleteBackups, Plan: plan}
 	if document.StoreBackups == nil {
 		document.StoreBackups = []string{}
+	}
+	if document.StoreIncompleteBackups == nil {
+		document.StoreIncompleteBackups = []string{}
 	}
 	if !writeJSONDocument(output, errorsOutput, document) {
 		return 1

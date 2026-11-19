@@ -90,7 +90,9 @@ type upgradeDocument struct {
 	Command       string   `json:"command"`
 	Result        string   `json:"result"`
 	StoreBackups  []string `json:"store_backups"`
-	Components    []struct {
+	// StoreIncompleteBackups is read by the incomplete-backup test.
+	StoreIncompleteBackups []string `json:"store_incomplete_backups"`
+	Components             []struct {
 		Name  string `json:"name"`
 		State string `json:"state"`
 	} `json:"components"`
@@ -134,6 +136,24 @@ func snapshotFiles(t *testing.T, directory string) map[string][32]byte {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// TestUpgradePlanReportsAnIncompleteBackupApart verifies that a backup
+// file without a matching provenance file is never listed as a backup, but is
+// reported as incomplete.
+func TestUpgradePlanReportsAnIncompleteBackupApart(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.3.0"})
+	partial := fixture.store + ".bak-20260101T000000.000000000Z"
+	if err := os.WriteFile(partial, []byte("partial database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var document upgradeDocument
+	code := runUpgradeCommand(t, &document, "plan", "--config", fixture.hostConfig, "--json")
+
+	if code != 0 || len(document.StoreBackups) != 0 || len(document.StoreIncompleteBackups) != 1 || document.StoreIncompleteBackups[0] != partial {
+		t.Fatalf("plan = exit %d, backups %v, incomplete %v; want only %s as incomplete", code, document.StoreBackups, document.StoreIncompleteBackups, partial)
+	}
 }
 
 // TestUpgradePlanOfAnIdleInstallationChangesNothing verifies the read-only

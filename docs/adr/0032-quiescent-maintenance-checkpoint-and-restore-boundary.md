@@ -116,6 +116,10 @@ The pre-migration backup uses the same online sequence (follow-up D, #321).
 Its check on connection A is the store part of the migration gate. Work that
 entered the store after the earlier gate check refuses the backup with the
 gate findings, and nothing migrates.
+The backup and its provenance file are written to staging names and renamed
+into place, the provenance last. The upgrade plan lists a backup only when its
+provenance exists and its SHA-256 matches; it reports any other backup file
+as incomplete.
 
 **Full quiescence** means all of these are true on connection A:
 
