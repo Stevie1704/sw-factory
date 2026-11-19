@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -178,6 +179,17 @@ type checkpointInstallation struct {
 
 // loadCheckpointInstallation reads the first registration and its policy.
 func loadCheckpointInstallation(configPath string) (checkpointInstallation, error) {
+	installation, err := loadCheckpointRegistration(configPath)
+	if err != nil {
+		return checkpointInstallation{}, err
+	}
+	installation.policy, err = loadCheckpointPolicy(installation.registration)
+	return installation, err
+}
+
+// loadCheckpointRegistration reads the first registration of the host
+// configuration, without its repository policy.
+func loadCheckpointRegistration(configPath string) (checkpointInstallation, error) {
 	absoluteConfig, err := filepath.Abs(configPath)
 	if err != nil {
 		return checkpointInstallation{}, fmt.Errorf("resolve %s: %w", configPath, err)
@@ -189,16 +201,20 @@ func loadCheckpointInstallation(configPath string) (checkpointInstallation, erro
 	if err != nil {
 		return checkpointInstallation{}, err
 	}
-	registration := host.Repositories[0]
+	return checkpointInstallation{configPath: absoluteConfig, registration: host.Repositories[0]}, nil
+}
+
+// loadCheckpointPolicy reads the factory.yaml of the registration.
+func loadCheckpointPolicy(registration config.RepositoryRegistration) (config.RepositoryConfig, error) {
 	policyPath := registration.RepositoryConfigPath
 	if policyPath == "" {
 		policyPath = config.DefaultRepositoryConfigPath(registration.Path)
 	}
 	policy, err := config.LoadRepository(policyPath)
 	if err != nil {
-		return checkpointInstallation{}, fmt.Errorf("read factory.yaml: %w", err)
+		return config.RepositoryConfig{}, fmt.Errorf("read factory.yaml: %w", err)
 	}
-	return checkpointInstallation{configPath: absoluteConfig, registration: registration, policy: policy}, nil
+	return policy, nil
 }
 
 // createCheckpoint loads the registration and its policy and creates the
@@ -281,23 +297,45 @@ func runCheckpointRestore(ctx context.Context, args []string, defaultConfigPath 
 	return 0
 }
 
-// restoreCheckpoint loads the registration and its policy and previews or
-// applies the restore.
+// restoreCheckpoint loads the registration and previews or applies the
+// restore. The continuation of an interrupted restore needs only the
+// registration, the build, and the store path, so with a restore journal it
+// does not read factory.yaml: a missing or invalid policy cannot keep the
+// store blocked. Otherwise the policy names the target branch of the
+// external reads.
 func restoreCheckpoint(ctx context.Context, configPath, path, confirm string) (factory.RestoreResult, error) {
-	installation, err := loadCheckpointInstallation(configPath)
+	installation, err := loadCheckpointRegistration(configPath)
 	if err != nil {
 		return factory.RestoreResult{}, err
 	}
-	targetBranch := installation.policy.TargetBranch
-	return factory.RestoreCheckpoint(ctx, factory.RestoreRequest{
+	request := factory.RestoreRequest{
 		ConfigPath:   installation.configPath,
 		Registration: installation.registration,
 		Path:         path,
 		Confirm:      confirm,
 		Build:        version.Current(),
-		External:     checkpointExternalForCLI(installation.configPath, installation.registration, targetBranch),
-		Owned:        checkpointOwnedForCLI(installation.configPath, installation.registration, targetBranch),
 		Workers:      checkpointWorkersForCLI(),
 		Containers:   checkpointContainersForCLI(),
-	})
+	}
+	if restoreJournalExists(installation.registration) {
+		return factory.RestoreCheckpoint(ctx, request)
+	}
+	policy, err := loadCheckpointPolicy(installation.registration)
+	if err != nil {
+		return factory.RestoreResult{}, err
+	}
+	request.External = checkpointExternalForCLI(installation.configPath, installation.registration, policy.TargetBranch)
+	request.Owned = checkpointOwnedForCLI(installation.configPath, installation.registration, policy.TargetBranch)
+	return factory.RestoreCheckpoint(ctx, request)
+}
+
+// restoreJournalExists reports whether the store of registration has a
+// restore journal, as factory.RestoreCheckpoint decides it.
+func restoreJournalExists(registration config.RepositoryRegistration) bool {
+	storePath, err := filepath.Abs(registration.OperationalDataPath)
+	if err != nil {
+		return false
+	}
+	_, err = os.Lstat(store.RestoreJournalPath(storePath))
+	return err == nil
 }

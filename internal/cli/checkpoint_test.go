@@ -18,6 +18,7 @@ import (
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
 	"github.com/Stevie1704/sw-factory/internal/github"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/version"
 )
 
 // cliExternal is a tracker, code host, and Git remote that knows every
@@ -358,6 +359,44 @@ func TestCheckpointRestoreReportsAnUnverifiedSource(t *testing.T) {
 	code := runCheckpointCommand(t, &document, "restore", "--config", fixture.hostConfig, "--path", output, "--json")
 	if code != 1 || document.Outcome != "refused" || len(document.Refusals) != 1 || document.Refusals[0].Code != "restore.divergence_unverified" {
 		t.Fatalf("checkpoint restore = exit %d, %+v; want restore.divergence_unverified", code, document)
+	}
+}
+
+// TestCheckpointRestoreContinuesWithoutRepositoryPolicy verifies that a
+// missing or invalid factory.yaml does not block the continuation of an
+// interrupted restore: it needs only the registration, the build, and the
+// store path.
+func TestCheckpointRestoreContinuesWithoutRepositoryPolicy(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	build := version.Current()
+	journal, err := json.Marshal(checkpoint.RestoreJournal{
+		SchemaVersion: checkpoint.RestoreJournalSchemaVersion,
+		State:         checkpoint.StatePlanned,
+		Factory:       checkpoint.Factory{Version: build.Version, Build: build.Build, Revision: build.Revision, Modified: build.Modified},
+		RestorePlan: checkpoint.RestorePlan{
+			StorePath:     fixture.store,
+			WorkDirectory: filepath.Join(filepath.Dir(fixture.store), ".restore-interrupted"),
+			LiveFiles:     []string{},
+			Originals:     []checkpoint.FileIdentity{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.RestoreJournalPath(fixture.store), journal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fixture.repository, "factory.yaml"), []byte("not: [valid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var document checkpointRestoreDocument
+	code := runCheckpointCommand(t, &document, "restore", "--config", fixture.hostConfig, "--path", checkpointOutput(t), "--json")
+	if code != 1 || document.Outcome != "interrupted" || document.Journal == nil || document.Journal.Result != checkpoint.ContinuationRolledBack {
+		t.Fatalf("checkpoint restore = exit %d, %+v; want the continued restore", code, document)
+	}
+	if _, err := os.Stat(store.RestoreJournalPath(fixture.store)); !os.IsNotExist(err) {
+		t.Fatalf("the restore journal remains: %v", err)
 	}
 }
 

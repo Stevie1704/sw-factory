@@ -295,7 +295,9 @@ restore then rolls back and does not remove an unlisted sidecar.
 Every continuation before `verified` ends with the original live file set
 back in place and unchanged, so it is lossless. After `verified`, the
 original stays in `original/` until the operator removes it. Continuation
-needs the coordinator lock and runs only from the same release. Restore never
+needs the coordinator lock and runs only from the same release. It needs
+only the registration, the build, and the store path, so a missing or
+invalid `factory.yaml` does not stop it. Restore never
 starts the coordinator, resumes a harness, or replays a pending effect. The
 operator runs `factory doctor` and then `factory start`.
 

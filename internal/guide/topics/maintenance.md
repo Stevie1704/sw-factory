@@ -258,6 +258,8 @@ every command that opens the store refuses, and `factory doctor` reports
 `store.sqlite.restore_in_progress`. Run the same restore command with the
 same release: it continues the interrupted restore first, to the unchanged
 original or to the verified replacement, and reports `interrupted`. The
+continuation does not read `factory.yaml`, so a missing or invalid one does
+not stop it. The
 restore never starts the coordinator, resumes a harness, or replays an
 effect. Afterwards run `factory doctor`, then `factory start`.
 
