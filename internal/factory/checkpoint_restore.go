@@ -76,6 +76,17 @@ type RestoreRequest struct {
 	Owned checkpoint.OwnedObjectLister
 	// Workers reads Docker for the worker-activity precondition.
 	Workers WorkerProbe
+	// Containers lists every running worker container when the live store
+	// cannot name the workers of this store.
+	Containers WorkerContainerLister
+}
+
+// WorkerContainerLister lists the running worker containers of every
+// installation on the Docker host. worker.DockerRuntime implements it.
+type WorkerContainerLister interface {
+	// RunningWorkerContainers returns the names of the running
+	// factory-worker-* containers.
+	RunningWorkerContainers(ctx context.Context) ([]string, error)
 }
 
 // RestorePlan is the previewed restore that --confirm binds by its digest.
@@ -143,8 +154,8 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if refusals, err = restoreRefusals(ctx, request, storePath, manifest, facts); err != nil || len(refusals) != 0 {
-		return refusedRestore(refusals), err
+	if refusals = restoreRefusals(ctx, request, storePath, manifest, facts); len(refusals) != 0 {
+		return refusedRestore(refusals), nil
 	}
 	plan, err := newRestorePlan(request, storePath, manifest, facts, writeLock.FileDigest)
 	if err != nil {
@@ -263,17 +274,13 @@ func releaseRefusal(manifest checkpoint.Manifest, build version.Identity) *store
 
 // restoreRefusals checks preconditions 5 to 8 under the coordinator lock and
 // the unused work directory. facts are the restore facts of the live store.
-func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
+func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) []store.UpgradeFinding {
 	var refusals []store.UpgradeFinding
 	workDirectory := filepath.Join(filepath.Dir(storePath), ".restore-"+manifest.CheckpointID)
 	if _, err := os.Lstat(workDirectory); !errors.Is(err, os.ErrNotExist) {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreWorkDirectoryExists, Detail: workDirectory + " exists; it can hold the original of an earlier restore; move it away after you review it"})
 	}
-	local, err := liveStoreRefusals(ctx, request, manifest, facts)
-	if err != nil {
-		return nil, err
-	}
-	refusals = append(refusals, local...)
+	refusals = append(refusals, liveStoreRefusals(ctx, request, manifest, facts)...)
 	divergence := checkpoint.CompareExternalState(ctx, request.External, request.Owned, manifest.ExternalState)
 	for _, detail := range divergence.Diverged {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreExternalDivergence, Detail: detail})
@@ -281,23 +288,51 @@ func restoreRefusals(ctx context.Context, request RestoreRequest, storePath stri
 	for _, detail := range divergence.Unverified {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreDivergenceUnverified, Detail: detail})
 	}
-	return refusals, nil
+	return refusals
 }
 
-// liveStoreRefusals checks preconditions 5 and 6. The workers come from the
-// live store, or from the snapshot when the live store is not readable.
-func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
-	processes := facts.WorkerProcesses
+// liveStoreRefusals checks preconditions 5 and 6. A readable live store
+// names the workers to check; otherwise any running worker container
+// refuses.
+func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest checkpoint.Manifest, facts store.RestoreFacts) []store.UpgradeFinding {
 	if !facts.Readable {
-		var err error
-		if processes, err = store.ReadSnapshotWorkerProcesses(ctx, filepath.Join(request.Path, checkpoint.StoreFile)); err != nil {
-			return nil, err
-		}
+		return append(unattributedWorkerRefusals(ctx, request.Containers), storeFactRefusals(facts)...)
 	}
 	var refusals []store.UpgradeFinding
-	for _, finding := range WorkerActivityFindings(ctx, processes, request.Workers) {
+	for _, finding := range WorkerActivityFindings(ctx, facts.WorkerProcesses, request.Workers) {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreWorkerActive, Detail: finding.Code + ": " + finding.Detail})
 	}
+	refusals = append(refusals, storeFactRefusals(facts)...)
+	for _, newer := range facts.Watermarks.NewerThan(manifest.Watermarks) {
+		refusals = append(refusals, store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.newer_than_snapshot: the live store has newer " + newer})
+	}
+	return refusals
+}
+
+// unattributedWorkerRefusals checks precondition 5 without a readable live
+// store. A worker launched after the checkpoint can still run, and a
+// container name, factory-worker- and a hash of the worker ID, does not
+// name its installation, so this check is conservative: any running worker
+// container refuses, also an idle one or one of another installation.
+// Docker is always asked; a failure is unknown evidence and refuses.
+func unattributedWorkerRefusals(ctx context.Context, containers WorkerContainerLister) []store.UpgradeFinding {
+	if containers == nil {
+		return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: FindingDockerUnreachable + ": no Docker view lists the running worker containers"}}
+	}
+	running, err := containers.RunningWorkerContainers(ctx)
+	if err != nil {
+		return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: FindingDockerUnreachable + ": Docker cannot list the running worker containers: " + err.Error()}}
+	}
+	if len(running) == 0 {
+		return nil
+	}
+	return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: "worker.unattributed: the live store does not open, so restore cannot tell whether these running worker containers belong to it; stop them first: " + strings.Join(running, ", ")}}
+}
+
+// storeFactRefusals maps the store findings of the restore facts to restore
+// refusals.
+func storeFactRefusals(facts store.RestoreFacts) []store.UpgradeFinding {
+	var refusals []store.UpgradeFinding
 	for _, finding := range facts.Findings {
 		code := RestoreNotQuiescent
 		if strings.HasPrefix(finding.Code, "session_invocation.") {
@@ -305,12 +340,7 @@ func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest che
 		}
 		refusals = append(refusals, store.UpgradeFinding{Code: code, Detail: finding.Code + ": " + finding.Detail})
 	}
-	if facts.Readable {
-		for _, newer := range facts.Watermarks.NewerThan(manifest.Watermarks) {
-			refusals = append(refusals, store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.newer_than_snapshot: the live store has newer " + newer})
-		}
-	}
-	return refusals, nil
+	return refusals
 }
 
 // newRestorePlan returns the plan with its steps and its digest. The digest

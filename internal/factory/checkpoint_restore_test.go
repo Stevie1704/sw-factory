@@ -159,6 +159,7 @@ func (f restoreFixture) restoreRequest() RestoreRequest {
 		External:     reader,
 		Owned:        NewOwnedObjectLister(f.registration, f.adapters.sources()),
 		Workers:      idleWorkers{},
+		Containers:   workerContainers{},
 	}
 }
 
@@ -437,6 +438,54 @@ func TestRestoreCheckpointRefusesAnActiveWorkerOrRoleSession(t *testing.T) {
 			result, err := RestoreCheckpoint(context.Background(), request)
 			assertRestoreRefusal(t, fixture, nil, result, err, RestoreWorkerActive)
 		})
+	}
+}
+
+// workerContainers is a Docker view that lists the running worker
+// containers of every installation, or fails with err.
+type workerContainers struct {
+	names []string
+	err   error
+}
+
+// RunningWorkerContainers returns the names, or err.
+func (w workerContainers) RunningWorkerContainers(context.Context) ([]string, error) {
+	return w.names, w.err
+}
+
+// TestRestoreCheckpointWithoutAReadableLiveStoreRefusesAnyRunningWorker
+// verifies restore precondition 5 when the live store does not tell which
+// workers it launched: a worker launched after the checkpoint can still
+// run, so any running worker container refuses, and Docker is asked even
+// when the snapshot knows no worker. Unknown Docker evidence refuses too.
+func TestRestoreCheckpointWithoutAReadableLiveStoreRefusesAnyRunningWorker(t *testing.T) {
+	t.Parallel()
+	for name, containers := range map[string]workerContainers{
+		"running worker":     {names: []string{"factory-worker-0123456789abcdef01234567"}},
+		"Docker unreachable": {err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		for live, change := range map[string]func(*testing.T, string){
+			"damaged": func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte("damaged"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			"missing": func(t *testing.T, path string) {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		} {
+			t.Run(name+", "+live, func(t *testing.T) {
+				t.Parallel()
+				fixture := newRestoreFixture(t)
+				change(t, fixture.registration.OperationalDataPath)
+				request := fixture.restoreRequest()
+				request.Containers = containers
+				result, err := RestoreCheckpoint(context.Background(), request)
+				assertRestoreRefusal(t, fixture, nil, result, err, RestoreWorkerActive)
+			})
+		}
 	}
 }
 

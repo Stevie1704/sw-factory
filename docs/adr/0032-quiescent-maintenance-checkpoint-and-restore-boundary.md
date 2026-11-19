@@ -136,7 +136,7 @@ example after an accepted report that does not stop the worker. Docker that
 cannot be reached gives `docker.unreachable`, and a helper state that cannot
 be read gives `worker.unobserved`; neither is a pass. A store that never
 launched a worker needs no Docker. Restore precondition 5 uses the same
-check.
+check when the live store is readable.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
 condition. The operator finishes or cancels the work with the current binary
@@ -193,6 +193,14 @@ Restore refuses unless every precondition is proved:
 3. The current registration identity equals `registration_identity`.
 4. Restore acquires the coordinator lock and holds it to the end.
 5. No worker container or role session of this installation runs.
+   When the live store is missing or does not open, it cannot name its
+   workers, and a worker launched after the checkpoint can still run. A
+   worker container name (`factory-worker-` and a hash of the worker ID)
+   does not name its installation, so restore then always asks Docker and
+   refuses on any running `factory-worker-*` container
+   (`worker.unattributed`), also an idle one or one of another installation.
+   This is conservative; the operator stops those containers first. Docker
+   that cannot be reached refuses with `docker.unreachable`.
 6. The live store has no pending effect, no non-terminal run, and nothing
    newer than the watermarks: no run, invocation, ledger entry, or local
    issue identity that the snapshot does not have. Only a missing store or a

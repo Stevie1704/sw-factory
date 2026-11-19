@@ -87,6 +87,10 @@ func checkpointSources(configPath, targetBranch string) factory.ExternalStateSou
 // condition, so the CLI contract can be tested without Docker.
 var checkpointWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
 
+// checkpointContainersForCLI is the Docker seam that lists every running
+// worker container for a restore over a live store that does not open.
+var checkpointContainersForCLI = func() factory.WorkerContainerLister { return worker.NewDockerRuntime() }
+
 // runCheckpoint dispatches the checkpoint subcommands.
 func runCheckpoint(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
 	if len(args) > 0 && args[0] == "create" {
@@ -294,5 +298,6 @@ func restoreCheckpoint(ctx context.Context, configPath, path, confirm string) (f
 		External:     checkpointExternalForCLI(installation.configPath, installation.registration, targetBranch),
 		Owned:        checkpointOwnedForCLI(installation.configPath, installation.registration, targetBranch),
 		Workers:      checkpointWorkersForCLI(),
+		Containers:   checkpointContainersForCLI(),
 	})
 }
