@@ -212,10 +212,11 @@ Restore refuses unless every precondition is proved:
    workers, and a worker launched after the checkpoint can still run. A
    worker container name (`factory-worker-` and a hash of the worker ID)
    does not name its installation, so restore then always asks Docker and
-   refuses on any running `factory-worker-*` container
-   (`worker.unattributed`), also an idle one or one of another installation.
-   This is conservative; the operator stops those containers first. Docker
-   that cannot be reached refuses with `docker.unreachable`.
+   refuses with `restore.worker_active` (detail `worker.unattributed`) on
+   any running `factory-worker-*` container, also an idle one or one of
+   another installation. This is conservative; the operator stops those
+   containers first. Docker that cannot be reached refuses with
+   `restore.worker_active` (detail `docker.unreachable`).
 6. The live store has no pending effect, no non-terminal run, and nothing
    newer than the watermarks: no run, invocation, ledger entry, or local
    issue identity that the snapshot does not have. Only a missing store or a
