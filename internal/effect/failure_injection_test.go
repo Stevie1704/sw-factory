@@ -681,6 +681,20 @@ func effectContracts() []effectContract {
 			},
 		},
 		{
+			name: "launch rollback", kind: store.PendingEffectKindLaunchRollback, operation: opStopWorker,
+			verify:  verifyLaunchRollback,
+			prepare: func(w *effectWorld) { w.saveInvocation(launchingInvocation(w.run.ID)) },
+			apply: func(ctx context.Context, w *effectWorld) error {
+				return w.journal().RollBackLaunch(ctx, w.store, rolledBackInvocation(w.run.ID), w.run.ID)
+			},
+			makeUnsafe: func(w *effectWorld) {
+				accepted := launchingInvocation(w.run.ID)
+				accepted.Status = store.InvocationStatusCompleted
+				w.saveInvocation(accepted)
+			},
+			workflowOwned: true,
+		},
+		{
 			name: "result acceptance", kind: store.PendingEffectKindResultAcceptance, operation: opLabels,
 			verify:     verifyResultAcceptance,
 			boundaries: []boundary{{operation: opFinish}, {operation: opStopWorker, replayed: true}},
@@ -823,6 +837,64 @@ func verifyResultAcceptance(w *effectWorld) {
 	invocation := w.invocation("inv-contract")
 	w.require(invocation.Status == store.InvocationStatusCompleted, "accepted invocation status", invocation.Status)
 	w.requireIssueProjection(w.requireAdvancedRun(store.StatusWaitingForHuman))
+}
+
+// verifyLaunchRollback requires the stopped worker and the terminal
+// invocation that the rollback saves only after the stop.
+func verifyLaunchRollback(w *effectWorld) {
+	w.require(!w.running[w.run.ID], "rolled-back worker still running", w.running)
+	invocation := w.invocation("inv-launch")
+	w.require(invocation.Status == store.InvocationStatusCannotProceed, "rolled-back invocation status", invocation.Status)
+}
+
+// launchingInvocation returns the active invocation of a launch that failed
+// before it got a native session.
+func launchingInvocation(runID string) store.Invocation {
+	return store.Invocation{
+		ID: "inv-launch", RunID: runID, Harness: "codex", Role: "implementation", Stage: store.StageImplementation,
+		Status: store.InvocationStatusActive, CreatedAt: time.Unix(1, 0).UTC(), UpdatedAt: time.Unix(1, 0).UTC(),
+	}
+}
+
+// rolledBackInvocation returns launchingInvocation closed as cannot_proceed.
+func rolledBackInvocation(runID string) store.Invocation {
+	terminal := launchingInvocation(runID)
+	terminal.Status = store.InvocationStatusCannotProceed
+	terminal.UpdatedAt = time.Unix(2, 0).UTC()
+	return terminal
+}
+
+// TestLaunchRollbackKeepsTheInvocationProtectedWhileTheWorkerRuns verifies
+// that a rollback whose worker stop fails leaves the invocation active and
+// the rollback journaled, so the migration gate refuses the store and the
+// next reconciliation retries the stop. The error names the stop failure.
+func TestLaunchRollbackKeepsTheInvocationProtectedWhileTheWorkerRuns(t *testing.T) {
+	ctx := context.Background()
+	w := newEffectWorld(t)
+	w.saveInvocation(launchingInvocation(w.run.ID))
+	w.armWith(opStopWorker, faultBefore, errInjected, failForever)
+
+	err := w.journal().RollBackLaunch(ctx, w.store, rolledBackInvocation(w.run.ID), w.run.ID)
+	if !errors.Is(err, errInjected) || !strings.Contains(err.Error(), "stop worker") {
+		t.Fatalf("RollBackLaunch() error = %v, want the named worker stop failure", err)
+	}
+	if invocation := w.invocation("inv-launch"); invocation.Status != store.InvocationStatusActive {
+		t.Fatalf("invocation status = %q, want active until the worker stop is proven", invocation.Status)
+	}
+	if pending := w.pending(); pending == nil || pending.Kind != store.PendingEffectKindLaunchRollback {
+		t.Fatalf("journal = %#v, want the launch rollback kept for the next reconciliation", pending)
+	}
+	inspection, err := store.InspectForUpgrade(ctx, w.store.Path())
+	if err != nil {
+		t.Fatalf("InspectForUpgrade() error = %v", err)
+	}
+	codes := map[string]bool{}
+	for _, finding := range inspection.ActivityFindings() {
+		codes[finding.Code] = true
+	}
+	if !codes["invocation.active"] || !codes["effect.pending"] {
+		t.Fatalf("migration gate findings = %#v, want invocation.active and effect.pending", inspection.ActivityFindings())
+	}
 }
 
 // contractPullRequest returns the draft pull-request request of the run.

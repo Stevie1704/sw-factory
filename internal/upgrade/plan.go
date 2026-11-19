@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/onboarding"
 	"github.com/Stevie1704/sw-factory/internal/store"
@@ -131,7 +132,7 @@ const LockHolderCoordinator = "coordinator"
 // holder recorded it.
 type LockObservation struct {
 	Held bool
-	// Holder is coordinator, store_migration, or reset.
+	// Holder is coordinator, store_migration, reset, checkpoint, or restore.
 	Holder   string
 	Version  string
 	Revision string
@@ -164,6 +165,10 @@ type Observation struct {
 	Store               store.UpgradeInspection
 	// StoreProblem tells why the store could not be inspected.
 	StoreProblem string
+	// WorkerActivity lists the worker-activity findings of the store's
+	// workers (factory.WorkerActivityFindings); empty means no harness
+	// process of the store runs.
+	WorkerActivity []store.UpgradeFinding
 	// Lock is the observed holder of the coordinator lock.
 	Lock LockObservation
 	// InstalledBinary is the factory command that PATH names, or empty.
@@ -188,6 +193,12 @@ type Observation struct {
 	// registration; its evidence and commands are then not used.
 	OnboardingPlanForeign string
 	Onboarding            []onboarding.StepStatus
+	// Checkpoint is the verified checkpoint of this registration and of the
+	// live store schema in the directory that --checkpoints named, the newest
+	// one of the installed release when one exists, or nil when none was
+	// named or none matches. RestoreRelease names the release that restores
+	// it.
+	Checkpoint *checkpoint.Listed
 }
 
 // ComponentStatus is the state of one component.
@@ -251,12 +262,16 @@ type Plan struct {
 	Operations     []Operation       `json:"operations"`
 	Verification   []Verification    `json:"verification"`
 	RecoveryLimits []string          `json:"recovery_limits"`
+	// Checkpoint is the selected maintenance checkpoint, or null. It
+	// is optional guidance: no operation depends on it (see the maintenance
+	// guide).
+	Checkpoint *checkpoint.Listed `json:"checkpoint"`
 }
 
 // RecoveryLimits states what an upgrade cannot undo. ADR 0032 owns the
 // backup and restore boundary.
 var RecoveryLimits = []string{
-	"Factory has no supported restore. A pre-migration backup <store>.bak-* is migration provenance, not a restore point: never copy it over the store (ADR 0032).",
+	"No restore crosses an upgrade: factory checkpoint restore accepts only a maintenance checkpoint of the running release. A pre-migration backup <store>.bak-* is migration provenance, not a restore point: never copy it over the store (ADR 0032).",
 	"After migrate_store, the old binary refuses the store because its schema is newer. Running the old binary is not a rollback; continue forward with the target binary.",
 	"A database copy does not rewind branches, pull requests, comments, labels, workers, or harness sessions.",
 	"A claimed run keeps its frozen worker and policy. The upgrade never moves an active run to the new worker or resumes an old session with a new image.",
@@ -280,6 +295,7 @@ func Build(observation Observation) Plan {
 		Operations:     operations,
 		Verification:   planner.verification(),
 		RecoveryLimits: RecoveryLimits,
+		Checkpoint:     observation.Checkpoint,
 	}
 	if plan.Blockers == nil {
 		plan.Blockers = []Blocker{}
@@ -431,7 +447,7 @@ func (p planner) operations() []Operation {
 	o := p.observation
 	smokeCommand, paidCalls := p.smokeCalls()
 	return []Operation{
-		{ID: OperationPassMigrationGate, State: provedState(p.gatePassed() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
+		{ID: OperationPassMigrationGate, State: provedState(p.migrationGateDone()), Effect: doctor.EffectLocalMutation,
 			Description:     "finish or cancel every active run with the binary that claimed it, then stop the foreground coordinator with Ctrl-C or factory stop " + p.configFlag(),
 			ExpectedEffects: []string{"no coordinator holds the repository lock", "no run, invocation, or pending effect is active"}},
 		{ID: OperationInstallBinary, State: provedState(p.proved[OperationInstallBinary]), Effect: doctor.EffectLocalMutation,
@@ -459,7 +475,7 @@ func (p planner) operations() []Operation {
 		{ID: OperationMigrateStore, State: provedState(p.proved[OperationMigrateStore]), Effect: doctor.EffectLocalMutation,
 			Description:     "migrate the operational store with the explicit entry point; the old binary refuses the store afterwards",
 			Command:         p.command() + " upgrade migrate-store " + p.configFlag() + " --json",
-			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp>", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
+			ExpectedEffects: []string{"a private pre-migration backup <store>.bak-<timestamp> with its provenance file <store>.bak-<timestamp>.json", fmt.Sprintf("store schema version %d", store.CurrentSchemaVersion)}},
 		{ID: OperationDoctor, State: provedState(p.proved[OperationDoctor]), Effect: doctor.EffectLocalMutation,
 			Description:     "run the startup diagnosis of the target and record it in the onboarding plan",
 			Command:         p.command() + " onboard record --plan " + p.planFile() + " doctor --json",
@@ -477,6 +493,24 @@ func (p planner) operations() []Operation {
 func (p planner) laterOperationsDone() bool {
 	for _, proved := range p.proved {
 		if !proved {
+			return false
+		}
+	}
+	return true
+}
+
+// migrationGateDone reports whether evidence proves the migration gate
+// operation: the gate holds now, or the later operations are done and no
+// activity that blocks remains.
+func (p planner) migrationGateDone() bool {
+	if p.gatePassed() {
+		return true
+	}
+	if !p.laterOperationsDone() {
+		return false
+	}
+	for _, activity := range p.activityBlockers() {
+		if !p.activityTolerated(activity.Code) {
 			return false
 		}
 	}
@@ -503,6 +537,8 @@ func (p planner) migrationGate() []GateCondition {
 		{Code: "invocations.inactive", Description: "no invocation is active", Satisfied: readable && o.Store.ActiveInvocations == 0},
 		{Code: "effects.empty", Description: "the pending-effect journal is empty", Satisfied: readable && o.Store.PendingEffects == 0},
 		{Code: "session_invocations.inactive", Description: "no session-role invocation is active", Satisfied: readable && o.Store.ActiveSessionInvocations == 0},
+		{Code: "session_invocations.released", Description: "every ended session-role invocation has released its worker", Satisfied: readable && o.Store.UnreleasedSessionInvocations == 0},
 		{Code: "session_commands.completed", Description: "every session command is completed", Satisfied: readable && o.Store.QueuedSessionCommands == 0},
+		{Code: "workers.idle", Description: "Docker proves that no harness process runs in a worker of this store", Satisfied: readable && len(o.WorkerActivity) == 0},
 	}
 }

@@ -22,6 +22,9 @@ var (
 	// sqliteMigrationRequired means the store has an older supported schema
 	// that only the explicit migration entry point may migrate.
 	sqliteMigrationRequired = doctor.Condition{Code: "store.sqlite.migration_required", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "maintenance"}
+	// sqliteRestoreInProgress means a restore journal exists, so the store
+	// files can be split between the live path and the restore work directory.
+	sqliteRestoreInProgress = doctor.Condition{Code: "store.sqlite.restore_in_progress", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "maintenance"}
 	sqliteCloseFailed       = doctor.Condition{Code: "store.sqlite.close_failed", Origin: doctor.OriginEnvironment, Effect: doctor.EffectLocalMutation, Topic: "debug"}
 	supervisorUnobserved    = doctor.Condition{Code: "store.supervisor.unobserved", Origin: doctor.OriginUnknown, Effect: doctor.EffectInspection, Topic: "debug", Unobserved: true}
 	// supervisorMissing means no heartbeat was ever recorded.
@@ -35,12 +38,30 @@ var (
 // operational-store path. Diagnosis uses the read-only opener so it never
 // creates, migrates, backs up, chmods, or initializes the operational store.
 func StartupCheck(path string) doctor.Check {
+	return sqliteCheck(path, OpenReadOnly)
+}
+
+// RestoredStoreCheck returns the SQLite readiness check of StartupCheck for
+// the replacement that a restore put at the live path. It runs while the
+// restore journal exists, so it skips only the journal refusal; the restore
+// that owns the journal runs it in its verifying step (ADR 0032).
+func RestoredStoreCheck(path string) doctor.Check {
+	return sqliteCheck(path, openRestoredReadOnly)
+}
+
+// sqliteCheck returns the SQLite readiness check that opens the store with
+// open.
+func sqliteCheck(path string, open func(context.Context, string) (*Store, error)) doctor.Check {
 	return func(ctx context.Context) doctor.Result {
 		if strings.TrimSpace(path) == "" {
 			return doctor.Failure(sqlitePathMissing, "SQLite", "the operational store path is not configured", "register the repository with a private operational_data_path")
 		}
-		opened, err := OpenReadOnly(ctx, path)
+		opened, err := open(ctx, path)
 		var migration *MigrationRequiredError
+		var restore *RestoreInProgressError
+		if errors.As(err, &restore) {
+			return doctor.Failure(sqliteRestoreInProgress, "SQLite", restore.Error(), "continue the interrupted restore with factory checkpoint restore --config <path> --path <checkpoint> --json; follow factory guide maintenance")
+		}
 		if errors.As(err, &migration) {
 			return doctor.Failure(sqliteMigrationRequired, "SQLite", migration.Error(), "follow factory guide maintenance; its migrate_store operation runs factory upgrade migrate-store")
 		}

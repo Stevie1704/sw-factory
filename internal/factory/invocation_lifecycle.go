@@ -1219,30 +1219,41 @@ func (l *invocationLifecycle) startLaunchHarness(ctx context.Context, request In
 		classified = fmt.Errorf("%w (launch diagnostic: %s)", classified, diagnostic)
 	}
 	if harness.IsRateLimited(classified) {
-		return l.retainLaunchAfterHarnessFailure(ctx, request, plan, invocationStore, invocation, classified, func() (store.Run, error) {
+		return l.retainLaunchAfterHarnessFailure(ctx, request, invocationStore, invocation, materialised.workerID, classified, func() (store.Run, error) {
 			return l.pauseForHarnessCapacity(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness))
 		})
 	}
 	if harness.IsAuthenticationExpired(classified) {
-		return l.retainLaunchAfterHarnessFailure(ctx, request, plan, invocationStore, invocation, classified, func() (store.Run, error) {
+		return l.retainLaunchAfterHarnessFailure(ctx, request, invocationStore, invocation, materialised.workerID, classified, func() (store.Run, error) {
 			return l.pauseForAuthentication(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness))
 		})
 	}
 	if harness.IsUnexpectedExit(classified) {
-		return l.retainLaunchAfterHarnessFailure(ctx, request, plan, invocationStore, invocation, classified, func() (store.Run, error) {
+		return l.retainLaunchAfterHarnessFailure(ctx, request, invocationStore, invocation, materialised.workerID, classified, func() (store.Run, error) {
 			return l.pauseForHarnessExit(ctx, request.Registration, request.RunStore, plan.Run, string(plan.Policy.Harness), classified)
 		})
 	}
 	return harness.Session{}, store.Invocation{}, false, fmt.Errorf("launch %s %s agent: %w", plan.Policy.Harness, invocation.Role, classified)
 }
 
-// retainLaunchAfterHarnessFailure persists the invocation boundary before
-// moving the run into one of the typed waiting states.
-func (l *invocationLifecycle) retainLaunchAfterHarnessFailure(ctx context.Context, request InvocationLaunchRequest, plan LaunchPlan, invocationStore InvocationStore, invocation store.Invocation, cause error, pause func() (store.Run, error)) (harness.Session, store.Invocation, bool, error) {
-	invocation.Status = store.InvocationStatusSuperseded
-	invocation.UpdatedAt = l.clock().UTC()
-	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
-		return harness.Session{}, store.Invocation{}, false, fmt.Errorf("persist harness failure state: %w", err)
+// retainLaunchAfterHarnessFailure closes the failed invocation through the
+// journaled launch rollback before it moves the run into one of the typed
+// waiting states. The invocation becomes superseded only after its worker
+// stopped. If the stop fails, the invocation stays active, the rollback stays
+// journaled for reconciliation, and the returned error names the stop failure.
+func (l *invocationLifecycle) retainLaunchAfterHarnessFailure(ctx context.Context, request InvocationLaunchRequest, invocationStore InvocationStore, invocation store.Invocation, workerID string, cause error, pause func() (store.Run, error)) (harness.Session, store.Invocation, bool, error) {
+	terminal := invocation
+	terminal.Status = store.InvocationStatusSuperseded
+	terminal.UpdatedAt = l.clock().UTC()
+	if l.worker == nil {
+		workerID = ""
+	}
+	rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := l.closeFailedLaunch(rollbackContext, request.RunStore, invocationStore, terminal, workerID); err != nil {
+		cause = fmt.Errorf("%w; invocation %q kept active until its worker stops: %w", cause, invocation.ID, err)
+	} else {
+		invocation = terminal
 	}
 	if _, err := pause(); err != nil {
 		return harness.Session{}, invocation, true, errors.Join(cause, err)
@@ -1298,7 +1309,9 @@ func (l *invocationLifecycle) commitLaunchRun(ctx context.Context, request Invoc
 
 // rollbackLaunch closes a launch that failed before a native session or
 // structured report made it recoverable, while preserving any indeterminate
-// journal boundary for reconciliation.
+// journal boundary for reconciliation. The invocation becomes terminal only
+// after its worker stopped; a failed stop keeps it active and is named in the
+// returned error.
 func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunStore, invocation store.Invocation, workerID string, workerStarted bool, original error) error {
 	invocationStore, ok := runStore.(InvocationStore)
 	if !ok {
@@ -1341,11 +1354,29 @@ func (l *invocationLifecycle) rollbackLaunch(ctx context.Context, runStore RunSt
 		invocation.Status = store.InvocationStatusCannotProceed
 	}
 	invocation.UpdatedAt = l.clock().UTC()
-	_ = invocationStore.SaveInvocation(rollbackContext, invocation)
-	if workerStarted && l.worker != nil {
-		_ = l.worker.Stop(rollbackContext, workerID)
+	if !workerStarted || l.worker == nil {
+		workerID = ""
+	}
+	if err := l.closeFailedLaunch(rollbackContext, runStore, invocationStore, invocation, workerID); err != nil {
+		return fmt.Errorf("%w; invocation %q kept active until its worker stops: %w", original, invocation.ID, err)
 	}
 	return original
+}
+
+// closeFailedLaunch stops the worker of a failed launch and only then saves
+// the terminal invocation. The journal keeps the rollback when the stop
+// fails, so reconciliation retries it. An empty workerID means that the
+// launch started no worker.
+func (l *invocationLifecycle) closeFailedLaunch(ctx context.Context, runStore RunStore, invocationStore InvocationStore, terminal store.Invocation, workerID string) error {
+	if journaled, ok := runStore.(effectkernel.InvocationStore); ok && l.journal != nil {
+		return l.journal.RollBackLaunch(ctx, journaled, terminal, workerID)
+	}
+	if workerID != "" {
+		if err := l.stopRunWorker(ctx, workerID); err != nil {
+			return err
+		}
+	}
+	return invocationStore.SaveInvocation(ctx, terminal)
 }
 
 // ensureCoordinatorHarnessRuntime resolves the selected detached adapter used

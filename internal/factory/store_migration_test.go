@@ -3,6 +3,7 @@ package factory
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +11,33 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/store"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
+
+// idleWorkers is a Docker view in which no worker container runs.
+type idleWorkers struct{}
+
+// RunningWorkers reports no running worker.
+func (idleWorkers) RunningWorkers(context.Context, []string) ([]string, error) { return nil, nil }
+
+// ObserveHeadless reports no helper state.
+func (idleWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusMissing, nil
+}
+
+// liveWorkers is a Docker view in which every asked worker runs a live
+// helper, or Docker fails with err.
+type liveWorkers struct{ err error }
+
+// RunningWorkers reports every asked worker as running, or fails.
+func (w liveWorkers) RunningWorkers(_ context.Context, workerIDs []string) ([]string, error) {
+	return workerIDs, w.err
+}
+
+// ObserveHeadless reports a running helper.
+func (liveWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusRunning, nil
+}
 
 // migrationRegistration returns a registration whose current store holds
 // one run with the given status.
@@ -41,7 +68,7 @@ func TestMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {
 	t.Parallel()
 	registration := migrationRegistration(t, store.StatusComplete)
 
-	result, err := MigrateStore(context.Background(), registration)
+	result, err := MigrateStore(context.Background(), registration, idleWorkers{})
 	if err != nil {
 		t.Fatalf("MigrateStore() error = %v", err)
 	}
@@ -59,7 +86,7 @@ func TestMigrateStoreRefusesAnUnsupportedSchema(t *testing.T) {
 		if err := setSchemaVersion(registration.OperationalDataPath, version); err != nil {
 			t.Fatal(err)
 		}
-		result, err := MigrateStore(context.Background(), registration)
+		result, err := MigrateStore(context.Background(), registration, idleWorkers{})
 		if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != code {
 			t.Fatalf("schema %d result = %+v, %v; want %s", version, result, err, code)
 		}
@@ -73,7 +100,7 @@ func TestMigrateStoreRefusesAnUnsupportedSchema(t *testing.T) {
 func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 	t.Parallel()
 	active := migrationRegistration(t, store.StatusActive)
-	result, err := MigrateStore(context.Background(), active)
+	result, err := MigrateStore(context.Background(), active, idleWorkers{})
 	if err != nil || len(result.Refusals) == 0 || result.Refusals[0].Code != "run.active" {
 		t.Fatalf("active result = %+v, %v; want a run.active refusal", result, err)
 	}
@@ -85,7 +112,7 @@ func TestMigrateStoreRefusesActiveWorkAndALiveCoordinator(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = owner.release() }()
-	result, err = MigrateStore(context.Background(), idle)
+	result, err = MigrateStore(context.Background(), idle, idleWorkers{})
 	if err != nil || len(result.Refusals) == 0 || result.Refusals[0].Code != "coordinator.running" {
 		t.Fatalf("locked result = %+v, %v; want a coordinator.running refusal", result, err)
 	}
@@ -100,7 +127,7 @@ func TestMigrateStoreRollsBackAnInterruptedWriteFirst(t *testing.T) {
 	if err := os.WriteFile(registration.OperationalDataPath+"-journal", []byte("interrupted"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	result, err := MigrateStore(context.Background(), registration)
+	result, err := MigrateStore(context.Background(), registration, idleWorkers{})
 	if err != nil || len(result.Refusals) != 0 || !result.RolledBack || result.Migration.ToVersion != store.CurrentSchemaVersion {
 		t.Fatalf("result = %+v, %v; want a rollback and a current store", result, err)
 	}
@@ -145,9 +172,58 @@ func TestMigrateStoreRefusesAnActiveSessionRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := MigrateStore(context.Background(), registration)
+	result, err := MigrateStore(context.Background(), registration, idleWorkers{})
 	if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != "session_invocation.active" {
 		t.Fatalf("result = %+v, %v; want a session_invocation.active refusal", result, err)
 	}
 	assertSchema(t, registration.OperationalDataPath, store.CurrentSchemaVersion)
+}
+
+// execStore runs one statement on the store of registration.
+func execStore(t *testing.T, registration config.RepositoryRegistration, statement string) {
+	t.Helper()
+	database, err := sql.Open("sqlite", registration.OperationalDataPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.Exec(statement)
+	if closeErr := database.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestMigrateStoreRefusesALiveWorkerAndUnknownDocker verifies that a
+// harness process that still runs in a worker of the store, with no active
+// invocation, and an unreachable Docker daemon each stop the migration.
+func TestMigrateStoreRefusesALiveWorkerAndUnknownDocker(t *testing.T) {
+	t.Parallel()
+	for code, probe := range map[string]WorkerProbe{
+		FindingWorkerActive:      liveWorkers{},
+		FindingDockerUnreachable: liveWorkers{err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		registration := migrationRegistration(t, store.StatusComplete)
+		execStore(t, registration, `INSERT INTO invocations (id, run_id, harness, role, stage, status, created_at, updated_at) VALUES ('inv-1', 'run-1', 'codex', 'implementation', 'implementation', 'completed', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`)
+		result, err := MigrateStore(context.Background(), registration, probe)
+		if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != code {
+			t.Fatalf("result = %+v, %v; want a %s refusal", result, err, code)
+		}
+		assertSchema(t, registration.OperationalDataPath, store.CurrentSchemaVersion)
+	}
+}
+
+// TestMigrateStoreRefusesAnUnreleasedSessionRole verifies that an ended
+// session-role invocation whose worker is not proved released stops the
+// migration without any Docker evidence.
+func TestMigrateStoreRefusesAnUnreleasedSessionRole(t *testing.T) {
+	t.Parallel()
+	registration := migrationRegistration(t, store.StatusComplete)
+	execStore(t, registration, `INSERT INTO ideation_invocations (session_id, id, role, trigger_id, session_revision, context_revision, harness, prompt_version, prompt_sha256, worker_id, status, created_at, updated_at)
+		VALUES ('session-1', 'session-inv-1', 'ideation', 'turn-1', 1, 'context-1', 'codex', 'ideation-v1', 'digest', 'worker-1', 'accepted', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`)
+	result, err := MigrateStore(context.Background(), registration, idleWorkers{})
+	if err != nil || len(result.Refusals) != 1 || result.Refusals[0].Code != "session_invocation.unreleased" {
+		t.Fatalf("result = %+v, %v; want a session_invocation.unreleased refusal", result, err)
+	}
 }

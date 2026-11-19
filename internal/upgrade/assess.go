@@ -127,8 +127,10 @@ func (p planner) blockers() []Blocker {
 	if coordinator := p.coordinatorBlocker(); coordinator != nil {
 		blockers = append(blockers, *coordinator)
 	}
-	if !p.laterOperationsDone() {
-		blockers = append(blockers, p.activityBlockers()...)
+	for _, activity := range p.activityBlockers() {
+		if !p.activityTolerated(activity.Code) {
+			blockers = append(blockers, activity)
+		}
 	}
 	if !o.PolicyValid {
 		blockers = append(blockers, Blocker{Code: "configuration.invalid", Detail: o.PolicyProblem,
@@ -172,6 +174,25 @@ func (p planner) storeBlockers() []Blocker {
 	return nil
 }
 
+// workerEvidenceCodes are the activity findings that only the coordinator
+// of the target can resolve: a live harness helper, a session-role worker
+// that is not released, and Docker evidence that is missing. Evidence of
+// the later operations never proves them resolved (ADR 0032).
+var workerEvidenceCodes = map[string]bool{
+	"session_invocation.unreleased": true,
+	"worker.active":                 true,
+	"docker.unreachable":            true,
+	"worker.unobserved":             true,
+}
+
+// activityTolerated reports whether an activity finding is ordinary
+// operation instead of a blocker. Active work is ordinary once every later
+// operation is done. A worker finding is ordinary only while the target
+// coordinator also runs, because before that no process can own it.
+func (p planner) activityTolerated(code string) bool {
+	return p.laterOperationsDone() && (p.targetCoordinator() || !workerEvidenceCodes[code])
+}
+
 // activityBlockers lists the active work that fails the migration gate.
 // Active work is finished with the binary that can read the store schema.
 func (p planner) activityBlockers() []Blocker {
@@ -182,13 +203,17 @@ func (p planner) activityBlockers() []Blocker {
 	}
 	owner := "the binary that claimed it"
 	actions := map[string]string{
-		"run.active":                "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
-		"invocation.active":         "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
-		"effect.pending":            "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
-		"session_invocation.active": "let the coordinator of " + owner + " finish the session role, or cancel the session as factory guide ideation describes",
-		"session_command.queued":    "let the coordinator of " + owner + " complete the queued session commands, then stop it",
+		"run.active":                    "finish each run, or cancel it deliberately, with " + owner + "; the upgrade never moves a claimed run to a new worker or policy",
+		"invocation.active":             "let the coordinator of " + owner + " finish them; never resume an old session with a new image",
+		"effect.pending":                "reconcile them with factory reconcile " + p.configFlag() + " of " + owner + ", or abandon an ambiguous effect after inspection as factory guide debug describes",
+		"session_invocation.active":     "let the coordinator of " + owner + " finish the session role, or cancel the session as factory guide ideation describes",
+		"session_invocation.unreleased": "start the coordinator of " + owner + " until it has released the session-role workers, then stop it",
+		"session_command.queued":        "let the coordinator of " + owner + " complete the queued session commands, then stop it",
+		"worker.active":                 "let the coordinator of " + owner + " finish or cancel the harness process; never stop a worker by hand while its process writes",
+		"docker.unreachable":            "start Docker or repair the access to it, then plan again; the plan never passes without proof that no worker process runs",
+		"worker.unobserved":             "check the named worker with docker ps and docker logs, then plan again",
 	}
-	for _, finding := range o.Store.ActivityFindings() {
+	for _, finding := range append(o.Store.ActivityFindings(), o.WorkerActivity...) {
 		blockers = append(blockers, Blocker{Code: finding.Code, Detail: finding.Detail, Action: actions[finding.Code]})
 	}
 	return blockers

@@ -7,11 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -144,6 +142,9 @@ const (
 	// PendingEffectKindClarificationComment identifies one clarification
 	// question comment and its persisted comment identity.
 	PendingEffectKindClarificationComment PendingEffectKind = "clarification_comment"
+	// PendingEffectKindLaunchRollback identifies the worker stop of a failed
+	// launch and the terminal invocation status saved only after that stop.
+	PendingEffectKindLaunchRollback PendingEffectKind = "launch_rollback"
 )
 
 // PendingEffect is the bounded intent record for one external mutation. A run
@@ -827,7 +828,7 @@ type Store struct {
 // empty databases, newer schema versions, and databases with missing or
 // unreadable schema metadata.
 func Open(ctx context.Context, path string) (*Store, error) {
-	opened, _, err := openMigrating(ctx, path, false)
+	opened, _, err := openMigrating(ctx, path, false, ReleaseIdentity{})
 	return opened, err
 }
 
@@ -846,13 +847,16 @@ func (e *MigrationRequiredError) Error() string {
 // openMigrating opens or creates a store and reports its schema migration.
 // Existing pre-baseline schemas are refused even by the migration entry point.
 // A fresh store creates its complete baseline and metadata atomically.
-func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Store, Migration, error) {
+func openMigrating(ctx context.Context, path string, migrateExisting bool, release ReleaseIdentity) (*Store, Migration, error) {
 	if path == "" {
 		return nil, Migration{}, errors.New("operational store path is required")
 	}
 	absolutePath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, Migration{}, fmt.Errorf("resolve operational store path: %w", err)
+	}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return nil, Migration{}, err
 	}
 	storeDirectory := filepath.Dir(absolutePath)
 	if err := os.MkdirAll(storeDirectory, 0o700); err != nil {
@@ -899,11 +903,12 @@ func openMigrating(ctx context.Context, path string, migrateExisting bool) (*Sto
 			if err := database.Close(); err != nil {
 				return nil, Migration{}, fmt.Errorf("close store before migration: %w", err)
 			}
-			backup, err := backupDatabase(absolutePath)
+			backup, err := backupDatabase(ctx, absolutePath, release)
 			if err != nil {
 				return nil, Migration{}, err
 			}
 			migration.Backup = backup
+			migration.Provenance = backup + backupProvenanceSuffix
 			database, err = openConfiguredDatabase(ctx, absolutePath)
 			if err != nil {
 				return nil, Migration{}, fmt.Errorf("reopen operational store for migration: %w", err)
@@ -927,6 +932,26 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	return openReadOnlyFile(ctx, absolutePath)
+}
+
+// openRestoredReadOnly opens the replacement that a restore put at the live
+// path, as OpenReadOnly does, while that restore's journal exists. Only the
+// restore that owns the journal calls it, through RestoredStoreCheck.
+func openRestoredReadOnly(ctx context.Context, path string) (*Store, error) {
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve operational store path: %w", err)
+	}
+	if err := checkStoreFile(absolutePath); err != nil {
+		return nil, err
+	}
+	return openReadOnlyFile(ctx, absolutePath)
+}
+
+// openReadOnlyFile opens the checked store file at absolutePath read-only
+// and refuses any schema other than the current one.
+func openReadOnlyFile(ctx context.Context, absolutePath string) (*Store, error) {
 	database, err := openReadOnlyDatabase(ctx, absolutePath)
 	if err != nil {
 		return nil, err
@@ -3017,7 +3042,7 @@ func configure(ctx context.Context, database *sql.DB) error {
 
 // readSchemaVersion reads the schema version recorded in the database metadata.
 // It returns an UnversionedDatabaseError if the metadata cannot be read.
-func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
+func readSchemaVersion(ctx context.Context, database Querier, path string) (int, error) {
 	var version int
 	if err := database.QueryRowContext(ctx, "SELECT version FROM schema_metadata WHERE singleton = 1").Scan(&version); err != nil {
 		return 0, &UnversionedDatabaseError{Path: path, Err: err}
@@ -3059,48 +3084,4 @@ func isActiveInvocationConflict(err error) bool {
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "one_active_invocation_per_review_unit") ||
 		strings.Contains(message, "unique constraint failed: invocations.run_id, invocations.role")
-}
-
-// backupDatabase creates a private 0600 backup of the database and returns its path.
-// It removes an incomplete backup when copying fails.
-func backupDatabase(path string) (string, error) {
-	for attempt := 0; attempt < 100; attempt++ {
-		suffix := time.Now().UTC().Format("20060102T150405.000000000Z07:00")
-		if attempt > 0 {
-			suffix += "-" + strconv.Itoa(attempt)
-		}
-		backupPath := path + ".bak-" + suffix
-		if _, err := os.Stat(backupPath); err == nil {
-			continue
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect store backup path: %w", err)
-		}
-		input, err := os.Open(path)
-		if err != nil {
-			return "", fmt.Errorf("open store for backup: %w", err)
-		}
-		output, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
-			_ = input.Close()
-			return "", fmt.Errorf("create store backup: %w", err)
-		}
-		_, copyErr := io.Copy(output, input)
-		if copyErr == nil {
-			copyErr = output.Sync()
-		}
-		closeOutputErr := output.Close()
-		closeInputErr := input.Close()
-		if copyErr != nil {
-			_ = os.Remove(backupPath)
-			return "", fmt.Errorf("copy store backup: %w", copyErr)
-		}
-		if closeOutputErr != nil {
-			return "", fmt.Errorf("close store backup: %w", closeOutputErr)
-		}
-		if closeInputErr != nil {
-			return "", fmt.Errorf("close source store after backup: %w", closeInputErr)
-		}
-		return backupPath, nil
-	}
-	return "", errors.New("could not choose a unique store backup path")
 }

@@ -116,6 +116,18 @@ func (c *Client) FindPullRequest(ctx context.Context, repository tracker.Reposit
 	return c.backend().readPullRequest(ctx, repository, ids[0])
 }
 
+// PullRequest reads one pull request by its number, in any status and
+// whatever its target branch is.
+func (c *Client) PullRequest(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+	if err := validateRepository(repository); err != nil {
+		return codehost.PullRequest{}, err
+	}
+	if number <= 0 {
+		return codehost.PullRequest{}, errors.New("pull request number must be positive")
+	}
+	return c.backend().readPullRequest(ctx, repository, number)
+}
+
 // FindPullRequestCandidates returns all exact branch matches in every status.
 func (c *Client) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
 	ids, err := c.exactPullRequestIDs(ctx, repository, headBranch, baseBranch)

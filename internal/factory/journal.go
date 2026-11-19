@@ -153,6 +153,7 @@ type invocationJournal interface {
 	StartWorker(context.Context, effectkernel.RunStore, worker.StartRequest) error
 	ResumeHarness(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, effectkernel.HarnessResume) (store.Invocation, error)
 	ResumeHarnessManually(context.Context, effectkernel.RunStore, effectkernel.InvocationStore, effectkernel.HarnessResume) (store.Invocation, error)
+	RollBackLaunch(context.Context, effectkernel.InvocationStore, store.Invocation, string) error
 }
 
 // serviceJournal resolves the coordinator's journal on each call, so the
@@ -174,4 +175,10 @@ func (j serviceJournal) ResumeHarness(ctx context.Context, runStore effectkernel
 // ResumeHarnessManually reserves and performs one operator-requested resume.
 func (j serviceJournal) ResumeHarnessManually(ctx context.Context, runStore effectkernel.RunStore, invocationStore effectkernel.InvocationStore, operation effectkernel.HarnessResume) (store.Invocation, error) {
 	return j.service.journal().ResumeHarnessManually(ctx, runStore, invocationStore, operation)
+}
+
+// RollBackLaunch stops the worker of a failed launch, then saves its terminal
+// invocation.
+func (j serviceJournal) RollBackLaunch(ctx context.Context, invocationStore effectkernel.InvocationStore, terminal store.Invocation, workerID string) error {
+	return j.service.journal().RollBackLaunch(ctx, invocationStore, terminal, workerID)
 }

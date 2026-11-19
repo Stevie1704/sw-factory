@@ -159,9 +159,9 @@ scenarios:
       - "internal/cli:TestRunResumeJSONRefusesAStaleOrMismatchedTarget"
       - "internal/cli:TestRunStatusJSONNeverAdvertisesAbandonmentAsExecutable"
       - "internal/factory:TestAbandonPendingEffectLeavesTheRunWaitingForHuman"
-    gaps:
-      - issue: 181
-        summary: Failure injection around every durable effect is still open; these tests do not replace it.
+      - "internal/effect:TestEveryEffectReplaysExactlyOnceAfterAnInjectedFailure"
+      - "internal/effect:TestEveryEffectRefusesAnUnsafeReplay"
+      - "internal/factory:TestReconcileRetriesTheWorkerStopOfARolledBackLaunch"
 
   - id: inspect-history
     title: Inspect a historical run while another run is active
@@ -190,32 +190,66 @@ scenarios:
       - "internal/factory:TestRunInspectionDistinguishesMissingCleanedAndUnknown"
 
   - id: upgrade-maintenance
-    title: Upgrade the installation and report unsupported restore
+    title: Upgrade the installation and report the restore boundary
     fixture: A host onboarded with release N and the archive of release N+1.
-    objective: Prepare the upgrade, continue a partial upgrade, verify completion, and report what is not supported.
+    objective: Prepare the upgrade with a checkpoint, continue a partial upgrade, verify completion, and report that restore is supported only under the ADR 0032 preconditions.
     authority:
-      - The operator authorizes the binary replacement and the worker image rebuild.
+      - The operator authorizes the binary replacement, the worker image rebuild, the pre-migration backup, and any checkpoint restore.
     interfaces:
       - factory version --json
       - factory doctor --json
       - factory onboard prepare --json
+      - factory upgrade plan --json
+      - factory upgrade migrate-store --json
+      - factory checkpoint create --json
+      - factory checkpoint inspect --json
+      - factory checkpoint restore --json
       - the installation documentation that ships with the release
     injected_conditions:
       - The upgrade stops after the binary replacement and before the worker rebuild.
+      - A run is active when the agent asks to migrate the store.
+      - A restore is requested from a checkpoint of another release.
     success:
       - factory doctor reports worker.release.mismatch until the worker is rebuilt, and is ready afterwards.
-      - The agent reports restore and downgrade as unsupported instead of improvising them.
+      - The migration gate refuses an active run, a live worker, and an unknown Docker state, and leaves the store unchanged.
+      - A checkpoint is created only while the installation is quiescent, and inspect verifies it before any restore.
+      - Restore is supported only under ADR 0032 preconditions; downgrade and cross-release restore are refused.
     failure:
       - The agent copies or edits the operational store to restore or downgrade.
+      - The agent restores a checkpoint whose ADR 0032 preconditions are not met, or restores without a preview and confirmation.
     cleanup:
       - Remove the release N+1 resource directory after completion.
+      - Remove the checkpoint and pre-migration backup directories after the operator confirms completion.
     deterministic_tests:
       - "internal/worker:TestReleaseCheckRequiresTheWorkerOfTheCoordinatorRelease"
+      - "internal/upgrade:TestBuildPlansAHealthyIdleUpgrade"
+      - "internal/upgrade:TestBuildContinuesAfterEachStep"
+      - "internal/upgrade:TestBuildVerifiesACompleteUpgrade"
+      - "internal/cli:TestUpgradePlanBlocksAnActiveRunAndAMissingBaseImage"
+      - "internal/cli:TestUpgradePlanAdvancesAfterPrepare"
+      - "internal/cli:TestUpgradePlanListsTheNewestMatchingCheckpoint"
+      - "internal/cli:TestUpgradeMigrateStoreRefusesAnActiveRun"
+      - "internal/cli:TestUpgradeRefusesALiveWorkerAndUnknownDocker"
+      - "internal/factory:TestMigrateStoreRefusesActiveWorkAndALiveCoordinator"
+      - "internal/factory:TestMigrateStoreRollsBackAnInterruptedWriteFirst"
+      - "internal/store:TestPreMigrationBackupIsAVerifiedOnlineSnapshotOfTheOlderSchema"
+      - "internal/store:TestStartupCheckDoesNotCreateAMigrationBackup"
+      - "internal/factory:TestCreateCheckpointRefusesEachNonQuiescentCondition"
+      - "internal/factory:TestCreateCheckpointOfAQuiescentInstallation"
+      - "internal/cli:TestCheckpointCreateWritesAVerifiedCheckpoint"
+      - "internal/cli:TestCheckpointInspectRefusesADamagedCheckpoint"
+      - "internal/cli:TestCheckpointRestorePreviewsThenRestores"
+      - "internal/factory:TestRestoreCheckpointPreviewThenConfirm"
+      - "internal/factory:TestRestoreCheckpointRefusesEachUnsupportedRelease"
+      - "internal/factory:TestRestoreCheckpointRefusesAStaleDigest"
+      - "internal/factory:TestRestoreCheckpointRefusesALiveCoordinator"
+      - "internal/factory:TestRestoreCheckpointRefusesAnActiveWorkerOrRoleSession"
+      - "internal/factory:TestRestoreCheckpointRefusesExternalDivergence"
+      - "internal/factory:TestWorkerActivityFailsClosed"
+      - "internal/checkpoint:TestRestoreContinuationAfterACrashAtEachPoint"
+      - "internal/store:TestStoreOpenersRefuseWhileARestoreJournalExists"
+      - "internal/guide:TestMaintenanceGuideNamesTheOptionalCheckpointStep"
     gaps:
-      - issue: 257
-        summary: No upgrade preflight or resumable maintenance procedure ships yet.
-      - issue: 258
-        summary: No supported backup and restore contract exists.
       - issue: 204
         summary: Service supervision under launchd or systemd is not part of the upgrade yet.
 

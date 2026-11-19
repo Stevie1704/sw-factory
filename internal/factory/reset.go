@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	gitadapter "github.com/Stevie1704/sw-factory/internal/git"
@@ -797,8 +796,8 @@ func existingDatabaseSidecars(databasePath string) []string {
 
 // databaseMigrationBackups returns only the migration backups whose name proves
 // they belong to that exact database. The store writes them beside the database
-// as "<database>.bak-<timestamp>", so a name prefix on the exact path is proof
-// of ownership without a broad directory scan.
+// as "<database>.bak-<timestamp>" with an optional provenance file, so the exact
+// timestamp pattern of store.IsMigrationBackupName is the proof of ownership.
 func databaseMigrationBackups(databasePath string) ([]string, error) {
 	directory := filepath.Dir(databasePath)
 	entries, err := os.ReadDir(directory)
@@ -808,10 +807,10 @@ func databaseMigrationBackups(databasePath string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read operational store directory: %w", err)
 	}
-	prefix := filepath.Base(databasePath) + ".bak-"
+	database := filepath.Base(databasePath)
 	var backups []string
 	for _, entry := range entries {
-		if !strings.HasPrefix(entry.Name(), prefix) {
+		if !store.IsMigrationBackupName(database, entry.Name()) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())

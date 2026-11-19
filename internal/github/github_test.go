@@ -316,6 +316,25 @@ func TestGhClientDecodesMergedPullRequestLifecycle(t *testing.T) {
 	}
 }
 
+// TestGhClientReadsAPullRequestByNumber verifies that a checkpoint reads a
+// known pull request by its number, not by its branch pair, so a newer or
+// retargeted pull request cannot hide it.
+func TestGhClientReadsAPullRequestByNumber(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeCommandRunner{outputs: [][]byte{
+		[]byte(`{"number":17,"state":"closed","head":{"ref":"factory/run-1","sha":"abc"},"base":{"ref":"release"}}`),
+	}}
+	client := &github.GhClient{Runner: runner}
+	got, err := client.PullRequest(context.Background(), tracker.Repository{Owner: "example", Name: "project"}, 17)
+	if err != nil || got.Number != 17 || got.HeadBranch != "factory/run-1" || got.BaseBranch != "release" {
+		t.Fatalf("PullRequest() = %#v, %v; want pull request 17", got, err)
+	}
+	if len(runner.calls) != 1 || !containsArgs(runner.calls[0].args, "api", "repos/example/project/pulls/17") {
+		t.Fatalf("calls = %#v, want one read of pulls/17", runner.calls)
+	}
+}
+
 // TestValidCommitSHARejectsAbbreviatedObjectIDs verifies checkpoint validation
 // does not accept intermediate-length values as exact commit identities.
 func TestValidCommitSHARejectsAbbreviatedObjectIDs(t *testing.T) {

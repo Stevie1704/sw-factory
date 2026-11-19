@@ -42,7 +42,7 @@ states that limit.
    leaves a state that a continuation recovers without loss.
 6. The manifest records the observable state of every known external object.
    Restore compares each one and refuses on any difference.
-7. The pre-migration `.bak-*` copy of the operational store stays migration
+7. The pre-migration `.bak-*` snapshot of the operational store stays migration
    provenance. It is not a checkpoint, and no procedure restores it.
 
 ## State and ownership inventory
@@ -86,10 +86,11 @@ quiescence check and the snapshot:
 1. Acquire the coordinator lock without waiting. A held lock refuses with
    `checkpoint.coordinator_running`. The lock stays held until the manifest
    is written, so no coordinator can start during the checkpoint.
-2. Read the schema version through the read-only path. An older schema
-   refuses with `checkpoint.migration_required`; a checkpoint never migrates.
-   Then open connection A read-write without migration. This rolls back a hot
-   `-journal` from an interrupted writer.
+2. Open connection A read-write without migration. Its first read rolls
+   back a hot `-journal` from an interrupted writer; a read-only open cannot
+   do that and refuses such a store. Read the schema version on A. An older
+   schema refuses with `checkpoint.migration_required`; a checkpoint never
+   migrates and writes nothing to the store.
 3. On connection A, run `BEGIN IMMEDIATE`. A now holds the SQLite write lock,
    so no other connection can commit a write. Check full quiescence (below)
    on A.
@@ -112,25 +113,53 @@ journal mode.
 
 Copying the database file is not supported, also not after closing the
 connection, because another process can write between the close and the copy.
-The current pre-migration backup copies the file; follow-up D moves it to the
-same online primitive.
+The pre-migration backup uses the same online sequence (follow-up D, #321).
+Its check on connection A is the store part of the migration gate. Work that
+entered the store after the earlier gate check refuses the backup with the
+gate findings, and nothing migrates.
+The backup and its provenance file are written to staging names and renamed
+into place, the provenance last. The upgrade plan lists a backup only when its
+provenance exists and its SHA-256 matches; it reports any other backup file
+as incomplete.
 
 **Full quiescence** means all of these are true on connection A:
 
 - no run has a non-terminal status;
 - the pending-effect journal is empty;
 - no invocation or session-role invocation is active;
+- every ended session-role invocation has a recorded resource release
+  (`resources_released_at` is set), so its worker is proved stopped;
 - the command inbox has no session command that is not completed;
+- Docker proves that no harness process of this store runs: no worker
+  container named from a worker of this store runs a starting or running
+  harness helper (`worker.active`);
 - no ideation session is publishing or has an incomplete publication;
 - the coordinator lock was free when the command acquired it.
+
+The Docker condition reads only the containers whose names derive from the
+workers of the invocations in this store, so a container of another
+registration never blocks. Its evidence is the harness helper state, not a
+running container: a terminal run can leave its idle worker running, for
+example after an accepted report that does not stop the worker. Docker that
+cannot be reached gives `docker.unreachable`, and a helper state that cannot
+be read gives `worker.unobserved`; neither is a pass. The check contacts
+Docker only when the store records worker processes. A store that records
+none has no worker name that a container can match, so the check passes
+without Docker. When the store records worker processes, a Docker daemon
+that cannot be reached is always the typed blocker `docker.unreachable`.
+The check writes nothing: it reads the helper state files and tests the
+recorded process through `docker exec`, and never runs the helper's
+`inspect` command, which records `running` or `lost`. So `upgrade plan` and
+the restore preview stay read-only. Restore precondition 5 uses the same
+check when the live store is readable.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
 condition. The operator finishes or cancels the work with the current binary
 first.
 
 The upgrade store migration (`factory upgrade migrate-store`) uses the
-narrower **migration gate**: the first four conditions and the free
-coordinator lock. It does not check publications, because a migration keeps
+narrower **migration gate**: every condition except the publication
+condition, so the first six conditions and the free coordinator lock. It does not check publications, because a migration keeps
 every row and its pre-migration copy, while restore replaces the store.
 
 ## Manifest, identity, and integrity
@@ -153,9 +182,9 @@ that is readable by group or other.
 | `registration_identity` | The SHA-256 identity of the host configuration path and the registration, as the onboarding plan computes it |
 | `registration_summary` | Repository path, tracker and code host providers, owner, project, and repository names, and the local installation ID; no credential path |
 | `worker_image` | The pinned `image@digest` |
-| `target_branch_head` | The commit of the target branch on the remote at checkpoint time |
+| `target_branch_head` | The commit of the target branch on the remote at checkpoint time. It is recorded for information only; restore does not compare it (see precondition 7) |
 | `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities that the snapshot knows |
-| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
+| `external_state` | The observable state of every external object that the snapshot knows through its runs or its publication ledger (the tracker item of each created plan item, and the branch and pull request of each Git batch): for each known run or publication branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head, for information only. Creation and restore read a known pull request by its persisted number and a known status comment by its persisted ID, never by branch pair or by the current login, so a newer or retargeted pull request or an account rotation cannot hide a known object. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
 | `files` | For each file: relative path, size, mode, and SHA-256 |
 | `private_data` | Always `true`, with the reason: issue and specification text |
 
@@ -179,19 +208,49 @@ Restore refuses unless every precondition is proved:
 3. The current registration identity equals `registration_identity`.
 4. Restore acquires the coordinator lock and holds it to the end.
 5. No worker container or role session of this installation runs.
-6. The live store, when it is readable, has no pending effect, no
-   non-terminal run, and nothing newer than the watermarks: no run,
-   invocation, ledger entry, or local issue identity that the snapshot does
-   not have.
+   When the live store is missing or does not open, it cannot name its
+   workers, and a worker launched after the checkpoint can still run. A
+   worker container name (`factory-worker-` and a hash of the worker ID)
+   does not name its installation, so restore then always asks Docker and
+   refuses with `restore.worker_active` (detail `worker.unattributed`) on
+   any running `factory-worker-*` container, also an idle one or one of
+   another installation. This is conservative; the operator stops those
+   containers first. Docker that cannot be reached refuses with
+   `restore.worker_active` (detail `docker.unreachable`).
+6. The live store has no pending effect, no non-terminal run, and nothing
+   newer than the watermarks: no run, invocation, ledger entry, or local
+   issue identity that the snapshot does not have. Only a missing store or a
+   damaged one (empty, corrupt, or not a database) skips this precondition,
+   and the preview names the damage. A store that exists but does not open
+   for another reason, for example busy, not private, or of another schema,
+   refuses with `restore.not_quiescent` (`store.unreadable`).
 7. Every known external object in `external_state` has exactly its recorded
    state: each known branch has the recorded remote head SHA, each known pull
    request has the recorded head SHA, state, and draft flag, each known issue
    has the recorded open state and factory labels, and each known status
    comment has the recorded update time. A known branch that advanced without
-   a new name, pull request, or comment is therefore a divergence.
+   a new name, pull request, or comment is therefore a divergence. The known
+   objects are branches, pull requests, issues, and status comments only.
+   The target branch head in `external_state` and `target_branch_head` is not
+   a divergence object: the target branch is not factory-owned, and a human
+   merge moves it, so a changed target head alone does not refuse.
 8. The work tracker and code host show no unknown factory-owned object: no
    `factory/*` branch or pull request that the snapshot does not know, and no
    issue with a factory state label whose run the snapshot does not know.
+
+A confirmed restore takes the SQLite write lock of the live store
+(`BEGIN IMMEDIATE`, no write) before it checks preconditions 5 to 8 and the
+plan digest, and holds it through the preserve renames. So no writer that is
+already open, such as a command inbox, can commit between the checks and the
+renames. The plan digest records the size and SHA-256 of each live file;
+restore keeps each handle that it reads them with open until it releases the
+lock, because a close of any handle of the store file drops the POSIX lock
+of SQLite for the whole process. A store that another connection holds past
+the busy timeout refuses with `restore.not_quiescent` (`store.write_locked`).
+After the release, restore compares each preserved original with the size
+and SHA-256 of the plan and rolls back on a difference. A missing or damaged
+store gets no lock, because no writer can commit into it. The preview takes
+no lock.
 
 An older snapshot therefore cannot authorize a duplicate comment, pull
 request, push, worker launch, or harness resume. Any difference refuses with
@@ -239,15 +298,22 @@ and `original/`, also after the coordinator lock is released by a crash.
 | Journal state (written before the step) | Step | State after a crash in this step | Continuation |
 | --- | --- | --- | --- |
 | `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
-| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
-| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), rename every original back, then remove `new/` and the journal |
+| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename; then release the store write lock and compare each original with the plan | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
+| `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), write the journal state `preserving`, then continue as for `preserving` |
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
+
+The replacement is one file without sidecars. Before the rename into place
+and in each verification, restore refuses a `-journal`, `-wal`, or `-shm`
+file at the live path, so a stale sidecar never applies to the replacement;
+restore then rolls back and does not remove an unlisted sidecar.
 
 Every continuation before `verified` ends with the original live file set
 back in place and unchanged, so it is lossless. After `verified`, the
 original stays in `original/` until the operator removes it. Continuation
-needs the coordinator lock and runs only from the same release. Restore never
+needs the coordinator lock and runs only from the same release. It needs
+only the registration, the build, and the store path, so a missing or
+invalid `factory.yaml` does not stop it. Restore never
 starts the coordinator, resumes a harness, or replays a pending effect. The
 operator runs `factory doctor` and then `factory start`.
 
@@ -272,16 +338,17 @@ checkpoint. Each one is refused, not approximated.
 
 ## Feasibility evidence
 
-`internal/store/checkpoint_feasibility_test.go` is a test-only prototype. In
-rollback-journal mode and in WAL mode, it runs the exact snapshot sequence:
-connection A holds `BEGIN IMMEDIATE` and checks quiescence; `VACUUM INTO`
-inside A fails; a third writer cannot change the store; connection B takes
-the snapshot; A ends. The snapshot holds the checked state, has no sidecar,
-passes the integrity check, and opens as a current store only after its mode
-is set to `0600`. The prototype also shows that a divergence check refuses a
-later run, a later pull request, a journaled pending effect, and a known
-branch that moved, and that an unreadable known object refuses as
-unverified. It adds no production code.
+The production tests are the evidence. `internal/store/snapshot_test.go`
+runs the snapshot sequence in rollback-journal mode and in WAL mode:
+connection A holds `BEGIN IMMEDIATE` and runs the check; a third writer
+cannot change the store; connection B takes the snapshot; A ends. The
+snapshot holds the checked state, has mode `0600`, and passes the integrity
+check. `internal/store/checkpoint_feasibility_test.go` keeps the one fact
+that production does not exercise: `VACUUM INTO` inside A fails, so the
+snapshot runs on B. `internal/checkpoint/divergence_test.go` and
+`internal/factory/checkpoint_restore_test.go` show that restore refuses a
+later run, a later pull request, a pending effect, and a known branch that
+moved, and that an unreadable known object refuses as unverified.
 
 ## Follow-up implementation specifications
 
@@ -369,7 +436,10 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 
 - When A to C ship, `factory guide maintenance` adds an optional
   "checkpoint before the store migration" step, and the upgrade plan lists
-  the newest matching checkpoint. A checkpoint needs full quiescence, which
+  the newest matching checkpoint. A match has the registration and the live
+  store schema; the newest one of the installed release and revision wins,
+  else the newest schema match is listed, and the plan always names the
+  release that restores it. A checkpoint needs full quiescence, which
   is stricter than the migration gate, so the guide names the extra
   conditions. Until then the guide states that no
   supported restore exists.

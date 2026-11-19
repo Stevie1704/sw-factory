@@ -483,28 +483,38 @@ func checkExistingStoreFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve operational store path: %w", err)
 	}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return "", err
+	}
+	return absolutePath, checkStoreFile(absolutePath)
+}
+
+// checkStoreFile proves that the store at absolutePath is a private,
+// owner-readable, non-empty regular file in a private directory. Unlike
+// checkExistingStoreFile, it does not look for a restore journal.
+func checkStoreFile(absolutePath string) error {
 	storeDirectory := filepath.Dir(absolutePath)
 	if info, err := os.Stat(storeDirectory); err != nil {
-		return "", fmt.Errorf("inspect operational store directory: %w", err)
+		return fmt.Errorf("inspect operational store directory: %w", err)
 	} else if !info.IsDir() {
-		return "", errors.New("operational store parent is not a directory")
+		return errors.New("operational store parent is not a directory")
 	} else if info.Mode().Perm()&0o077 != 0 {
-		return "", errors.New("operational store directory is not private")
+		return errors.New("operational store directory is not private")
 	}
 	info, err := os.Lstat(absolutePath)
 	if err != nil {
-		return "", fmt.Errorf("inspect operational store: %w", err)
+		return fmt.Errorf("inspect operational store: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return "", errors.New("operational store is not a regular file")
+		return errors.New("operational store is not a regular file")
 	}
 	if info.Mode().Perm()&0o077 != 0 || info.Mode().Perm()&0o400 == 0 {
-		return "", errors.New("operational store file is not private and owner-readable")
+		return errors.New("operational store file is not private and owner-readable")
 	}
 	if info.Size() == 0 {
-		return "", &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
+		return &UnversionedDatabaseError{Path: absolutePath, Err: errors.New("database file is empty")}
 	}
-	return absolutePath, nil
+	return nil
 }
 
 // Run reads one displayed command subject without granting mutation rights.

@@ -48,8 +48,7 @@
     {
       "scenario": "recover-operations",
       "evidence": "deterministic",
-      "outcome": "pass",
-      "reason": "covers recovery semantics only; durable-effect failure injection stays with #181"
+      "outcome": "pass"
     },
     {
       "scenario": "recover-operations",
@@ -71,8 +70,7 @@
     {
       "scenario": "upgrade-maintenance",
       "evidence": "deterministic",
-      "outcome": "blocked",
-      "reason": "only the worker release check has coverage; no upgrade preflight, resume, or restore contract ships"
+      "outcome": "pass"
     },
     {
       "scenario": "upgrade-maintenance",

@@ -28,9 +28,9 @@ func storeFixture(t *testing.T, version int, statements ...string) string {
 	schema := []string{
 		"CREATE TABLE schema_metadata (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL)",
 		"CREATE TABLE operational_runs (id TEXT PRIMARY KEY, status TEXT NOT NULL)",
-		"CREATE TABLE invocations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, status TEXT NOT NULL)",
+		"CREATE TABLE invocations (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'implementation', stage TEXT NOT NULL DEFAULT 'implementation', status TEXT NOT NULL)",
 		"CREATE TABLE pending_effects (run_id TEXT PRIMARY KEY, effect_id TEXT NOT NULL)",
-		"CREATE TABLE ideation_invocations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, status TEXT NOT NULL)",
+		"CREATE TABLE ideation_invocations (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'ideation', worker_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL, resources_released_at TEXT)",
 		"CREATE TABLE ideation_commands (sequence INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT NOT NULL)",
 	}
 	for _, statement := range append(schema, statements...) {
@@ -73,9 +73,15 @@ func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 		"INSERT INTO invocations (id, run_id, status) VALUES ('inv-1', 'run-open', 'active')",
 		"INSERT INTO pending_effects (run_id, effect_id) VALUES ('run-open', 'effect-1')",
 		"INSERT INTO ideation_invocations (id, session_id, status) VALUES ('session-inv-1', 'session-1', 'active'), ('session-inv-0', 'session-0', 'accepted')",
+		"INSERT INTO ideation_invocations (id, session_id, status, resources_released_at) VALUES ('session-inv-2', 'session-2', 'accepted', '2026-11-01T00:00:00Z')",
 		"INSERT INTO ideation_commands (state) VALUES ('accepted'), ('completed')",
 	)
 	if err := os.WriteFile(path+".bak-20260101T000000.000000000Z", []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldDigest := sha256.Sum256([]byte("old"))
+	provenance := fmt.Sprintf(`{"sha256": "%x", "size": 3}`, oldDigest)
+	if err := os.WriteFile(path+".bak-20260101T000000.000000000Z.json", []byte(provenance), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before := fileState(t, path)
@@ -91,7 +97,7 @@ func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 	for _, finding := range inspection.ActivityFindings() {
 		codes = append(codes, finding.Code)
 	}
-	if !slices.Equal(codes, []string{"run.active", "invocation.active", "effect.pending", "session_invocation.active", "session_command.queued"}) {
+	if !slices.Equal(codes, []string{"run.active", "invocation.active", "effect.pending", "session_invocation.active", "session_invocation.unreleased", "session_command.queued"}) {
 		t.Fatalf("activity findings = %v, want every kind of active work", codes)
 	}
 	if len(inspection.Backups) != 1 || filepath.Base(inspection.Backups[0]) != "factory.db.bak-20260101T000000.000000000Z" {
@@ -102,6 +108,29 @@ func TestInspectForUpgradeReadsActiveWorkWithoutChange(t *testing.T) {
 	}
 	if _, err := os.Stat(path + "-journal"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("inspection left a journal: %v", err)
+	}
+}
+
+// TestInspectForUpgradeListsEveryWorkerProcess verifies that the inspection
+// names each run and session-role process with the identity that selects
+// its worker, whatever its status: an ended process can leave its worker
+// running.
+func TestInspectForUpgradeListsEveryWorkerProcess(t *testing.T) {
+	t.Parallel()
+	path := storeFixture(t, store.CurrentSchemaVersion,
+		"INSERT INTO invocations (id, run_id, role, stage, status) VALUES ('inv-1', 'run-1', 'specification_review', 'review', 'completed')",
+		"INSERT INTO ideation_invocations (id, session_id, role, worker_id, status, resources_released_at) VALUES ('sinv-1', 'session-1', 'planning', 'session-worker-1', 'accepted', '2026-11-01T00:00:00Z')",
+	)
+	inspection, err := store.InspectForUpgrade(context.Background(), path)
+	if err != nil {
+		t.Fatalf("InspectForUpgrade() error = %v", err)
+	}
+	want := []store.WorkerProcess{
+		{RunID: "run-1", InvocationID: "inv-1", Role: "specification_review", Stage: "review"},
+		{SessionID: "session-1", InvocationID: "sinv-1", Role: "planning", WorkerID: "session-worker-1"},
+	}
+	if !slices.Equal(inspection.WorkerProcesses, want) {
+		t.Fatalf("worker processes = %+v, want %+v", inspection.WorkerProcesses, want)
 	}
 }
 
@@ -158,7 +187,7 @@ func TestMigrateLeavesACurrentStoreUnchanged(t *testing.T) {
 	path := quiescentStore(t, completedRun("run-1", 7))
 	before := fileState(t, path)
 
-	migration, err := store.Migrate(context.Background(), path)
+	migration, err := store.Migrate(context.Background(), path, store.ReleaseIdentity{Version: "test", Revision: "unknown"})
 	if err != nil || migration != (store.Migration{FromVersion: store.CurrentSchemaVersion, ToVersion: store.CurrentSchemaVersion}) {
 		t.Fatalf("Migrate() = %+v, %v; want a no-op at the current schema", migration, err)
 	}
@@ -232,7 +261,10 @@ func TestStoreRefusesPreBaselineSchemas(t *testing.T) {
 					}
 					return err
 				},
-				"migrate": func() error { _, err := store.Migrate(t.Context(), path); return err },
+				"migrate": func() error {
+					_, err := store.Migrate(t.Context(), path, store.ReleaseIdentity{Version: "test", Revision: "unknown"})
+					return err
+				},
 			} {
 				var required *store.MigrationRequiredError
 				if err := open(); !errors.As(err, &required) || required.Version != version {

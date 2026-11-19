@@ -2,13 +2,16 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/Stevie1704/sw-factory/internal/checkpoint"
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/doctor"
 	"github.com/Stevie1704/sw-factory/internal/factory"
@@ -32,9 +35,42 @@ type upgradeImages interface {
 // without Docker.
 var upgradeImagesForCLI = func() upgradeImages { return worker.NewDockerRuntime() }
 
+// upgradeWorkersForCLI is the Docker seam of the worker-activity check, so
+// the CLI contract can be tested without Docker.
+var upgradeWorkersForCLI = func() factory.WorkerProbe { return worker.NewDockerRuntime() }
+
+// upgradeMigrateStoreForCLI is the store migration seam, so the CLI
+// contract of a migration can be tested while this release accepts only its
+// own schema.
+var upgradeMigrateStoreForCLI = factory.MigrateStore
+
 // upgradeIdentityForCLI is the build identity seam: the plan runs from the
 // target binary, so its identity is the target release.
 var upgradeIdentityForCLI = version.Current
+
+// upgradeInstalledIdentityForCLI reads the build identity of the installed
+// factory command that PATH names.
+var upgradeInstalledIdentityForCLI = installedIdentity
+
+// installedIdentityTimeout bounds the version call of the installed binary.
+const installedIdentityTimeout = 10 * time.Second
+
+// installedIdentity runs "<binary> version --json", which only prints the
+// build identity, and decodes it. An older release without that command
+// returns an error.
+func installedIdentity(ctx context.Context, binary string) (version.Identity, error) {
+	ctx, cancel := context.WithTimeout(ctx, installedIdentityTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, binary, "version", "--json").Output()
+	if err != nil {
+		return version.Identity{}, fmt.Errorf("read the version of %s: %w", binary, err)
+	}
+	var identity version.Identity
+	if err := json.Unmarshal(output, &identity); err != nil || identity.Version == "" || identity.Revision == "" {
+		return version.Identity{}, fmt.Errorf("read the version of %s: the output is not a build identity", binary)
+	}
+	return identity, nil
+}
 
 // upgradeLookPathForCLI resolves the factory command that PATH names.
 var upgradeLookPathForCLI = exec.LookPath
@@ -44,8 +80,13 @@ type upgradePlanDocument struct {
 	Command        string `json:"command"`
 	Config         string `json:"config"`
 	OnboardingPlan string `json:"onboarding_plan,omitempty"`
-	// StoreBackups lists the existing pre-migration backups, as provenance.
+	// StoreBackups lists the existing pre-migration backups whose provenance
+	// file matches their bytes, as provenance.
 	StoreBackups []string `json:"store_backups"`
+	// StoreIncompleteBackups lists the backup files without matching
+	// provenance, such as the remains of an interrupted backup. They are not
+	// provenance; factory reset removes them.
+	StoreIncompleteBackups []string `json:"store_incomplete_backups"`
 	upgrade.Plan
 }
 
@@ -84,6 +125,7 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 	configPath := flags.String("config", defaultConfigPath, "host configuration of the installation to upgrade")
 	onboardingPlan := flags.String("onboarding-plan", "", "onboarding plan of the repository, whose valid evidence the upgrade reuses")
 	resources := flags.String("resources", "", "directory that onboard prepare of the target filled; defaults to the onboarding plan's value")
+	checkpoints := flags.String("checkpoints", "", "directory whose direct subdirectories are maintenance checkpoints; the plan lists the newest one of this registration and store schema")
 	asJSON := flags.Bool("json", false, "write the plan as one schema-versioned JSON document; required")
 	if !parseOnboardFlags(flags, args, errorsOutput) {
 		return 2
@@ -92,15 +134,18 @@ func runUpgradePlan(ctx context.Context, args []string, defaultConfigPath string
 		writeError(errorsOutput, errors.New("upgrade plan needs --json"))
 		return 2
 	}
-	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan, *resources)
+	observation, err := observeUpgrade(ctx, *configPath, *onboardingPlan, *resources, *checkpoints)
 	if err != nil {
 		writeError(errorsOutput, err)
 		return 1
 	}
 	plan := upgrade.Build(observation)
-	document := upgradePlanDocument{Command: "upgrade plan", Config: observation.ConfigPath, OnboardingPlan: observation.OnboardingPlanPath, StoreBackups: observation.Store.Backups, Plan: plan}
+	document := upgradePlanDocument{Command: "upgrade plan", Config: observation.ConfigPath, OnboardingPlan: observation.OnboardingPlanPath, StoreBackups: observation.Store.Backups, StoreIncompleteBackups: observation.Store.IncompleteBackups, Plan: plan}
 	if document.StoreBackups == nil {
 		document.StoreBackups = []string{}
+	}
+	if document.StoreIncompleteBackups == nil {
+		document.StoreIncompleteBackups = []string{}
 	}
 	if !writeJSONDocument(output, errorsOutput, document) {
 		return 1
@@ -131,7 +176,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 	}
 	var result factory.StoreMigrationResult
 	if err == nil {
-		result, err = factory.MigrateStore(ctx, host.Repositories[0])
+		result, err = upgradeMigrateStoreForCLI(ctx, host.Repositories[0], upgradeWorkersForCLI())
 	}
 	if err != nil {
 		document.Outcome, document.Error = "error", newErrorDocument("upgrade.migrate_store_failed", doctor.OriginUnknown, err)
@@ -156,7 +201,7 @@ func runUpgradeMigrateStore(ctx context.Context, args []string, defaultConfigPat
 
 // observeUpgrade reads every fact the plan needs. It only reads. An error is
 // returned only when the target binary itself cannot be located.
-func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources string) (upgrade.Observation, error) {
+func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources, checkpoints string) (upgrade.Observation, error) {
 	command, err := factoryCommand()
 	if err != nil {
 		return upgrade.Observation{}, err
@@ -184,6 +229,11 @@ func observeUpgrade(ctx context.Context, configPath, onboardingPlan, resources s
 	observation.Store, err = store.InspectForUpgrade(ctx, registration.OperationalDataPath)
 	if err != nil {
 		observation.StoreProblem = err.Error()
+	} else if observation.Store.Supported() {
+		observation.WorkerActivity = factory.WorkerActivityFindings(ctx, observation.Store.WorkerProcesses, upgradeWorkersForCLI())
+	}
+	if err := observeCheckpoints(ctx, checkpoints, registration, &observation); err != nil {
+		return observation, err
 	}
 	if record, err := factory.ObserveCoordinatorLock(registration); err != nil {
 		observation.Lock.Problem = err.Error()
@@ -209,6 +259,23 @@ func installedBinary(target string) (string, bool) {
 		found = resolved
 	}
 	return found, found == target
+}
+
+// installedRelease returns the release of the factory command that PATH
+// names, or an empty release when it is not known. Once the target is
+// installed, that is the target release.
+func installedRelease(ctx context.Context, observation upgrade.Observation) checkpoint.Release {
+	if observation.InstalledIsTarget {
+		return checkpoint.Release{Version: observation.Target.Version, Revision: observation.Target.Revision}
+	}
+	if observation.InstalledBinary == "" {
+		return checkpoint.Release{}
+	}
+	identity, err := upgradeInstalledIdentityForCLI(ctx, observation.InstalledBinary)
+	if err != nil {
+		return checkpoint.Release{}
+	}
+	return checkpoint.Release{Version: identity.Version, Revision: identity.Revision}
 }
 
 // observePolicy validates factory.yaml with the target parser and returns
@@ -325,5 +392,37 @@ func observeOnboarding(ctx context.Context, images upgradeImages, registration c
 	}
 	current.PlanPath, current.FactoryCommand = observation.OnboardingPlanPath, observation.FactoryCommand
 	observation.Onboarding = onboarding.Evaluate(plan, current).Steps
+	return nil
+}
+
+// observeCheckpoints lists the newest checkpoint of this registration and of
+// the schema of the live store in the named directory, and prefers one of the
+// installed release: the checkpoint that the installed release created
+// before the migration and can restore. The target binary that runs the plan
+// did not create it. When no checkpoint of the installed release exists, or
+// that release is not known, it lists the newest schema match, whose
+// restore_release names the release that restores it. Without a directory,
+// or without an inspected store, it observes nothing, so the plan lists no
+// checkpoint.
+func observeCheckpoints(ctx context.Context, directory string, registration config.RepositoryRegistration, observation *upgrade.Observation) error {
+	if directory == "" || observation.StoreProblem != "" || !observation.Store.Exists {
+		return nil
+	}
+	absolute, err := filepath.Abs(directory)
+	if err != nil {
+		return fmt.Errorf("resolve %s: %w", directory, err)
+	}
+	identity, err := onboarding.RegistrationIdentity(observation.ConfigPath, registration)
+	if err != nil {
+		return err
+	}
+	observation.Checkpoint, err = checkpoint.FindNewest(ctx, absolute, checkpoint.Match{
+		RegistrationIdentity: identity,
+		StoreSchemaVersion:   observation.Store.SchemaVersion,
+		InstalledRelease:     installedRelease(ctx, *observation),
+	})
+	if err != nil {
+		return fmt.Errorf("list checkpoints: %w", err)
+	}
 	return nil
 }

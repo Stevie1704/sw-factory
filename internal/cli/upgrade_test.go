@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Stevie1704/sw-factory/internal/config"
+	"github.com/Stevie1704/sw-factory/internal/factory"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/version"
 	"github.com/Stevie1704/sw-factory/internal/worker"
@@ -66,10 +67,13 @@ func newUpgradeFixture(t *testing.T, status store.Status, images fakeUpgradeImag
 	if err := opened.Close(); err != nil {
 		t.Fatal(err)
 	}
-	identityFn, lookPath, imagesFn := upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI
+	identityFn, lookPath, imagesFn, installedFn := upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI, upgradeInstalledIdentityForCLI
 	t.Cleanup(func() {
-		upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI = identityFn, lookPath, imagesFn
+		upgradeIdentityForCLI, upgradeLookPathForCLI, upgradeImagesForCLI, upgradeInstalledIdentityForCLI = identityFn, lookPath, imagesFn, installedFn
 	})
+	upgradeInstalledIdentityForCLI = func(context.Context, string) (version.Identity, error) {
+		return version.Identity{SchemaVersion: 1, Version: "v1.3.0", Build: "release", Revision: "abc123"}, nil
+	}
 	upgradeIdentityForCLI = func() version.Identity {
 		return version.Identity{SchemaVersion: 1, Version: "v1.4.0", Build: "release", Revision: "abc123", WorkerBaseImage: "ghcr.io/stevie1704/sw-factory-base@sha256:" + sixtyFour("1")}
 	}
@@ -89,7 +93,9 @@ type upgradeDocument struct {
 	Command       string   `json:"command"`
 	Result        string   `json:"result"`
 	StoreBackups  []string `json:"store_backups"`
-	Components    []struct {
+	// StoreIncompleteBackups is read by the incomplete-backup test.
+	StoreIncompleteBackups []string `json:"store_incomplete_backups"`
+	Components             []struct {
 		Name  string `json:"name"`
 		State string `json:"state"`
 	} `json:"components"`
@@ -133,6 +139,24 @@ func snapshotFiles(t *testing.T, directory string) map[string][32]byte {
 		t.Fatal(err)
 	}
 	return files
+}
+
+// TestUpgradePlanReportsAnIncompleteBackupApart verifies that a backup
+// file without a matching provenance file is never listed as a backup, but is
+// reported as incomplete.
+func TestUpgradePlanReportsAnIncompleteBackupApart(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.3.0"})
+	partial := fixture.store + ".bak-20260101T000000.000000000Z"
+	if err := os.WriteFile(partial, []byte("partial database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var document upgradeDocument
+	code := runUpgradeCommand(t, &document, "plan", "--config", fixture.hostConfig, "--json")
+
+	if code != 0 || len(document.StoreBackups) != 0 || len(document.StoreIncompleteBackups) != 1 || document.StoreIncompleteBackups[0] != partial {
+		t.Fatalf("plan = exit %d, backups %v, incomplete %v; want only %s as incomplete", code, document.StoreBackups, document.StoreIncompleteBackups, partial)
+	}
 }
 
 // TestUpgradePlanOfAnIdleInstallationChangesNothing verifies the read-only
@@ -212,6 +236,34 @@ func TestUpgradePlanReusesTheOnboardingPlan(t *testing.T) {
 	}
 }
 
+// TestUpgradeMigrateStoreReportsTheBackupProvenance verifies that a
+// migration names the pre-migration backup and its provenance file in the
+// JSON document. This release accepts only its own schema, so a fake
+// migration result stands in for the migration.
+func TestUpgradeMigrateStoreReportsTheBackupProvenance(t *testing.T) {
+	fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+	migrate := upgradeMigrateStoreForCLI
+	t.Cleanup(func() { upgradeMigrateStoreForCLI = migrate })
+	upgradeMigrateStoreForCLI = func(context.Context, config.RepositoryRegistration, factory.WorkerProbe) (factory.StoreMigrationResult, error) {
+		return factory.StoreMigrationResult{Migration: store.Migration{FromVersion: 52, ToVersion: 53, Backup: "/data/factory.db.bak-1", Provenance: "/data/factory.db.bak-1.json"}}, nil
+	}
+
+	var document struct {
+		Outcome   string `json:"outcome"`
+		Migration struct {
+			FromVersion int    `json:"from_version"`
+			ToVersion   int    `json:"to_version"`
+			Backup      string `json:"backup"`
+			Provenance  string `json:"provenance"`
+		} `json:"migration"`
+	}
+	code := runUpgradeCommand(t, &document, "migrate-store", "--config", fixture.hostConfig, "--json")
+
+	if code != 0 || document.Outcome != "migrated" || document.Migration.FromVersion != 52 || document.Migration.ToVersion != 53 || document.Migration.Backup != "/data/factory.db.bak-1" || document.Migration.Provenance != "/data/factory.db.bak-1.json" {
+		t.Fatalf("migrate-store = exit %d, %+v; want the migrated outcome with the backup and its provenance", code, document)
+	}
+}
+
 // TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged verifies the typed
 // no-op result of the explicit entry point on a current store.
 func TestUpgradeMigrateStoreLeavesACurrentStoreUnchanged(t *testing.T) {
@@ -287,5 +339,67 @@ func TestUpgradePlanRefusesAnOnboardingPlanOfAnotherConfiguration(t *testing.T) 
 	}
 	if code != 1 || !found {
 		t.Fatalf("plan = exit %d, %+v; want onboarding.plan_registration_mismatch", code, document.Blockers)
+	}
+}
+
+// liveUpgradeWorkers is a Docker view in which every asked worker runs a
+// live harness helper, or Docker fails with err.
+type liveUpgradeWorkers struct{ err error }
+
+// RunningWorkers reports every asked worker as running, or fails.
+func (w liveUpgradeWorkers) RunningWorkers(_ context.Context, workerIDs []string) ([]string, error) {
+	return workerIDs, w.err
+}
+
+// ObserveHeadless reports a running helper.
+func (liveUpgradeWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusRunning, nil
+}
+
+// withEndedInvocation records a completed invocation of run-1, so the store
+// knows one worker, and makes Docker report it through workers.
+func withEndedInvocation(t *testing.T, storePath string, workers factory.WorkerProbe) {
+	t.Helper()
+	opened, err := store.Open(context.Background(), storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := store.Invocation{ID: "inv-1", RunID: "run-1", Harness: "codex", Role: "implementation", Stage: store.StageImplementation, Status: store.InvocationStatusCompleted}
+	if err := opened.SaveInvocation(context.Background(), invocation); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatal(err)
+	}
+	previous := upgradeWorkersForCLI
+	t.Cleanup(func() { upgradeWorkersForCLI = previous })
+	upgradeWorkersForCLI = func() factory.WorkerProbe { return workers }
+}
+
+// TestUpgradeRefusesALiveWorkerAndUnknownDocker verifies that a harness
+// process in a worker of the store, with no active invocation, and an
+// unreachable Docker daemon block the plan and refuse migrate-store.
+func TestUpgradeRefusesALiveWorkerAndUnknownDocker(t *testing.T) {
+	for code, workers := range map[string]factory.WorkerProbe{
+		"worker.active":      liveUpgradeWorkers{},
+		"docker.unreachable": liveUpgradeWorkers{err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		fixture := newUpgradeFixture(t, store.StatusComplete, fakeUpgradeImages{release: "v1.4.0"})
+		withEndedInvocation(t, fixture.store, workers)
+
+		var plan upgradeDocument
+		exit := runUpgradeCommand(t, &plan, "plan", "--config", fixture.hostConfig, "--json")
+		blocked := false
+		for _, blocker := range plan.Blockers {
+			blocked = blocked || blocker.Code == code
+		}
+		if exit != 1 || !blocked {
+			t.Fatalf("plan = exit %d, %+v; want a %s blocker", exit, plan, code)
+		}
+		var migration migrateStoreDocument
+		exit = runUpgradeCommand(t, &migration, "migrate-store", "--config", fixture.hostConfig, "--json")
+		if exit != 1 || migration.Outcome != "refused" || len(migration.Refusals) != 1 || migration.Refusals[0].Code != code {
+			t.Fatalf("migrate-store = exit %d, %+v; want a %s refusal", exit, migration, code)
+		}
 	}
 }

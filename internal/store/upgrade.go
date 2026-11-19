@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -38,11 +37,23 @@ type UpgradeInspection struct {
 	// ActiveSessionInvocations counts the session-role invocations that are
 	// still active; each one owns a worker.
 	ActiveSessionInvocations int
+	// UnreleasedSessionInvocations counts the ended session-role
+	// invocations whose worker and snapshot are not proved released: the
+	// role worker can still run.
+	UnreleasedSessionInvocations int
 	// QueuedSessionCommands counts the session commands that the
 	// coordinator has not completed.
 	QueuedSessionCommands int
-	// Backups lists the pre-migration backups of this exact store.
+	// WorkerProcesses lists every process that the store launched in a
+	// worker; the caller checks with Docker whether one of them still runs.
+	WorkerProcesses []WorkerProcess
+	// Backups lists the pre-migration backups of this exact store whose
+	// provenance file exists and matches the backup bytes.
 	Backups []string
+	// IncompleteBackups lists the files of this exact store that carry a
+	// backup name but have no matching provenance, or are staging files of
+	// an interrupted backup. They are not provenance of any migration.
+	IncompleteBackups []string
 }
 
 // Supported reports whether this build can inspect and migrate the store:
@@ -73,8 +84,8 @@ func (i UpgradeInspection) SchemaFinding() *UpgradeFinding {
 }
 
 // ActivityFindings returns one finding per kind of active work that the
-// migration gate refuses: runs, invocations, journaled effects, session-role
-// invocations, and queued session commands.
+// migration gate refuses: runs, invocations, journaled effects, active or
+// unreleased session-role invocations, and queued session commands.
 func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	var findings []UpgradeFinding
 	if len(i.ActiveRuns) != 0 {
@@ -89,6 +100,9 @@ func (i UpgradeInspection) ActivityFindings() []UpgradeFinding {
 	if i.ActiveSessionInvocations != 0 {
 		findings = append(findings, UpgradeFinding{Code: "session_invocation.active", Detail: fmt.Sprintf("%d session-role invocations are active", i.ActiveSessionInvocations)})
 	}
+	if i.UnreleasedSessionInvocations != 0 {
+		findings = append(findings, UpgradeFinding{Code: "session_invocation.unreleased", Detail: fmt.Sprintf("%d ended session-role invocations have no proved resource release", i.UnreleasedSessionInvocations)})
+	}
 	if i.QueuedSessionCommands != 0 {
 		findings = append(findings, UpgradeFinding{Code: "session_command.queued", Detail: fmt.Sprintf("%d session commands are not completed", i.QueuedSessionCommands)})
 	}
@@ -102,6 +116,17 @@ type Migration struct {
 	ToVersion   int `json:"to_version"`
 	// Backup is the pre-migration backup path, or empty when nothing migrated.
 	Backup string `json:"backup,omitempty"`
+	// Provenance is the provenance file beside Backup, or empty when nothing migrated.
+	Provenance string `json:"provenance,omitempty"`
+}
+
+// ReleaseIdentity names the Factory build that migrates a store. The
+// pre-migration backup records it in its provenance file.
+type ReleaseIdentity struct {
+	// Version is the release version, or "development" for a development build.
+	Version string `json:"version"`
+	// Revision is the source commit, or "unknown" when the build did not record it.
+	Revision string `json:"revision"`
 }
 
 // InspectForUpgrade reads the schema version and the active work of an
@@ -113,6 +138,9 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 		return UpgradeInspection{}, fmt.Errorf("resolve operational store path: %w", err)
 	}
 	inspection := UpgradeInspection{Path: absolutePath}
+	if err := refuseDuringRestore(absolutePath); err != nil {
+		return inspection, err
+	}
 	if _, err := os.Lstat(absolutePath); errors.Is(err, os.ErrNotExist) {
 		return inspection, nil
 	}
@@ -120,7 +148,7 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 		return inspection, err
 	}
 	inspection.Exists = true
-	if inspection.Backups, err = migrationBackups(absolutePath); err != nil {
+	if inspection.Backups, inspection.IncompleteBackups, err = migrationBackups(absolutePath); err != nil {
 		return inspection, err
 	}
 	if journal, err := os.Stat(absolutePath + "-journal"); err == nil && journal.Size() > 0 {
@@ -138,12 +166,18 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 	if !inspection.Supported() {
 		return inspection, nil
 	}
-	return inspection, readActiveWork(ctx, database, &inspection)
+	if err := readActiveWork(ctx, database, &inspection); err != nil {
+		return inspection, err
+	}
+	inspection.WorkerProcesses, err = ReadWorkerProcesses(ctx, database)
+	return inspection, err
 }
 
 // readActiveWork reads the facts that decide whether the store passes the
-// migration gate.
-func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeInspection) error {
+// migration gate. It reads through any Querier, so the same facts serve the
+// read-only upgrade inspection and the full-quiescence check under the
+// snapshot write lock.
+func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeInspection) error {
 	rows, err := database.QueryContext(ctx, "SELECT id FROM operational_runs WHERE status NOT IN (?, ?, ?) ORDER BY id", StatusComplete, StatusCancelled, StatusFailed)
 	if err != nil {
 		return fmt.Errorf("read active runs: %w", err)
@@ -168,6 +202,9 @@ func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeIn
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_invocations WHERE status = ?", SessionInvocationActive).Scan(&inspection.ActiveSessionInvocations); err != nil {
 		return fmt.Errorf("read active session invocations: %w", err)
 	}
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_invocations WHERE status <> ? AND resources_released_at IS NULL", SessionInvocationActive).Scan(&inspection.UnreleasedSessionInvocations); err != nil {
+		return fmt.Errorf("read unreleased session invocations: %w", err)
+	}
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(*) FROM ideation_commands WHERE state <> ?", IdeationCommandCompleted).Scan(&inspection.QueuedSessionCommands); err != nil {
 		return fmt.Errorf("read queued session commands: %w", err)
 	}
@@ -175,29 +212,40 @@ func readActiveWork(ctx context.Context, database *sql.DB, inspection *UpgradeIn
 }
 
 // migrationBackups lists the pre-migration backups whose name proves they
-// belong to the store at path.
-func migrationBackups(path string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Dir(path))
+// belong to the store at path. A backup is listed only when its provenance
+// file exists and matches its bytes. A backup without that proof, and a
+// staging file of an interrupted backup, is returned as incomplete instead.
+// A provenance file is neither.
+func migrationBackups(path string) (verified, incomplete []string, err error) {
+	directory := filepath.Dir(path)
+	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return nil, fmt.Errorf("list operational store backups: %w", err)
+		return nil, nil, fmt.Errorf("list operational store backups: %w", err)
 	}
-	prefix := filepath.Base(path) + ".bak-"
-	var backups []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) && entry.Type().IsRegular() {
-			backups = append(backups, filepath.Join(filepath.Dir(path), entry.Name()))
+		name := entry.Name()
+		if !IsMigrationBackupName(filepath.Base(path), name) || strings.HasSuffix(name, backupProvenanceSuffix) || !entry.Type().IsRegular() {
+			continue
+		}
+		backup := filepath.Join(directory, name)
+		if !strings.HasSuffix(name, backupStagingSuffix) && verifiedBackup(backup) {
+			verified = append(verified, backup)
+		} else {
+			incomplete = append(incomplete, backup)
 		}
 	}
-	sort.Strings(backups)
-	return backups, nil
+	sort.Strings(verified)
+	sort.Strings(incomplete)
+	return verified, incomplete, nil
 }
 
 // Migrate is the explicit store migration entry point. It opens the store
 // read-write, which rolls back an interrupted transaction, then backs up and
-// migrates an older supported schema in one transaction. A current store is
-// left unchanged. The caller must hold the coordinator lock.
-func Migrate(ctx context.Context, path string) (Migration, error) {
-	opened, migration, err := openMigrating(ctx, path, true)
+// migrates an older supported schema in one transaction. release names this
+// build in the provenance file of the backup. A current store is left
+// unchanged. The caller must hold the coordinator lock.
+func Migrate(ctx context.Context, path string, release ReleaseIdentity) (Migration, error) {
+	opened, migration, err := openMigrating(ctx, path, true, release)
 	if err != nil {
 		return Migration{}, err
 	}

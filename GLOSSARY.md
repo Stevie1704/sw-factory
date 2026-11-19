@@ -475,6 +475,15 @@ factory prompt version, frozen repository role-craft source and SHA-256 identity
 when configured, and native session identifier when known.
 _Avoid_: Process transcript
 
+**Launch rollback**:
+The close of an invocation launch that failed before a native session or a
+structured report made it recoverable. The invocation stays active and a
+`launch_rollback` pending effect stays journaled until the worker stop
+succeeds; only then does the invocation become terminal, and reconcile replays
+the effect after a crash. It changes no operational store file and is never a
+checkpoint restore.
+_Avoid_: Restore, undo, launch revert
+
 **Harness**:
 A configured coding tool, such as Codex, Claude Code, or Copilot CLI, launched
 through the headless harness seam with a role-specific prompt and native resume
@@ -614,16 +623,23 @@ _Avoid_: Upgrade script, migration plan
 
 **Full quiescence**:
 The state of an installation in which no process holds the coordinator lock,
-no run is non-terminal, no effect is pending, and no invocation, session-role
-invocation, session command, or publication is in progress. A maintenance
-checkpoint and a restore need it.
+no run is non-terminal, no effect is pending, no invocation, session-role
+invocation, session command, or publication is in progress, every ended
+session-role invocation has released its worker, and Docker proves that no
+harness process runs in a worker of this store. A maintenance checkpoint and
+a restore need it.
 _Avoid_: Quiescent installation, idle (alone), stopped
 
 **Migration gate**:
 The narrower set of conditions that the store migration of an upgrade needs:
 no process holds the coordinator lock, no run is non-terminal, no effect is
-pending, and no invocation, session-role invocation, or session command is in
-progress. It omits publications, because a migration keeps every row.
+pending, no invocation, session-role invocation, or session command is in
+progress, every ended session-role invocation has released its worker, and
+Docker proves that no harness process runs in a worker of this store. It
+omits publications, because a migration keeps every row. The Docker
+condition contacts Docker only when the store records worker processes; then
+an unreachable daemon is the blocker `docker.unreachable`. Full quiescence
+uses the same rule.
 _Avoid_: Quiescence (for this narrower set), idle check
 
 **Maintenance checkpoint**:
@@ -633,6 +649,37 @@ release.
 It contains private issue and specification text and no credentials. It is
 not a whole-installation backup and cannot rewind remote state.
 _Avoid_: Backup (alone), pre-migration backup, snapshot (alone)
+
+**Checkpoint restore**:
+The confirmed replacement of the operational store by the snapshot of a
+maintenance checkpoint of the same host, registration, and release. It
+refuses unless every precondition is proved, including that no known external
+object changed and no unknown factory-owned object exists. The confirm binds
+the digest of the previewed plan, and the confirm holds the SQLite write lock
+of the live store from its checks through the preserve renames. The original
+store stays in the restore
+work directory until the operator removes it. It is not a launch rollback,
+which only closes one failed invocation launch.
+_Avoid_: Rollback, recovery, copy back
+
+**Restore journal**:
+The file `<store>.restore.json` that a checkpoint restore writes before each
+rename. While it exists, every store opener refuses, and only the restore
+command of the same release continues it to the original file set or to the
+verified replacement.
+_Avoid_: Restore log, lock file
+
+**Pre-migration backup**:
+An online snapshot of the operational store, taken under the SQLite write lock
+before a schema migration, in `<store>.bak-<timestamp>`. Under that lock it
+checks the store part of the migration gate again; work that entered after
+the gate check refuses the backup and the migration. Its provenance file
+`<store>.bak-<timestamp>.json` records the source and target schema versions,
+the migrating release, and the SHA-256. Both files appear only by an atomic
+rename, the provenance last; a backup without matching provenance is
+incomplete and is not provenance. It is migration provenance, not a
+maintenance checkpoint and not a restore point.
+_Avoid_: Checkpoint, restore point, copy (of the store)
 
 
 **Local Markdown issue**:
