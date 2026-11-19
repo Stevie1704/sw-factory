@@ -2,12 +2,9 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 
 	"modernc.org/sqlite"
@@ -91,23 +88,6 @@ func isDamagedDatabase(err error) bool {
 		return true
 	}
 	return false
-}
-
-// ReadSnapshotWorkerProcesses reads the harness processes of a store
-// snapshot that no process writes. It opens the file immutable and
-// read-only, so it creates no sidecar and changes nothing.
-func ReadSnapshotWorkerProcesses(ctx context.Context, path string) ([]WorkerProcess, error) {
-	absolutePath, err := filepath.Abs(path)
-	if err != nil {
-		return nil, fmt.Errorf("resolve snapshot path: %w", err)
-	}
-	dsn := (&url.URL{Scheme: "file", Path: absolutePath, RawQuery: "mode=ro&immutable=1"}).String()
-	database, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, fmt.Errorf("open snapshot: %w", err)
-	}
-	defer func() { _ = database.Close() }()
-	return ReadWorkerProcesses(ctx, database)
 }
 
 // NewerThan names each kind of record of which w has more records or a

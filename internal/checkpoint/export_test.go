@@ -6,7 +6,7 @@ import "context"
 // point. An error from crash stops the restore at once, as a process crash
 // does, so tests can continue it from the files it leaves.
 func ApplyRestoreWithCrash(ctx context.Context, plan RestorePlan, build Factory, crash func(point string) error) error {
-	return applyRestore(ctx, plan, build, crash)
+	return applyRestore(ctx, plan, build, nil, crash)
 }
 
 // ContinueRestoreWithCrash runs ContinueRestore and calls crash at each

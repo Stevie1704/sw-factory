@@ -144,7 +144,7 @@ The check writes nothing: it reads the helper state files and tests the
 recorded process through `docker exec`, and never runs the helper's
 `inspect` command, which records `running` or `lost`. So `upgrade plan` and
 the restore preview stay read-only. Restore precondition 5 uses the same
-check.
+check when the live store is readable.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each
 condition. The operator finishes or cancels the work with the current binary
@@ -175,9 +175,9 @@ that is readable by group or other.
 | `registration_identity` | The SHA-256 identity of the host configuration path and the registration, as the onboarding plan computes it |
 | `registration_summary` | Repository path, tracker and code host providers, owner, project, and repository names, and the local installation ID; no credential path |
 | `worker_image` | The pinned `image@digest` |
-| `target_branch_head` | The commit of the target branch on the remote at checkpoint time |
+| `target_branch_head` | The commit of the target branch on the remote at checkpoint time. It is recorded for information only; restore does not compare it (see precondition 7) |
 | `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities that the snapshot knows |
-| `external_state` | The observable state of every external object that the snapshot knows through its runs or its publication ledger (the tracker item of each created plan item, and the branch and pull request of each Git batch): for each known run or publication branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. Creation and restore read a known pull request by its persisted number and a known status comment by its persisted ID, never by branch pair or by the current login, so a newer or retargeted pull request or an account rotation cannot hide a known object. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
+| `external_state` | The observable state of every external object that the snapshot knows through its runs or its publication ledger (the tracker item of each created plan item, and the branch and pull request of each Git batch): for each known run or publication branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head, for information only. Creation and restore read a known pull request by its persisted number and a known status comment by its persisted ID, never by branch pair or by the current login, so a newer or retargeted pull request or an account rotation cannot hide a known object. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
 | `files` | For each file: relative path, size, mode, and SHA-256 |
 | `private_data` | Always `true`, with the reason: issue and specification text |
 
@@ -201,6 +201,14 @@ Restore refuses unless every precondition is proved:
 3. The current registration identity equals `registration_identity`.
 4. Restore acquires the coordinator lock and holds it to the end.
 5. No worker container or role session of this installation runs.
+   When the live store is missing or does not open, it cannot name its
+   workers, and a worker launched after the checkpoint can still run. A
+   worker container name (`factory-worker-` and a hash of the worker ID)
+   does not name its installation, so restore then always asks Docker and
+   refuses on any running `factory-worker-*` container
+   (`worker.unattributed`), also an idle one or one of another installation.
+   This is conservative; the operator stops those containers first. Docker
+   that cannot be reached refuses with `docker.unreachable`.
 6. The live store has no pending effect, no non-terminal run, and nothing
    newer than the watermarks: no run, invocation, ledger entry, or local
    issue identity that the snapshot does not have. Only a missing store or a
@@ -213,10 +221,28 @@ Restore refuses unless every precondition is proved:
    request has the recorded head SHA, state, and draft flag, each known issue
    has the recorded open state and factory labels, and each known status
    comment has the recorded update time. A known branch that advanced without
-   a new name, pull request, or comment is therefore a divergence.
+   a new name, pull request, or comment is therefore a divergence. The known
+   objects are branches, pull requests, issues, and status comments only.
+   The target branch head in `external_state` and `target_branch_head` is not
+   a divergence object: the target branch is not factory-owned, and a human
+   merge moves it, so a changed target head alone does not refuse.
 8. The work tracker and code host show no unknown factory-owned object: no
    `factory/*` branch or pull request that the snapshot does not know, and no
    issue with a factory state label whose run the snapshot does not know.
+
+A confirmed restore takes the SQLite write lock of the live store
+(`BEGIN IMMEDIATE`, no write) before it checks preconditions 5 to 8 and the
+plan digest, and holds it through the preserve renames. So no writer that is
+already open, such as a command inbox, can commit between the checks and the
+renames. The plan digest records the size and SHA-256 of each live file;
+restore keeps each handle that it reads them with open until it releases the
+lock, because a close of any handle of the store file drops the POSIX lock
+of SQLite for the whole process. A store that another connection holds past
+the busy timeout refuses with `restore.not_quiescent` (`store.write_locked`).
+After the release, restore compares each preserved original with the size
+and SHA-256 of the plan and rolls back on a difference. A missing or damaged
+store gets no lock, because no writer can commit into it. The preview takes
+no lock.
 
 An older snapshot therefore cannot authorize a duplicate comment, pull
 request, push, worker launch, or harness resume. Any difference refuses with
@@ -264,7 +290,7 @@ and `original/`, also after the coordinator lock is released by a crash.
 | Journal state (written before the step) | Step | State after a crash in this step | Continuation |
 | --- | --- | --- | --- |
 | `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
-| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
+| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename; then release the store write lock and compare each original with the plan | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
 | `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), write the journal state `preserving`, then continue as for `preserving` |
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |
@@ -277,7 +303,9 @@ restore then rolls back and does not remove an unlisted sidecar.
 Every continuation before `verified` ends with the original live file set
 back in place and unchanged, so it is lossless. After `verified`, the
 original stays in `original/` until the operator removes it. Continuation
-needs the coordinator lock and runs only from the same release. Restore never
+needs the coordinator lock and runs only from the same release. It needs
+only the registration, the build, and the store path, so a missing or
+invalid `factory.yaml` does not stop it. Restore never
 starts the coordinator, resumes a harness, or replays a pending effect. The
 operator runs `factory doctor` and then `factory start`.
 

@@ -247,6 +247,13 @@ apply exactly that plan, run the command again with
 another digest, and the confirm refuses with `restore.plan_stale`; preview
 again.
 
+The confirm holds the SQLite write lock of the live store from its checks
+until the live files are in `original/`. A command that the local UI submits
+in that time waits and can fail as a busy store; submit it again after the
+restore. When another connection holds the lock too long, the confirm
+refuses with `restore.not_quiescent` (`store.write_locked`). When a preserved
+original changed after the checks, the restore puts it back and fails.
+
 The document has `schema_version: 1`, `outcome` (`preview`, `restored`,
 `refused`, `interrupted`, or `error`), `plan`, `refusals` with `code` and
 `detail`, and `journal` for a continued restore. It exits 0 only for
@@ -260,6 +267,8 @@ every command that opens the store refuses, and `factory doctor` reports
 `store.sqlite.restore_in_progress`. Run the same restore command with the
 same release: it continues the interrupted restore first, to the unchanged
 original or to the verified replacement, and reports `interrupted`. The
+continuation does not read `factory.yaml`, so a missing or invalid one does
+not stop it. The
 restore never starts the coordinator, resumes a harness, or replays an
 effect. Afterwards run `factory doctor`, then `factory start`.
 
@@ -271,8 +280,8 @@ effect. Afterwards run `factory doctor`, then `factory start`.
 | `restore.release_mismatch` | The checkpoint is of another release or revision, or of an older schema; or the interrupted restore was started by another release. Restore with the creating release, then migrate with `factory upgrade migrate-store`. |
 | `restore.registration_changed` | The registration or the host configuration path differs from the checkpoint. |
 | `restore.coordinator_running` | A coordinator or another maintenance command holds the repository lock. |
-| `restore.worker_active` | A harness runs in a worker of this store, a role session has no proved resource release, or Docker cannot prove that none runs. |
-| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. With `store.unreadable`, the live store exists but does not open, for example because it is busy, not private, or of another schema; repair that first. Only a missing or damaged (empty, corrupt, or not a database) store is replaced without this check, and the preview names the damage. |
+| `restore.worker_active` | A harness runs in a worker of this store, a role session has no proved resource release, or Docker cannot prove that none runs. With `worker.unattributed`, the live store is missing or does not open, so it cannot name its workers, and a `factory-worker-*` container runs; restore cannot tell whether it belongs to this store, so stop it first, also when it is idle or of another installation. |
+| `restore.not_quiescent` | The live store has a non-terminal run, a pending effect, other active work, or a record that the snapshot does not have; `detail` names it. Resolve a pending effect with `factory reconcile` or effect abandonment first. With `store.unreadable`, the live store exists but does not open, for example because it is busy, not private, or of another schema; repair that first. With `store.write_locked`, another connection holds the write lock of the live store; close it and preview again. Only a missing or damaged (empty, corrupt, or not a database) store is replaced without this check, and the preview names the damage. |
 | `restore.external_divergence` | A known branch, pull request, issue, or status comment changed after the checkpoint, or a `factory/*` branch, a pull request from one, or an issue with a run-state label is unknown to it; `detail` names each object. |
 | `restore.divergence_unverified` | A known object or a listing cannot be read. Unknown evidence never passes. |
 | `restore.plan_stale` | The `--confirm` digest is not the digest of the current plan. |

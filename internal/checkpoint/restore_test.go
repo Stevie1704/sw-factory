@@ -55,7 +55,7 @@ func newRestoreFixture(t *testing.T) restoreFixture {
 // plan returns the restore plan of the fixture.
 func (f restoreFixture) plan(t *testing.T) checkpoint.RestorePlan {
 	t.Helper()
-	plan, err := checkpoint.NewRestorePlan(f.checkpoint, f.manifest, f.storePath)
+	plan, err := checkpoint.NewRestorePlan(f.checkpoint, f.manifest, f.storePath, store.FileDigest)
 	if err != nil {
 		t.Fatalf("NewRestorePlan() error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestApplyRestoreReplacesTheStoreAndPreservesTheOriginal(t *testing.T) {
 	if plan.LiveFiles[0] != "factory.db" || len(plan.LiveFiles) != 4 {
 		t.Fatalf("live files = %v, want the store first, then each sidecar", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	fixture.assertReplaced(t, "complete")
@@ -170,7 +170,7 @@ func TestApplyRestoreWithoutALiveStore(t *testing.T) {
 	if len(plan.LiveFiles) != 0 {
 		t.Fatalf("live files = %v, want none", plan.LiveFiles)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err != nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err != nil {
 		t.Fatalf("ApplyRestore() error = %v", err)
 	}
 	if _, err := store.OpenReadOnly(context.Background(), fixture.storePath); err != nil {
@@ -185,7 +185,7 @@ func TestApplyRestoreRollsBackAReplacementThatDoesNotVerify(t *testing.T) {
 	fixture := newRestoreFixture(t)
 	plan := fixture.plan(t)
 	plan.Replacement.SHA256 = "0000"
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err == nil {
 		t.Fatal("ApplyRestore() of a replacement that does not verify succeeded")
 	}
 	fixture.assertOriginal(t, "failed verification")
@@ -418,7 +418,7 @@ func TestApplyRestoreKeepsAnUnlistedSidecarAwayFromTheReplacement(t *testing.T) 
 	if err := os.WriteFile(fixture.storePath+"-wal", stale, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}); err == nil {
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, nil); err == nil {
 		t.Fatal("ApplyRestore() beside an unlisted sidecar succeeded")
 	}
 	fixture.original["factory.db-wal"] = stale
@@ -442,4 +442,51 @@ func TestRestoreContinuationRefusesASidecarThatIsNotOfTheReplacement(t *testing.
 		t.Fatalf("ContinueRestore() = %+v, %v; want rolled back", continuation, err)
 	}
 	fixture.assertOriginal(t, "stale sidecar while verifying")
+}
+
+// TestApplyRestoreReleasesTheWriteLockAfterThePreserveRenames verifies that
+// the restore keeps the store write lock of the caller through the renames
+// of the live files into original/ and releases it once, after them.
+func TestApplyRestoreReleasesTheWriteLockAfterThePreserveRenames(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	plan := fixture.plan(t)
+	releases := 0
+	release := func() error {
+		releases++
+		for _, name := range plan.LiveFiles {
+			if _, err := os.Lstat(filepath.Join(plan.WorkDirectory, "original", name)); err != nil {
+				t.Errorf("release before %s is in original/: %v", name, err)
+			}
+		}
+		return nil
+	}
+	if err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, release); err != nil {
+		t.Fatalf("ApplyRestore() error = %v", err)
+	}
+	if releases != 1 {
+		t.Fatalf("releases = %d, want 1", releases)
+	}
+	fixture.assertReplaced(t, "release after preserve")
+}
+
+// TestApplyRestoreRollsBackAnOriginalThatChangedAfterThePlan simulates a
+// writer with an open handle that commits into the preserved original after
+// the write lock is released. The restore compares each preserved original
+// with the size and SHA-256 that the plan recorded, and puts the changed
+// original back live instead of losing its new record.
+func TestApplyRestoreRollsBackAnOriginalThatChangedAfterThePlan(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	plan := fixture.plan(t)
+	changed := []byte("the original live store bytes and a newly accepted command")
+	release := func() error {
+		return os.WriteFile(filepath.Join(plan.WorkDirectory, "original", "factory.db"), changed, 0o600)
+	}
+	err := checkpoint.ApplyRestore(context.Background(), plan, checkpoint.Factory{}, release)
+	if err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("ApplyRestore() with a changed original = %v, want an error that names the change", err)
+	}
+	fixture.original["factory.db"] = changed
+	fixture.assertOriginal(t, "changed original")
 }

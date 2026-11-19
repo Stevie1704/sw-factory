@@ -20,6 +20,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/version"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // restoreRemote is a fake Git remote with one head per branch.
@@ -159,6 +160,7 @@ func (f restoreFixture) restoreRequest() RestoreRequest {
 		External:     reader,
 		Owned:        NewOwnedObjectLister(f.registration, f.adapters.sources()),
 		Workers:      idleWorkers{},
+		Containers:   workerContainers{},
 	}
 }
 
@@ -203,8 +205,8 @@ func preview(t *testing.T, request RestoreRequest) RestorePlan {
 
 // TestRestoreCheckpointPreviewThenConfirm covers the healthy row: the
 // preview changes nothing; the confirm with its digest restores, keeps the
-// original, and leaves a store that factory doctor reports ready. No row
-// checks the pinned worker image: a missing image does not stop a restore.
+// original, and leaves a store that factory doctor reports ready.
+// TestRestoreCheckpointWithoutThePinnedWorkerImage covers a missing image.
 func TestRestoreCheckpointPreviewThenConfirm(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
@@ -440,6 +442,99 @@ func TestRestoreCheckpointRefusesAnActiveWorkerOrRoleSession(t *testing.T) {
 	}
 }
 
+// dockerWithoutTheWorkerImage writes a Docker stub of a reachable daemon
+// that runs no container and has no image, as after the pinned worker image
+// was removed.
+func dockerWithoutTheWorkerImage(t *testing.T) *worker.DockerRuntime {
+	t.Helper()
+	stub := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) echo 27.0.0 ;;\nps) ;;\nimage) echo 'Error: No such image' >&2; exit 1 ;;\n*) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &worker.DockerRuntime{DockerBinary: stub}
+}
+
+// TestRestoreCheckpointWithoutThePinnedWorkerImage covers the missing
+// pinned worker image row: the restore over a damaged live store, which
+// asks Docker, still succeeds on a Docker host without the image that the
+// manifest pins, and factory doctor reports the missing image afterwards.
+func TestRestoreCheckpointWithoutThePinnedWorkerImage(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	if err := os.WriteFile(fixture.registration.OperationalDataPath, []byte("damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	docker := dockerWithoutTheWorkerImage(t)
+	request := fixture.restoreRequest()
+	request.Containers = docker
+	request.Confirm = preview(t, request).Digest
+	if result, err := RestoreCheckpoint(context.Background(), request); err != nil || result.Outcome != RestoreOutcomeRestored {
+		t.Fatalf("confirm = %+v, %v; want restored", result, err)
+	}
+	manifest, err := checkpoint.Verify(context.Background(), fixture.checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, digest, found := strings.Cut(manifest.WorkerImage, "@")
+	if !found {
+		t.Fatalf("worker image = %q, want image@digest", manifest.WorkerImage)
+	}
+	readiness := worker.NewReadiness(docker, worker.ImageReference{Name: name, Digest: digest})
+	results := doctor.Run(context.Background(), worker.StartupChecks(readiness)...).Results
+	if len(results) != 2 || results[0].Code != "worker.docker.ready" || results[1].Code != "worker.image.missing" {
+		t.Fatalf("doctor after the restore = %+v, want worker.image.missing", results)
+	}
+}
+
+// workerContainers is a Docker view that lists the running worker
+// containers of every installation, or fails with err.
+type workerContainers struct {
+	names []string
+	err   error
+}
+
+// RunningWorkerContainers returns the names, or err.
+func (w workerContainers) RunningWorkerContainers(context.Context) ([]string, error) {
+	return w.names, w.err
+}
+
+// TestRestoreCheckpointWithoutAReadableLiveStoreRefusesAnyRunningWorker
+// verifies restore precondition 5 when the live store does not tell which
+// workers it launched: a worker launched after the checkpoint can still
+// run, so any running worker container refuses, and Docker is asked even
+// when the snapshot knows no worker. Unknown Docker evidence refuses too.
+func TestRestoreCheckpointWithoutAReadableLiveStoreRefusesAnyRunningWorker(t *testing.T) {
+	t.Parallel()
+	for name, containers := range map[string]workerContainers{
+		"running worker":     {names: []string{"factory-worker-0123456789abcdef01234567"}},
+		"Docker unreachable": {err: errors.New("Cannot connect to the Docker daemon")},
+	} {
+		for live, change := range map[string]func(*testing.T, string){
+			"damaged": func(t *testing.T, path string) {
+				if err := os.WriteFile(path, []byte("damaged"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			"missing": func(t *testing.T, path string) {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		} {
+			t.Run(name+", "+live, func(t *testing.T) {
+				t.Parallel()
+				fixture := newRestoreFixture(t)
+				change(t, fixture.registration.OperationalDataPath)
+				request := fixture.restoreRequest()
+				request.Containers = containers
+				result, err := RestoreCheckpoint(context.Background(), request)
+				assertRestoreRefusal(t, fixture, nil, result, err, RestoreWorkerActive)
+			})
+		}
+	}
+}
+
 // newRestoreFixtureWithProcesses is a restore fixture whose snapshot holds
 // an ended run invocation and an ended, released role session invocation.
 func newRestoreFixtureWithProcesses(t *testing.T) restoreFixture {
@@ -651,5 +746,57 @@ func TestRestoreCheckpointContinuesOnlyFromTheSameRelease(t *testing.T) {
 	assertRestoreRefusal(t, fixture, nil, result, err, RestoreReleaseMismatch)
 	if _, err := os.Stat(store.RestoreJournalPath(fixture.registration.OperationalDataPath)); err != nil {
 		t.Fatalf("the journal is gone after a refused continuation: %v", err)
+	}
+}
+
+// writerProbeLister lists the factory-owned objects and, on each call,
+// records whether another connection can take the write lock of the live
+// store.
+type writerProbeLister struct {
+	checkpoint.OwnedObjectLister
+	storePath string
+	writable  *[]bool
+}
+
+// FactoryBranches records whether a writer can start, then lists.
+func (l writerProbeLister) FactoryBranches(ctx context.Context) ([]string, error) {
+	database, err := sql.Open("sqlite", "file:"+l.storePath+"?mode=rw&_pragma=busy_timeout(50)")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = database.Close() }()
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err == nil {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+	*l.writable = append(*l.writable, err == nil)
+	return l.OwnedObjectLister.FactoryBranches(ctx)
+}
+
+// TestConfirmedRestoreHoldsTheStoreWriteLockWhileItChecks verifies that a
+// confirmed restore takes the SQLite write lock of the live store before it
+// checks quiescence and the digest, so a command inbox that is already open
+// cannot commit between the checks and the preserve renames. The preview
+// takes no lock.
+func TestConfirmedRestoreHoldsTheStoreWriteLockWhileItChecks(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	request := fixture.restoreRequest()
+	var writable []bool
+	request.Owned = writerProbeLister{OwnedObjectLister: request.Owned, storePath: fixture.registration.OperationalDataPath, writable: &writable}
+
+	plan := preview(t, request)
+	request.Confirm = plan.Digest
+	result, err := RestoreCheckpoint(context.Background(), request)
+	if err != nil || result.Outcome != RestoreOutcomeRestored {
+		t.Fatalf("confirm = %+v, %v; want restored", result, err)
+	}
+	if !slices.Equal(writable, []bool{true, false}) {
+		t.Fatalf("writer could start = %v; want during the preview only", writable)
 	}
 }

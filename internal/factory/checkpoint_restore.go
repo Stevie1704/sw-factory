@@ -76,6 +76,17 @@ type RestoreRequest struct {
 	Owned checkpoint.OwnedObjectLister
 	// Workers reads Docker for the worker-activity precondition.
 	Workers WorkerProbe
+	// Containers lists every running worker container when the live store
+	// cannot name the workers of this store.
+	Containers WorkerContainerLister
+}
+
+// WorkerContainerLister lists the running worker containers of every
+// installation on the Docker host. worker.DockerRuntime implements it.
+type WorkerContainerLister interface {
+	// RunningWorkerContainers returns the names of the running
+	// factory-worker-* containers.
+	RunningWorkerContainers(ctx context.Context) ([]string, error)
 }
 
 // RestorePlan is the previewed restore that --confirm binds by its digest.
@@ -110,6 +121,9 @@ type RestoreResult struct {
 // is quiescent and has nothing newer, and no external object diverged.
 // Without Confirm it returns the plan and changes nothing; with the digest
 // of the same plan it applies the plan under the coordinator lock. A
+// confirmed restore also holds the SQLite write lock of the live store from
+// before its checks through the preserve renames, so no open writer, such
+// as a command inbox, commits between the checks and the renames. A
 // refusal is a result, not an error.
 func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
 	storePath, err := filepath.Abs(request.Registration.OperationalDataPath)
@@ -131,14 +145,19 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 		return RestoreResult{}, err
 	}
 	defer func() { _ = lock.release() }()
+	writeLock, refusal, err := lockConfirmedStore(ctx, request, storePath)
+	if err != nil || refusal != nil {
+		return refusedRestore(refusalList(refusal)), err
+	}
+	defer func() { _ = writeLock.Release() }()
 	facts, err := store.InspectForRestore(ctx, storePath)
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if refusals, err = restoreRefusals(ctx, request, storePath, manifest, facts); err != nil || len(refusals) != 0 {
-		return refusedRestore(refusals), err
+	if refusals = restoreRefusals(ctx, request, storePath, manifest, facts); len(refusals) != 0 {
+		return refusedRestore(refusals), nil
 	}
-	plan, err := newRestorePlan(request, storePath, manifest, facts)
+	plan, err := newRestorePlan(request, storePath, manifest, facts, writeLock.FileDigest)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -150,7 +169,7 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 		result.Plan = &plan
 		return result, nil
 	}
-	if err := applyRestore(ctx, request, plan); err != nil {
+	if err := applyRestore(ctx, request, plan, writeLock.Release); err != nil {
 		return RestoreResult{Plan: &plan}, err
 	}
 	return RestoreResult{Outcome: RestoreOutcomeRestored, Plan: &plan}, nil
@@ -162,6 +181,29 @@ func refusedRestore(refusals []store.UpgradeFinding) RestoreResult {
 		return RestoreResult{}
 	}
 	return RestoreResult{Outcome: RestoreOutcomeRefused, Refusals: refusals}
+}
+
+// refusalList returns the one refusal as a list, or nil.
+func refusalList(refusal *store.UpgradeFinding) []store.UpgradeFinding {
+	if refusal == nil {
+		return nil
+	}
+	return []store.UpgradeFinding{*refusal}
+}
+
+// lockConfirmedStore takes the SQLite write lock of the live store for a
+// confirmed restore; a preview, a missing store, and a damaged store get no
+// lock. A lock that another connection holds past the busy timeout is the
+// restore.not_quiescent refusal.
+func lockConfirmedStore(ctx context.Context, request RestoreRequest, storePath string) (*store.RestoreWriteLock, *store.UpgradeFinding, error) {
+	if request.Confirm == "" {
+		return nil, nil, nil
+	}
+	writeLock, err := store.LockForRestore(ctx, storePath)
+	if store.IsTransient(err) {
+		return nil, &store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.write_locked: another connection holds the write lock of the live store: " + err.Error()}, nil
+	}
+	return writeLock, nil, err
 }
 
 // coordinatorRunningRefusal is the refusal of a held coordinator lock.
@@ -232,17 +274,13 @@ func releaseRefusal(manifest checkpoint.Manifest, build version.Identity) *store
 
 // restoreRefusals checks preconditions 5 to 8 under the coordinator lock and
 // the unused work directory. facts are the restore facts of the live store.
-func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
+func restoreRefusals(ctx context.Context, request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) []store.UpgradeFinding {
 	var refusals []store.UpgradeFinding
 	workDirectory := filepath.Join(filepath.Dir(storePath), ".restore-"+manifest.CheckpointID)
 	if _, err := os.Lstat(workDirectory); !errors.Is(err, os.ErrNotExist) {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreWorkDirectoryExists, Detail: workDirectory + " exists; it can hold the original of an earlier restore; move it away after you review it"})
 	}
-	local, err := liveStoreRefusals(ctx, request, manifest, facts)
-	if err != nil {
-		return nil, err
-	}
-	refusals = append(refusals, local...)
+	refusals = append(refusals, liveStoreRefusals(ctx, request, manifest, facts)...)
 	divergence := checkpoint.CompareExternalState(ctx, request.External, request.Owned, manifest.ExternalState)
 	for _, detail := range divergence.Diverged {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreExternalDivergence, Detail: detail})
@@ -250,23 +288,51 @@ func restoreRefusals(ctx context.Context, request RestoreRequest, storePath stri
 	for _, detail := range divergence.Unverified {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreDivergenceUnverified, Detail: detail})
 	}
-	return refusals, nil
+	return refusals
 }
 
-// liveStoreRefusals checks preconditions 5 and 6. The workers come from the
-// live store, or from the snapshot when the live store is not readable.
-func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest checkpoint.Manifest, facts store.RestoreFacts) ([]store.UpgradeFinding, error) {
-	processes := facts.WorkerProcesses
+// liveStoreRefusals checks preconditions 5 and 6. A readable live store
+// names the workers to check; otherwise any running worker container
+// refuses.
+func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest checkpoint.Manifest, facts store.RestoreFacts) []store.UpgradeFinding {
 	if !facts.Readable {
-		var err error
-		if processes, err = store.ReadSnapshotWorkerProcesses(ctx, filepath.Join(request.Path, checkpoint.StoreFile)); err != nil {
-			return nil, err
-		}
+		return append(unattributedWorkerRefusals(ctx, request.Containers), storeFactRefusals(facts)...)
 	}
 	var refusals []store.UpgradeFinding
-	for _, finding := range WorkerActivityFindings(ctx, processes, request.Workers) {
+	for _, finding := range WorkerActivityFindings(ctx, facts.WorkerProcesses, request.Workers) {
 		refusals = append(refusals, store.UpgradeFinding{Code: RestoreWorkerActive, Detail: finding.Code + ": " + finding.Detail})
 	}
+	refusals = append(refusals, storeFactRefusals(facts)...)
+	for _, newer := range facts.Watermarks.NewerThan(manifest.Watermarks) {
+		refusals = append(refusals, store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.newer_than_snapshot: the live store has newer " + newer})
+	}
+	return refusals
+}
+
+// unattributedWorkerRefusals checks precondition 5 without a readable live
+// store. A worker launched after the checkpoint can still run, and a
+// container name, factory-worker- and a hash of the worker ID, does not
+// name its installation, so this check is conservative: any running worker
+// container refuses, also an idle one or one of another installation.
+// Docker is always asked; a failure is unknown evidence and refuses.
+func unattributedWorkerRefusals(ctx context.Context, containers WorkerContainerLister) []store.UpgradeFinding {
+	if containers == nil {
+		return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: FindingDockerUnreachable + ": no Docker view lists the running worker containers"}}
+	}
+	running, err := containers.RunningWorkerContainers(ctx)
+	if err != nil {
+		return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: FindingDockerUnreachable + ": Docker cannot list the running worker containers: " + err.Error()}}
+	}
+	if len(running) == 0 {
+		return nil
+	}
+	return []store.UpgradeFinding{{Code: RestoreWorkerActive, Detail: "worker.unattributed: the live store does not open, so restore cannot tell whether these running worker containers belong to it; stop them first: " + strings.Join(running, ", ")}}
+}
+
+// storeFactRefusals maps the store findings of the restore facts to restore
+// refusals.
+func storeFactRefusals(facts store.RestoreFacts) []store.UpgradeFinding {
+	var refusals []store.UpgradeFinding
 	for _, finding := range facts.Findings {
 		code := RestoreNotQuiescent
 		if strings.HasPrefix(finding.Code, "session_invocation.") {
@@ -274,20 +340,16 @@ func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest che
 		}
 		refusals = append(refusals, store.UpgradeFinding{Code: code, Detail: finding.Code + ": " + finding.Detail})
 	}
-	if facts.Readable {
-		for _, newer := range facts.Watermarks.NewerThan(manifest.Watermarks) {
-			refusals = append(refusals, store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.newer_than_snapshot: the live store has newer " + newer})
-		}
-	}
-	return refusals, nil
+	return refusals
 }
 
 // newRestorePlan returns the plan with its steps and its digest. The digest
-// covers the file plan and the size and SHA-256 of each live file, so any
-// change after the preview needs a new preview. A damaged live store gets a
-// step that says why precondition 6 is not checked.
-func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) (RestorePlan, error) {
-	files, err := checkpoint.NewRestorePlan(request.Path, manifest, storePath)
+// covers the file plan, which holds the size and SHA-256 of each live file
+// that digest reads, so any change after the preview needs a new preview. A
+// damaged live store gets a step that says why precondition 6 is not
+// checked.
+func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts, digest checkpoint.FileDigester) (RestorePlan, error) {
+	files, err := checkpoint.NewRestorePlan(request.Path, manifest, storePath, digest)
 	if err != nil {
 		return RestorePlan{}, err
 	}
@@ -320,28 +382,12 @@ func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoin
 	return plan, nil
 }
 
-// liveFileIdentity is the size and SHA-256 of one live file.
-type liveFileIdentity struct {
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-}
-
-// planDigest returns the SHA-256 of the plan and the live file identities.
+// planDigest returns the SHA-256 of the file plan and the steps.
 func planDigest(plan RestorePlan) (string, error) {
-	identities := make([]liveFileIdentity, 0, len(plan.files.LiveFiles))
-	for _, name := range plan.files.LiveFiles {
-		size, digest, err := store.FileDigest(filepath.Join(filepath.Dir(plan.files.StorePath), name))
-		if err != nil {
-			return "", err
-		}
-		identities = append(identities, liveFileIdentity{Name: name, Size: size, SHA256: digest})
-	}
 	encoded, err := json.Marshal(struct {
 		Files checkpoint.RestorePlan `json:"files"`
 		Steps []string               `json:"steps"`
-		Live  []liveFileIdentity     `json:"live"`
-	}{plan.files, plan.Steps, identities})
+	}{plan.files, plan.Steps})
 	if err != nil {
 		return "", fmt.Errorf("encode the restore plan: %w", err)
 	}
@@ -350,10 +396,11 @@ func planDigest(plan RestorePlan) (string, error) {
 }
 
 // applyRestore creates a missing store directory and runs the journaled
-// file sequence.
-func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan) error {
+// file sequence; release releases the store write lock after the preserve
+// renames.
+func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan, release func() error) error {
 	if err := os.MkdirAll(filepath.Dir(plan.files.StorePath), 0o700); err != nil {
 		return fmt.Errorf("create the store directory: %w", err)
 	}
-	return checkpoint.ApplyRestore(ctx, plan.files, checkpointFactory(request.Build))
+	return checkpoint.ApplyRestore(ctx, plan.files, checkpointFactory(request.Build), release)
 }
