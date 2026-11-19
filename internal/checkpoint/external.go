@@ -63,15 +63,16 @@ type ExternalReader interface {
 	// BranchHead returns the remote head of branch, or "" when the remote
 	// has no such branch.
 	BranchHead(ctx context.Context, branch string) (string, error)
-	// PullRequest returns the pull request with number, whose head is
-	// headBranch.
+	// PullRequest reads the pull request with number by that number, so a
+	// newer or retargeted pull request of the same branch cannot hide it.
+	// A pull request whose head is not headBranch is an error.
 	PullRequest(ctx context.Context, number int, headBranch string) (PullRequestState, error)
 	// Issue returns the open state and the factory state labels of issue
 	// number.
 	Issue(ctx context.Context, number int) (IssueState, error)
-	// StatusComment returns the status comment of run runID on issue
-	// issueNumber.
-	StatusComment(ctx context.Context, issueNumber int, runID string) (StatusCommentState, error)
+	// StatusComment reads the status comment with the persisted commentID
+	// of run runID on issue issueNumber, whatever login wrote it.
+	StatusComment(ctx context.Context, issueNumber int, runID, commentID string) (StatusCommentState, error)
 }
 
 // ReadExternalState reads the state of the target branch and of every
@@ -130,7 +131,7 @@ func (o *externalObserver) observeRun(ctx context.Context, run store.KnownRun, s
 		}
 	}
 	if run.StatusCommentID != "" {
-		comment, err := o.reader.StatusComment(ctx, run.IssueNumber, run.RunID)
+		comment, err := o.reader.StatusComment(ctx, run.IssueNumber, run.RunID, run.StatusCommentID)
 		if err != nil || comment.ID != run.StatusCommentID {
 			o.unreadable(fmt.Sprintf("status comment %s of run %s", run.StatusCommentID, run.RunID), err, "the tracker does not show it")
 		} else {

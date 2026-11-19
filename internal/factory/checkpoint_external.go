@@ -55,17 +55,26 @@ func (r externalStateReader) BranchHead(ctx context.Context, branch string) (str
 	return r.sources.Remote.RemoteBranchHead(ctx, gitadapter.PushRequest{WorktreePath: r.registration.Path, Branch: branch})
 }
 
-// PullRequest finds the pull request of headBranch into the target branch
-// and returns it when it has number.
+// PullRequestNumberReader reads one pull request by its number, in every
+// state and whatever its base branch is.
+type PullRequestNumberReader interface {
+	PullRequest(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error)
+}
+
+// PullRequest reads the pull request with the persisted number. It never
+// searches by branch pair, so a newer or retargeted pull request of the same
+// branch cannot hide it. A pull request from another head branch is an
+// error, because a head branch never changes.
 func (r externalStateReader) PullRequest(ctx context.Context, number int, headBranch string) (checkpoint.PullRequestState, error) {
-	if r.sources.PullRequests == nil {
-		return checkpoint.PullRequestState{}, errors.New("no code host is configured")
+	reader, ok := r.sources.PullRequests.(PullRequestNumberReader)
+	if !ok {
+		return checkpoint.PullRequestState{}, errors.New("the code host cannot read a pull request by number")
 	}
-	found, err := r.sources.PullRequests.FindPullRequest(ctx, r.repository, headBranch, r.sources.TargetBranch)
+	found, err := reader.PullRequest(ctx, r.repository, number)
 	if err != nil {
 		return checkpoint.PullRequestState{}, err
 	}
-	if found.Number != number {
+	if found.Number != number || found.HeadBranch != headBranch {
 		return checkpoint.PullRequestState{}, fmt.Errorf("the code host shows no pull request #%d from %s", number, headBranch)
 	}
 	state := strings.ToLower(found.State)
@@ -94,19 +103,24 @@ func (r externalStateReader) Issue(ctx context.Context, number int) (checkpoint.
 	return checkpoint.IssueState{Number: issue.Number, Open: strings.EqualFold(issue.State, "open"), FactoryLabels: labels}, nil
 }
 
-// StatusComment finds the status comment of a run by its marker.
-func (r externalStateReader) StatusComment(ctx context.Context, issueNumber int, runID string) (checkpoint.StatusCommentState, error) {
-	if r.sources.Tracker == nil {
-		return checkpoint.StatusCommentState{}, errors.New("no work tracker is configured")
+// StatusComment reads the comments of the issue and returns the one with
+// the persisted commentID. It does not filter by the current login, so an
+// account rotation cannot hide a status comment that the store knows.
+func (r externalStateReader) StatusComment(ctx context.Context, issueNumber int, runID, commentID string) (checkpoint.StatusCommentState, error) {
+	reader, ok := r.sources.Tracker.(tracker.CommentReader)
+	if !ok {
+		return checkpoint.StatusCommentState{}, errors.New("the work tracker cannot list issue comments")
 	}
-	comment, err := r.sources.Tracker.FindStatusComment(ctx, r.repository, issueNumber, statusCommentMarker(runID))
+	comments, err := reader.IssueComments(ctx, r.repository, issueNumber)
 	if err != nil {
 		return checkpoint.StatusCommentState{}, err
 	}
-	if comment.ID == "" {
-		return checkpoint.StatusCommentState{}, fmt.Errorf("the tracker shows no status comment of run %s", runID)
+	for _, comment := range comments {
+		if comment.ID == commentID {
+			return checkpoint.StatusCommentState{RunID: runID, IssueNumber: issueNumber, ID: comment.ID, UpdatedAt: comment.UpdatedAt.UTC()}, nil
+		}
 	}
-	return checkpoint.StatusCommentState{RunID: runID, IssueNumber: issueNumber, ID: comment.ID, UpdatedAt: comment.UpdatedAt.UTC()}, nil
+	return checkpoint.StatusCommentState{}, fmt.Errorf("the tracker shows no status comment %s of run %s", commentID, runID)
 }
 
 // factoryBranchPrefix is the prefix of every factory-owned branch.

@@ -49,7 +49,7 @@ func (f fakeExternal) Issue(_ context.Context, number int) (checkpoint.IssueStat
 }
 
 // StatusComment returns the recorded status comment of a run.
-func (f fakeExternal) StatusComment(_ context.Context, _ int, runID string) (checkpoint.StatusCommentState, error) {
+func (f fakeExternal) StatusComment(_ context.Context, _ int, runID, _ string) (checkpoint.StatusCommentState, error) {
 	comment, ok := f.comments[runID]
 	if !ok {
 		return checkpoint.StatusCommentState{}, errors.New("tracker unreachable")

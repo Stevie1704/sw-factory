@@ -170,7 +170,7 @@ that is readable by group or other.
 | `worker_image` | The pinned `image@digest` |
 | `target_branch_head` | The commit of the target branch on the remote at checkpoint time |
 | `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities that the snapshot knows |
-| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
+| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. Creation and restore read a known pull request by its persisted number and a known status comment by its persisted ID, never by branch pair or by the current login, so a newer or retargeted pull request or an account rotation cannot hide a known object. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
 | `files` | For each file: relative path, size, mode, and SHA-256 |
 | `private_data` | Always `true`, with the reason: issue and specification text |
 

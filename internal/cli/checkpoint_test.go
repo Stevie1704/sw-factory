@@ -43,7 +43,7 @@ func (f cliExternal) Issue(_ context.Context, number int) (checkpoint.IssueState
 }
 
 // StatusComment is never needed by the fixture run.
-func (f cliExternal) StatusComment(context.Context, int, string) (checkpoint.StatusCommentState, error) {
+func (f cliExternal) StatusComment(context.Context, int, string, string) (checkpoint.StatusCommentState, error) {
 	return checkpoint.StatusCommentState{}, errors.New("no status comment")
 }
 
