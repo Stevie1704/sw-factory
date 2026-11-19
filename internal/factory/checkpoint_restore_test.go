@@ -20,6 +20,7 @@ import (
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/version"
+	"github.com/Stevie1704/sw-factory/internal/worker"
 )
 
 // restoreRemote is a fake Git remote with one head per branch.
@@ -204,8 +205,8 @@ func preview(t *testing.T, request RestoreRequest) RestorePlan {
 
 // TestRestoreCheckpointPreviewThenConfirm covers the healthy row: the
 // preview changes nothing; the confirm with its digest restores, keeps the
-// original, and leaves a store that factory doctor reports ready. No row
-// checks the pinned worker image: a missing image does not stop a restore.
+// original, and leaves a store that factory doctor reports ready.
+// TestRestoreCheckpointWithoutThePinnedWorkerImage covers a missing image.
 func TestRestoreCheckpointPreviewThenConfirm(t *testing.T) {
 	t.Parallel()
 	fixture := newRestoreFixture(t)
@@ -438,6 +439,51 @@ func TestRestoreCheckpointRefusesAnActiveWorkerOrRoleSession(t *testing.T) {
 			result, err := RestoreCheckpoint(context.Background(), request)
 			assertRestoreRefusal(t, fixture, nil, result, err, RestoreWorkerActive)
 		})
+	}
+}
+
+// dockerWithoutTheWorkerImage writes a Docker stub of a reachable daemon
+// that runs no container and has no image, as after the pinned worker image
+// was removed.
+func dockerWithoutTheWorkerImage(t *testing.T) *worker.DockerRuntime {
+	t.Helper()
+	stub := filepath.Join(t.TempDir(), "docker")
+	script := "#!/bin/sh\ncase \"$1\" in\nversion) echo 27.0.0 ;;\nps) ;;\nimage) echo 'Error: No such image' >&2; exit 1 ;;\n*) exit 2 ;;\nesac\n"
+	if err := os.WriteFile(stub, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return &worker.DockerRuntime{DockerBinary: stub}
+}
+
+// TestRestoreCheckpointWithoutThePinnedWorkerImage covers the missing
+// pinned worker image row: the restore over a damaged live store, which
+// asks Docker, still succeeds on a Docker host without the image that the
+// manifest pins, and factory doctor reports the missing image afterwards.
+func TestRestoreCheckpointWithoutThePinnedWorkerImage(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	if err := os.WriteFile(fixture.registration.OperationalDataPath, []byte("damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	docker := dockerWithoutTheWorkerImage(t)
+	request := fixture.restoreRequest()
+	request.Containers = docker
+	request.Confirm = preview(t, request).Digest
+	if result, err := RestoreCheckpoint(context.Background(), request); err != nil || result.Outcome != RestoreOutcomeRestored {
+		t.Fatalf("confirm = %+v, %v; want restored", result, err)
+	}
+	manifest, err := checkpoint.Verify(context.Background(), fixture.checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, digest, found := strings.Cut(manifest.WorkerImage, "@")
+	if !found {
+		t.Fatalf("worker image = %q, want image@digest", manifest.WorkerImage)
+	}
+	readiness := worker.NewReadiness(docker, worker.ImageReference{Name: name, Digest: digest})
+	results := doctor.Run(context.Background(), worker.StartupChecks(readiness)...).Results
+	if len(results) != 2 || results[0].Code != "worker.docker.ready" || results[1].Code != "worker.image.missing" {
+		t.Fatalf("doctor after the restore = %+v, want worker.image.missing", results)
 	}
 }
 
