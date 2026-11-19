@@ -330,6 +330,30 @@ func TestCheckRepairLaunchFailurePausesForACheckRetry(t *testing.T) {
 	}
 }
 
+// TestCheckRepairLaunchFailureKeepsTheInvocationActiveWhenTheWorkerStopFails
+// verifies that a failed check-repair launch whose worker stop fails does not
+// mark the repair invocation terminal, and that the error names the stop.
+func TestCheckRepairLaunchFailureKeepsTheInvocationActiveWhenTheWorkerStopFails(t *testing.T) {
+	t.Parallel()
+	fixture := newCheckRecoveryFixture(t, "run-repair-stop", false)
+	fixture.runtime.results = []worker.CommandResult{{ExitCode: 0}, {ExitCode: 1, Stderr: "FAIL"}}
+	fixture.harness.resumeErr = errors.New("harness process could not start")
+	fixture.runtime.stopErr = errors.New("docker daemon unavailable")
+
+	_, err := fixture.service.CreateDraftPullRequest(context.Background(), factory.DraftPullRequestRequest{RunID: fixture.run.ID})
+
+	if err == nil || !strings.Contains(err.Error(), "docker daemon unavailable") {
+		t.Fatalf("CreateDraftPullRequest() error = %v, want the named worker stop failure", err)
+	}
+	repair, err := fixture.runStore.Invocation(context.Background(), fixture.run.ID, "inv-repair")
+	if err != nil || repair == nil {
+		t.Fatalf("read repair invocation = %#v, %v", repair, err)
+	}
+	if repair.Status != store.InvocationStatusActive {
+		t.Fatalf("repair invocation status = %q, want active until the worker stop is proven", repair.Status)
+	}
+}
+
 // assertCheckInfrastructurePause verifies the run is in the recoverable
 // check-infrastructure pause and has not spent a repair attempt.
 func assertCheckInfrastructurePause(t *testing.T, run store.Run) {
