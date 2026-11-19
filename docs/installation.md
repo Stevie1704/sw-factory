@@ -129,8 +129,9 @@ put it on `PATH` yet. Its `factory` binary is the target. Run:
 
 The plan only reads. It names the blockers, the conditions of the migration
 gate, the ordered operations with their effects, the final verification, and
-the newest maintenance checkpoint of this installation and of the live store
-schema when you pass `--checkpoints <directory>`. The checkpoint step is
+a maintenance checkpoint of this installation and of the live store schema,
+preferably of the installed release, with the release that restores it, when
+you pass `--checkpoints <directory>`. The checkpoint step is
 optional; the `factory guide maintenance` topic describes it. Do the first
 pending operation, then plan again; after an interruption, the plan tells
 which components are old, new, or incomplete.

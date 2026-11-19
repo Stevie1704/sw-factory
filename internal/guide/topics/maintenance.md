@@ -46,10 +46,15 @@ another configuration is a blocker, and its evidence is not used.
 `--resources` names the directory that `onboard prepare` of the target
 filled; it defaults to the onboarding plan's directory. `--checkpoints`
 names a directory whose direct subdirectories may be maintenance
-checkpoints. The plan lists the newest one that verifies and matches this
-registration and the schema of the live store: the checkpoint that the
-installed release created before the migration. Only the release named in
-its manifest restores it, so keep that release until the upgrade is done.
+checkpoints. The plan lists one that verifies and matches this
+registration and the schema of the live store. It prefers the newest
+checkpoint of the installed release and revision, which `factory version
+--json` of the command on `PATH` names: the checkpoint that the installed
+release created before the migration. Only when no such checkpoint exists,
+or the installed release is not known, does it list the newest checkpoint of
+that schema from another release. `restore_release` always names the only
+release that restores it, and `of_installed_release` tells whether that is
+the installed release. Keep that release until the upgrade is done.
 It searches only one level deep and keeps no registry, so a checkpoint
 outside that directory is not listed.
 
@@ -68,8 +73,9 @@ pull an image, resume work, or make a paid call. It exits 0 for a `ready` or
 | `operations` | The ordered steps with `state` (`done`, `pending`, `blocked`), `command`, `effect`, `paid`, `paid_calls`, `authorization`, and `expected_effects` |
 | `verification` | The checks of the final state and whether each holds |
 | `recovery_limits` | What the upgrade cannot undo |
-| `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it |
-| `checkpoint` | The newest matching maintenance checkpoint with `path` and `manifest`, or `null` when `--checkpoints` is not given or no checkpoint matches |
+| `store_backups` | The existing pre-migration backups, as provenance; each has a `.json` provenance file beside it whose SHA-256 matches the backup |
+| `store_incomplete_backups` | Files with a backup name but no matching provenance, such as the remains of an interrupted backup; they are not provenance, and `factory reset` removes them |
+| `checkpoint` | The selected maintenance checkpoint with `path`, `manifest`, `restore_release` (`version`, `revision`), and `of_installed_release`, or `null` when `--checkpoints` is not given or no checkpoint matches |
 
 `command` is always an executable shell command, or empty for a manual step
 that `description` explains. Show the plan to the operator. Apply `factory

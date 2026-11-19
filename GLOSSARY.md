@@ -671,9 +671,13 @@ _Avoid_: Restore log, lock file
 
 **Pre-migration backup**:
 An online snapshot of the operational store, taken under the SQLite write lock
-before a schema migration, in `<store>.bak-<timestamp>`. Its provenance file
+before a schema migration, in `<store>.bak-<timestamp>`. Under that lock it
+checks the store part of the migration gate again; work that entered after
+the gate check refuses the backup and the migration. Its provenance file
 `<store>.bak-<timestamp>.json` records the source and target schema versions,
-the migrating release, and the SHA-256. It is migration provenance, not a
+the migrating release, and the SHA-256. Both files appear only by an atomic
+rename, the provenance last; a backup without matching provenance is
+incomplete and is not provenance. It is migration provenance, not a
 maintenance checkpoint and not a restore point.
 _Avoid_: Checkpoint, restore point, copy (of the store)
 

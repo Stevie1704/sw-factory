@@ -114,6 +114,13 @@ journal mode.
 Copying the database file is not supported, also not after closing the
 connection, because another process can write between the close and the copy.
 The pre-migration backup uses the same online sequence (follow-up D, #321).
+Its check on connection A is the store part of the migration gate. Work that
+entered the store after the earlier gate check refuses the backup with the
+gate findings, and nothing migrates.
+The backup and its provenance file are written to staging names and renamed
+into place, the provenance last. The upgrade plan lists a backup only when its
+provenance exists and its SHA-256 matches; it reports any other backup file
+as incomplete.
 
 **Full quiescence** means all of these are true on connection A:
 
@@ -428,7 +435,10 @@ None of them may claim backup or restore delivery for roadmap #260 alone.
 
 - When A to C ship, `factory guide maintenance` adds an optional
   "checkpoint before the store migration" step, and the upgrade plan lists
-  the newest matching checkpoint. A checkpoint needs full quiescence, which
+  the newest matching checkpoint. A match has the registration and the live
+  store schema; the newest one of the installed release and revision wins,
+  else the newest schema match is listed, and the plan always names the
+  release that restores it. A checkpoint needs full quiescence, which
   is stricter than the migration gate, so the guide names the extra
   conditions. Until then the guide states that no
   supported restore exists.

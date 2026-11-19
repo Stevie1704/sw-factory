@@ -12,18 +12,19 @@ import (
 
 // TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase
 // verifies that a reset removes each backup of its own database together with
-// the provenance file, and leaves a backup of another database untouched. The
+// the provenance file and the staging file of an interrupted backup, and leaves a backup of another database untouched. The
 // sibling database "factory.db.bak-secondary" and its own backups share the
 // prefix "factory.db.bak-" but belong to another database, so they must survive.
 func TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase(t *testing.T) {
 	fixture := newHeadlessRemovalFixture(t, "codex")
 	backup := fixture.databasePath + ".bak-20260101T000000.000000000Z"
 	provenance := backup + ".json"
+	staging := fixture.databasePath + ".bak-20260102T000000.000000000Z.partial"
 	other := filepath.Join(filepath.Dir(fixture.databasePath), "other.db.bak-20260101T000000.000000000Z")
 	sibling := fixture.databasePath + ".bak-secondary"
 	siblingBackup := sibling + ".bak-20260101T000000.000000000Z"
 	siblingProvenance := siblingBackup + ".json"
-	for _, path := range []string{backup, provenance, other, sibling, siblingBackup, siblingProvenance} {
+	for _, path := range []string{backup, provenance, staging, other, sibling, siblingBackup, siblingProvenance} {
 		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -35,14 +36,14 @@ func TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase(t *
 		t.Fatalf("Reset(preview) error = %v, want a confirmation request", err)
 	}
 	planned := basenamesForTest(preview.Plan.MigrationBackups)
-	if want := []string{filepath.Base(backup), filepath.Base(provenance)}; !slices.Equal(planned, want) {
+	if want := []string{filepath.Base(backup), filepath.Base(provenance), filepath.Base(staging)}; !slices.Equal(planned, want) {
 		t.Fatalf("planned backups = %v, want %v", planned, want)
 	}
 
 	if _, err := fixture.service.Reset(t.Context(), factory.ResetRequest{Confirm: true}); err != nil {
 		t.Fatalf("Reset(confirm) error = %v", err)
 	}
-	for _, path := range []string{backup, provenance} {
+	for _, path := range []string{backup, provenance, staging} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("backup file %q error = %v, want removed", path, err)
 		}

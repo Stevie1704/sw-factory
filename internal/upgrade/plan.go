@@ -193,10 +193,11 @@ type Observation struct {
 	// registration; its evidence and commands are then not used.
 	OnboardingPlanForeign string
 	Onboarding            []onboarding.StepStatus
-	// Checkpoint is the newest verified checkpoint of this registration and
-	// of the live store schema in the directory that --checkpoints named, or
-	// nil when none was named or none matches. Its manifest names the
-	// release that restores it.
+	// Checkpoint is the verified checkpoint of this registration and of the
+	// live store schema in the directory that --checkpoints named, the newest
+	// one of the installed release when one exists, or nil when none was
+	// named or none matches. RestoreRelease names the release that restores
+	// it.
 	Checkpoint *checkpoint.Listed
 }
 
@@ -261,7 +262,7 @@ type Plan struct {
 	Operations     []Operation       `json:"operations"`
 	Verification   []Verification    `json:"verification"`
 	RecoveryLimits []string          `json:"recovery_limits"`
-	// Checkpoint is the newest matching maintenance checkpoint, or null. It
+	// Checkpoint is the selected maintenance checkpoint, or null. It
 	// is optional guidance: no operation depends on it (see the maintenance
 	// guide).
 	Checkpoint *checkpoint.Listed `json:"checkpoint"`

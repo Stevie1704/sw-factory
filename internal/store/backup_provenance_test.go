@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -73,7 +75,7 @@ func TestPreMigrationBackupWaitsForAnUncommittedWriter(t *testing.T) {
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(ctx, "INSERT INTO operational_runs (id, status) VALUES ('run-open', 'active')"); err != nil {
+	if _, err := conn.ExecContext(ctx, "INSERT INTO operational_runs (id, status) VALUES ('run-open', 'complete')"); err != nil {
 		t.Fatal(err)
 	}
 	commitErr := make(chan error, 1)
@@ -143,20 +145,87 @@ func TestPreMigrationBackupWritesProvenanceBesideTheSnapshot(t *testing.T) {
 	}
 }
 
-// TestInspectForUpgradeListsBackupsButNotTheirProvenance verifies that the
-// provenance file of a backup is not counted as a second backup.
-func TestInspectForUpgradeListsBackupsButNotTheirProvenance(t *testing.T) {
+// TestPreMigrationBackupRechecksTheMigrationGateUnderTheWriteLock verifies
+// that work which entered the store after the migration gate passed, such as
+// a queued session command, ends the backup with the gate findings before any
+// backup file exists.
+func TestPreMigrationBackupRechecksTheMigrationGateUnderTheWriteLock(t *testing.T) {
 	t.Parallel()
-	path := quiescentStore(t, completedRun("run-1", 7))
-	backup := path + ".bak-20260101T000000.000000000Z"
-	for _, name := range []string{backup, backup + ".json"} {
-		if err := os.WriteFile(name, []byte("{}"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	path := storeFixture(t, store.CurrentSchemaVersion-1, "INSERT INTO ideation_commands (state) VALUES ('queued')")
+
+	_, err := store.BackupDatabaseForTest(path, migratingReleaseForTest)
+	var gateErr *store.MigrationGateError
+	if !errors.As(err, &gateErr) || len(gateErr.Findings) != 1 || gateErr.Findings[0].Code != "session_command.queued" {
+		t.Fatalf("BackupDatabaseForTest() error = %v, want a migration gate error with session_command.queued", err)
+	}
+	matches, globErr := filepath.Glob(path + ".bak-*")
+	if globErr != nil || len(matches) != 0 {
+		t.Fatalf("backup files = %v, %v; want none", matches, globErr)
+	}
+}
+
+// TestInspectForUpgradeListsAVerifiedBackupButNotItsProvenance verifies
+// that a complete backup is listed once, its provenance file is not counted
+// as a second backup, and no staging file remains.
+func TestInspectForUpgradeListsAVerifiedBackupButNotItsProvenance(t *testing.T) {
+	t.Parallel()
+	path := storeFixture(t, store.CurrentSchemaVersion-1)
+	backup, err := store.BackupDatabaseForTest(path, migratingReleaseForTest)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	inspection, err := store.InspectForUpgrade(context.Background(), path)
-	if err != nil || len(inspection.Backups) != 1 || inspection.Backups[0] != backup {
-		t.Fatalf("InspectForUpgrade() backups = %v, %v; want only %s", inspection.Backups, err, backup)
+	if err != nil || len(inspection.Backups) != 1 || inspection.Backups[0] != backup || len(inspection.IncompleteBackups) != 0 {
+		t.Fatalf("InspectForUpgrade() backups = %v, incomplete = %v, %v; want only %s", inspection.Backups, inspection.IncompleteBackups, err, backup)
+	}
+	staging, err := filepath.Glob(path + ".bak-*.partial")
+	if err != nil || len(staging) != 0 {
+		t.Fatalf("staging files = %v, %v; want none", staging, err)
+	}
+}
+
+// TestInspectForUpgradeReportsAnIncompleteBackupApart verifies that a backup
+// without provenance, a backup whose bytes do not match its provenance, and a
+// staging file left by an interrupted backup are never listed as backups but
+// are reported as incomplete.
+func TestInspectForUpgradeReportsAnIncompleteBackupApart(t *testing.T) {
+	t.Parallel()
+	path := storeFixture(t, store.CurrentSchemaVersion-1)
+	verified, err := store.BackupDatabaseForTest(path, migratingReleaseForTest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutProvenance := path + ".bak-20260101T000000.000000000Z"
+	tampered := path + ".bak-20260102T000000.000000000Z"
+	staging := path + ".bak-20260103T000000.000000000Z.partial"
+	for _, name := range []string{withoutProvenance, tampered, staging} {
+		if err := os.WriteFile(name, []byte("partial database"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provenance, err := os.ReadFile(verified + ".json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tampered+".json", provenance, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inspection, err := store.InspectForUpgrade(context.Background(), path)
+	if err != nil {
+		t.Fatalf("InspectForUpgrade() error = %v", err)
+	}
+	if len(inspection.Backups) != 1 || inspection.Backups[0] != verified {
+		t.Fatalf("backups = %v, want only the verified %s", inspection.Backups, verified)
+	}
+	want := []string{withoutProvenance, tampered, staging}
+	if len(inspection.IncompleteBackups) != len(want) {
+		t.Fatalf("incomplete backups = %v, want %v", inspection.IncompleteBackups, want)
+	}
+	for index, name := range want {
+		if inspection.IncompleteBackups[index] != name {
+			t.Fatalf("incomplete backups = %v, want %v", inspection.IncompleteBackups, want)
+		}
 	}
 }

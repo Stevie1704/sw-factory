@@ -47,8 +47,13 @@ type UpgradeInspection struct {
 	// WorkerProcesses lists every process that the store launched in a
 	// worker; the caller checks with Docker whether one of them still runs.
 	WorkerProcesses []WorkerProcess
-	// Backups lists the pre-migration backups of this exact store.
+	// Backups lists the pre-migration backups of this exact store whose
+	// provenance file exists and matches the backup bytes.
 	Backups []string
+	// IncompleteBackups lists the files of this exact store that carry a
+	// backup name but have no matching provenance, or are staging files of
+	// an interrupted backup. They are not provenance of any migration.
+	IncompleteBackups []string
 }
 
 // Supported reports whether this build can inspect and migrate the store:
@@ -143,7 +148,7 @@ func InspectForUpgrade(ctx context.Context, path string) (UpgradeInspection, err
 		return inspection, err
 	}
 	inspection.Exists = true
-	if inspection.Backups, err = migrationBackups(absolutePath); err != nil {
+	if inspection.Backups, inspection.IncompleteBackups, err = migrationBackups(absolutePath); err != nil {
 		return inspection, err
 	}
 	if journal, err := os.Stat(absolutePath + "-journal"); err == nil && journal.Size() > 0 {
@@ -207,22 +212,31 @@ func readActiveWork(ctx context.Context, database Querier, inspection *UpgradeIn
 }
 
 // migrationBackups lists the pre-migration backups whose name proves they
-// belong to the store at path. A provenance file is not a backup, so it is not
-// listed.
-func migrationBackups(path string) ([]string, error) {
-	entries, err := os.ReadDir(filepath.Dir(path))
+// belong to the store at path. A backup is listed only when its provenance
+// file exists and matches its bytes. A backup without that proof, and a
+// staging file of an interrupted backup, is returned as incomplete instead.
+// A provenance file is neither.
+func migrationBackups(path string) (verified, incomplete []string, err error) {
+	directory := filepath.Dir(path)
+	entries, err := os.ReadDir(directory)
 	if err != nil {
-		return nil, fmt.Errorf("list operational store backups: %w", err)
+		return nil, nil, fmt.Errorf("list operational store backups: %w", err)
 	}
-	prefix := filepath.Base(path) + ".bak-"
-	var backups []string
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), prefix) && !strings.HasSuffix(entry.Name(), backupProvenanceSuffix) && entry.Type().IsRegular() {
-			backups = append(backups, filepath.Join(filepath.Dir(path), entry.Name()))
+		name := entry.Name()
+		if !IsMigrationBackupName(filepath.Base(path), name) || strings.HasSuffix(name, backupProvenanceSuffix) || !entry.Type().IsRegular() {
+			continue
+		}
+		backup := filepath.Join(directory, name)
+		if !strings.HasSuffix(name, backupStagingSuffix) && verifiedBackup(backup) {
+			verified = append(verified, backup)
+		} else {
+			incomplete = append(incomplete, backup)
 		}
 	}
-	sort.Strings(backups)
-	return backups, nil
+	sort.Strings(verified)
+	sort.Strings(incomplete)
+	return verified, incomplete, nil
 }
 
 // Migrate is the explicit store migration entry point. It opens the store
