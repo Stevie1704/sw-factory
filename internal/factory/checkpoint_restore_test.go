@@ -653,3 +653,55 @@ func TestRestoreCheckpointContinuesOnlyFromTheSameRelease(t *testing.T) {
 		t.Fatalf("the journal is gone after a refused continuation: %v", err)
 	}
 }
+
+// writerProbeLister lists the factory-owned objects and, on each call,
+// records whether another connection can take the write lock of the live
+// store.
+type writerProbeLister struct {
+	checkpoint.OwnedObjectLister
+	storePath string
+	writable  *[]bool
+}
+
+// FactoryBranches records whether a writer can start, then lists.
+func (l writerProbeLister) FactoryBranches(ctx context.Context) ([]string, error) {
+	database, err := sql.Open("sqlite", "file:"+l.storePath+"?mode=rw&_pragma=busy_timeout(50)")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = database.Close() }()
+	conn, err := database.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err == nil {
+		_, _ = conn.ExecContext(ctx, "ROLLBACK")
+	}
+	*l.writable = append(*l.writable, err == nil)
+	return l.OwnedObjectLister.FactoryBranches(ctx)
+}
+
+// TestConfirmedRestoreHoldsTheStoreWriteLockWhileItChecks verifies that a
+// confirmed restore takes the SQLite write lock of the live store before it
+// checks quiescence and the digest, so a command inbox that is already open
+// cannot commit between the checks and the preserve renames. The preview
+// takes no lock.
+func TestConfirmedRestoreHoldsTheStoreWriteLockWhileItChecks(t *testing.T) {
+	t.Parallel()
+	fixture := newRestoreFixture(t)
+	request := fixture.restoreRequest()
+	var writable []bool
+	request.Owned = writerProbeLister{OwnedObjectLister: request.Owned, storePath: fixture.registration.OperationalDataPath, writable: &writable}
+
+	plan := preview(t, request)
+	request.Confirm = plan.Digest
+	result, err := RestoreCheckpoint(context.Background(), request)
+	if err != nil || result.Outcome != RestoreOutcomeRestored {
+		t.Fatalf("confirm = %+v, %v; want restored", result, err)
+	}
+	if !slices.Equal(writable, []bool{true, false}) {
+		t.Fatalf("writer could start = %v; want during the preview only", writable)
+	}
+}

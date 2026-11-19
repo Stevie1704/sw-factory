@@ -110,6 +110,9 @@ type RestoreResult struct {
 // is quiescent and has nothing newer, and no external object diverged.
 // Without Confirm it returns the plan and changes nothing; with the digest
 // of the same plan it applies the plan under the coordinator lock. A
+// confirmed restore also holds the SQLite write lock of the live store from
+// before its checks through the preserve renames, so no open writer, such
+// as a command inbox, commits between the checks and the renames. A
 // refusal is a result, not an error.
 func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResult, error) {
 	storePath, err := filepath.Abs(request.Registration.OperationalDataPath)
@@ -131,6 +134,11 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 		return RestoreResult{}, err
 	}
 	defer func() { _ = lock.release() }()
+	writeLock, refusal, err := lockConfirmedStore(ctx, request, storePath)
+	if err != nil || refusal != nil {
+		return refusedRestore(refusalList(refusal)), err
+	}
+	defer func() { _ = writeLock.Release() }()
 	facts, err := store.InspectForRestore(ctx, storePath)
 	if err != nil {
 		return RestoreResult{}, err
@@ -138,7 +146,7 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 	if refusals, err = restoreRefusals(ctx, request, storePath, manifest, facts); err != nil || len(refusals) != 0 {
 		return refusedRestore(refusals), err
 	}
-	plan, err := newRestorePlan(request, storePath, manifest, facts)
+	plan, err := newRestorePlan(request, storePath, manifest, facts, writeLock.FileDigest)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -150,7 +158,7 @@ func RestoreCheckpoint(ctx context.Context, request RestoreRequest) (RestoreResu
 		result.Plan = &plan
 		return result, nil
 	}
-	if err := applyRestore(ctx, request, plan); err != nil {
+	if err := applyRestore(ctx, request, plan, writeLock.Release); err != nil {
 		return RestoreResult{Plan: &plan}, err
 	}
 	return RestoreResult{Outcome: RestoreOutcomeRestored, Plan: &plan}, nil
@@ -162,6 +170,29 @@ func refusedRestore(refusals []store.UpgradeFinding) RestoreResult {
 		return RestoreResult{}
 	}
 	return RestoreResult{Outcome: RestoreOutcomeRefused, Refusals: refusals}
+}
+
+// refusalList returns the one refusal as a list, or nil.
+func refusalList(refusal *store.UpgradeFinding) []store.UpgradeFinding {
+	if refusal == nil {
+		return nil
+	}
+	return []store.UpgradeFinding{*refusal}
+}
+
+// lockConfirmedStore takes the SQLite write lock of the live store for a
+// confirmed restore; a preview, a missing store, and a damaged store get no
+// lock. A lock that another connection holds past the busy timeout is the
+// restore.not_quiescent refusal.
+func lockConfirmedStore(ctx context.Context, request RestoreRequest, storePath string) (*store.RestoreWriteLock, *store.UpgradeFinding, error) {
+	if request.Confirm == "" {
+		return nil, nil, nil
+	}
+	writeLock, err := store.LockForRestore(ctx, storePath)
+	if store.IsTransient(err) {
+		return nil, &store.UpgradeFinding{Code: RestoreNotQuiescent, Detail: "store.write_locked: another connection holds the write lock of the live store: " + err.Error()}, nil
+	}
+	return writeLock, nil, err
 }
 
 // coordinatorRunningRefusal is the refusal of a held coordinator lock.
@@ -283,11 +314,12 @@ func liveStoreRefusals(ctx context.Context, request RestoreRequest, manifest che
 }
 
 // newRestorePlan returns the plan with its steps and its digest. The digest
-// covers the file plan and the size and SHA-256 of each live file, so any
-// change after the preview needs a new preview. A damaged live store gets a
-// step that says why precondition 6 is not checked.
-func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts) (RestorePlan, error) {
-	files, err := checkpoint.NewRestorePlan(request.Path, manifest, storePath)
+// covers the file plan, which holds the size and SHA-256 of each live file
+// that digest reads, so any change after the preview needs a new preview. A
+// damaged live store gets a step that says why precondition 6 is not
+// checked.
+func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoint.Manifest, facts store.RestoreFacts, digest checkpoint.FileDigester) (RestorePlan, error) {
+	files, err := checkpoint.NewRestorePlan(request.Path, manifest, storePath, digest)
 	if err != nil {
 		return RestorePlan{}, err
 	}
@@ -320,28 +352,12 @@ func newRestorePlan(request RestoreRequest, storePath string, manifest checkpoin
 	return plan, nil
 }
 
-// liveFileIdentity is the size and SHA-256 of one live file.
-type liveFileIdentity struct {
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
-}
-
-// planDigest returns the SHA-256 of the plan and the live file identities.
+// planDigest returns the SHA-256 of the file plan and the steps.
 func planDigest(plan RestorePlan) (string, error) {
-	identities := make([]liveFileIdentity, 0, len(plan.files.LiveFiles))
-	for _, name := range plan.files.LiveFiles {
-		size, digest, err := store.FileDigest(filepath.Join(filepath.Dir(plan.files.StorePath), name))
-		if err != nil {
-			return "", err
-		}
-		identities = append(identities, liveFileIdentity{Name: name, Size: size, SHA256: digest})
-	}
 	encoded, err := json.Marshal(struct {
 		Files checkpoint.RestorePlan `json:"files"`
 		Steps []string               `json:"steps"`
-		Live  []liveFileIdentity     `json:"live"`
-	}{plan.files, plan.Steps, identities})
+	}{plan.files, plan.Steps})
 	if err != nil {
 		return "", fmt.Errorf("encode the restore plan: %w", err)
 	}
@@ -350,10 +366,11 @@ func planDigest(plan RestorePlan) (string, error) {
 }
 
 // applyRestore creates a missing store directory and runs the journaled
-// file sequence.
-func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan) error {
+// file sequence; release releases the store write lock after the preserve
+// renames.
+func applyRestore(ctx context.Context, request RestoreRequest, plan RestorePlan, release func() error) error {
 	if err := os.MkdirAll(filepath.Dir(plan.files.StorePath), 0o700); err != nil {
 		return fmt.Errorf("create the store directory: %w", err)
 	}
-	return checkpoint.ApplyRestore(ctx, plan.files, checkpointFactory(request.Build))
+	return checkpoint.ApplyRestore(ctx, plan.files, checkpointFactory(request.Build), release)
 }

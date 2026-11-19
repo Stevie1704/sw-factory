@@ -64,9 +64,24 @@ type RestorePlan struct {
 	// LiveFiles are the names of the live store and each of its sidecars
 	// that exist, the store first.
 	LiveFiles []string `json:"live_files"`
+	// Originals are the size and SHA-256 of each live file when the plan
+	// was made, in the order of LiveFiles. The restore compares each
+	// preserved original with them.
+	Originals []FileIdentity `json:"originals"`
 	// Replacement identifies the snapshot from the manifest.
 	Replacement Replacement `json:"replacement"`
 }
+
+// FileIdentity is the size and SHA-256 of one live file.
+type FileIdentity struct {
+	Name   string `json:"name"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+// FileDigester returns the size and the hexadecimal SHA-256 of one file, as
+// store.FileDigest does.
+type FileDigester func(path string) (int64, string, error)
 
 // RestoreJournal is <store>.restore.json: the plan and the state of the step
 // that runs next.
@@ -91,8 +106,8 @@ type RestoreContinuation struct {
 
 // NewRestorePlan returns the plan to put the store snapshot of the verified
 // checkpoint at directory live at storePath. It lists the live file set that
-// exists now.
-func NewRestorePlan(directory string, manifest Manifest, storePath string) (RestorePlan, error) {
+// exists now and records the identity of each live file through digest.
+func NewRestorePlan(directory string, manifest Manifest, storePath string, digest FileDigester) (RestorePlan, error) {
 	absolute, err := filepath.Abs(storePath)
 	if err != nil {
 		return RestorePlan{}, fmt.Errorf("resolve the store path: %w", err)
@@ -107,6 +122,7 @@ func NewRestorePlan(directory string, manifest Manifest, storePath string) (Rest
 		StorePath:      absolute,
 		WorkDirectory:  filepath.Join(filepath.Dir(absolute), ".restore-"+manifest.CheckpointID),
 		LiveFiles:      []string{},
+		Originals:      []FileIdentity{},
 		Replacement:    Replacement{SchemaVersion: manifest.StoreSchemaVersion, Watermarks: manifest.Watermarks},
 	}
 	for _, file := range manifest.Files {
@@ -118,11 +134,17 @@ func NewRestorePlan(directory string, manifest Manifest, storePath string) (Rest
 		name := filepath.Base(absolute) + suffix
 		_, err := os.Lstat(filepath.Join(filepath.Dir(absolute), name))
 		switch {
-		case err == nil:
-			plan.LiveFiles = append(plan.LiveFiles, name)
-		case !errors.Is(err, os.ErrNotExist):
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
 			return RestorePlan{}, fmt.Errorf("inspect the live file %s: %w", name, err)
 		}
+		size, sum, err := digest(filepath.Join(filepath.Dir(absolute), name))
+		if err != nil {
+			return RestorePlan{}, err
+		}
+		plan.LiveFiles = append(plan.LiveFiles, name)
+		plan.Originals = append(plan.Originals, FileIdentity{Name: name, Size: size, SHA256: sum})
 	}
 	return plan, nil
 }
@@ -153,6 +175,9 @@ type crashPoint func(point string) error
 type restorer struct {
 	journal RestoreJournal
 	crash   crashPoint
+	// release releases the store write lock of the caller; nil when the
+	// caller holds none. It is set to nil once it ran.
+	release func() error
 }
 
 // ApplyRestore runs the restore plan of ADR 0032. It writes the journal
@@ -162,18 +187,27 @@ type restorer struct {
 // verify, it rolls back, so the original live file set is back. A crash
 // leaves the journal for ContinueRestore. The caller holds the coordinator
 // lock.
-func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory) error {
-	return applyRestore(ctx, plan, build, nil)
+//
+// release, when not nil, releases the store write lock that the caller took
+// before it checked the plan. ApplyRestore runs it once: after the last
+// preserve rename, or at the end of a failed restore. After the release it
+// compares each preserved original with plan.Originals, so a writer that
+// committed through a handle opened before the restore makes the restore
+// roll back instead of leaving its record only in original/.
+func ApplyRestore(ctx context.Context, plan RestorePlan, build Factory, release func() error) error {
+	return applyRestore(ctx, plan, build, release, nil)
 }
 
 // applyRestore is ApplyRestore with a crash point; crash is nil outside
 // tests.
-func applyRestore(ctx context.Context, plan RestorePlan, build Factory, crash crashPoint) error {
-	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}, crash: crash}).apply(ctx)
+func applyRestore(ctx context.Context, plan RestorePlan, build Factory, release func() error, crash crashPoint) error {
+	return (&restorer{journal: RestoreJournal{SchemaVersion: RestoreJournalSchemaVersion, Factory: build, RestorePlan: plan}, crash: crash, release: release}).apply(ctx)
 }
 
-// apply runs each step of the restore after its journal write.
-func (r *restorer) apply(ctx context.Context) error {
+// apply runs each step of the restore after its journal write and releases
+// the write lock of the caller at the latest when it returns.
+func (r *restorer) apply(ctx context.Context) (err error) {
+	defer func() { err = errors.Join(err, r.releaseLock()) }()
 	steps := []struct {
 		state string
 		run   func(context.Context) error
@@ -256,8 +290,22 @@ func (r *restorer) stage(ctx context.Context) error {
 	return r.at("after stage")
 }
 
+// releaseLock runs the release of the caller once.
+func (r *restorer) releaseLock() error {
+	if r.release == nil {
+		return nil
+	}
+	release := r.release
+	r.release = nil
+	if err := release(); err != nil {
+		return fmt.Errorf("release the store write lock: %w", err)
+	}
+	return nil
+}
+
 // preserve renames each live file into original/, the store first, and
-// syncs both directories after each rename.
+// syncs both directories after each rename. Then it releases the write lock
+// of the caller and compares each preserved original with the plan.
 func (r *restorer) preserve(context.Context) error {
 	plan := r.journal.RestorePlan
 	for _, name := range plan.LiveFiles {
@@ -269,6 +317,28 @@ func (r *restorer) preserve(context.Context) error {
 		}
 		if err := r.at("after preserve " + name); err != nil {
 			return err
+		}
+	}
+	if err := r.releaseLock(); err != nil {
+		return err
+	}
+	return verifyOriginals(plan)
+}
+
+// verifyOriginals fails when a preserved original differs from the size and
+// SHA-256 that the plan recorded, for example because a writer with an open
+// handle committed into it. The rollback then puts it back live unchanged.
+func verifyOriginals(plan RestorePlan) error {
+	if len(plan.Originals) != len(plan.LiveFiles) {
+		return fmt.Errorf("the restore plan records %d original identities for %d live files", len(plan.Originals), len(plan.LiveFiles))
+	}
+	for _, expected := range plan.Originals {
+		size, sum, err := store.FileDigest(filepath.Join(plan.WorkDirectory, "original", expected.Name))
+		if err != nil {
+			return err
+		}
+		if size != expected.Size || sum != expected.SHA256 {
+			return fmt.Errorf("the preserved original %s changed after the plan was checked; a writer committed during the restore, so the original goes back live", expected.Name)
 		}
 	}
 	return nil

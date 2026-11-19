@@ -210,6 +210,20 @@ Restore refuses unless every precondition is proved:
    `factory/*` branch or pull request that the snapshot does not know, and no
    issue with a factory state label whose run the snapshot does not know.
 
+A confirmed restore takes the SQLite write lock of the live store
+(`BEGIN IMMEDIATE`, no write) before it checks preconditions 5 to 8 and the
+plan digest, and holds it through the preserve renames. So no writer that is
+already open, such as a command inbox, can commit between the checks and the
+renames. The plan digest records the size and SHA-256 of each live file;
+restore keeps each handle that it reads them with open until it releases the
+lock, because a close of any handle of the store file drops the POSIX lock
+of SQLite for the whole process. A store that another connection holds past
+the busy timeout refuses with `restore.not_quiescent` (`store.write_locked`).
+After the release, restore compares each preserved original with the size
+and SHA-256 of the plan and rolls back on a difference. A missing or damaged
+store gets no lock, because no writer can commit into it. The preview takes
+no lock.
+
 An older snapshot therefore cannot authorize a duplicate comment, pull
 request, push, worker launch, or harness resume. Any difference refuses with
 `restore.external_divergence` and names each object. An object or a source
@@ -256,7 +270,7 @@ and `original/`, also after the coordinator lock is released by a crash.
 | Journal state (written before the step) | Step | State after a crash in this step | Continuation |
 | --- | --- | --- | --- |
 | `planned` | Create the work directory; copy `store.db` to `new/` and verify its checksum and integrity | Live files untouched; `new/` partial or complete | Remove the work directory and the journal |
-| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
+| `preserving` | Rename each live file into `original/`, the store first, then each sidecar, syncing the directory after each rename; then release the store write lock and compare each original with the plan | Each listed file is either at its live path or in `original/` | Rename every listed file that is in `original/` back to its live path, then remove `new/` and the journal |
 | `replacing` | Rename `new/store.db` to the live store path | Live path empty or holds the replacement; originals complete in `original/` | Remove a replacement at the live path (the checkpoint still holds it), write the journal state `preserving`, then continue as for `preserving` |
 | `verifying` | Open the replacement read-only; compare schema version, watermarks, and checksum; run the store doctor checks | Replacement at the live path; originals in `original/` | Repeat the verification; on failure, roll back as for `replacing` |
 | `verified` | Write the final journal state, then remove the journal | Replacement verified; originals in `original/` | Remove the journal |

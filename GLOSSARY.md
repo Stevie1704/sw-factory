@@ -652,7 +652,9 @@ The confirmed replacement of the operational store by the snapshot of a
 maintenance checkpoint of the same host, registration, and release. It
 refuses unless every precondition is proved, including that no known external
 object changed and no unknown factory-owned object exists. The confirm binds
-the digest of the previewed plan. The original store stays in the restore
+the digest of the previewed plan, and the confirm holds the SQLite write lock
+of the live store from its checks through the preserve renames. The original
+store stays in the restore
 work directory until the operator removes it. It is not a launch rollback,
 which only closes one failed invocation launch.
 _Avoid_: Rollback, recovery, copy back
