@@ -167,9 +167,9 @@ that is readable by group or other.
 | `registration_identity` | The SHA-256 identity of the host configuration path and the registration, as the onboarding plan computes it |
 | `registration_summary` | Repository path, tracker and code host providers, owner, project, and repository names, and the local installation ID; no credential path |
 | `worker_image` | The pinned `image@digest` |
-| `target_branch_head` | The commit of the target branch on the remote at checkpoint time |
+| `target_branch_head` | The commit of the target branch on the remote at checkpoint time. It is recorded for information only; restore does not compare it (see precondition 7) |
 | `watermarks` | The highest run, invocation, publication-ledger, and local-issue identities that the snapshot knows |
-| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
+| `external_state` | The observable state of every external object that the snapshot knows: for each known run branch, the remote head SHA; for each known pull request, its head SHA, state (open, closed, merged), and draft flag; for each known issue, its open state and factory state labels; for each status comment that the store identifies, its ID and update time; and the target branch head, for information only. A value that cannot be read at checkpoint time refuses the checkpoint with `checkpoint.external_unverified` |
 | `files` | For each file: relative path, size, mode, and SHA-256 |
 | `private_data` | Always `true`, with the reason: issue and specification text |
 
@@ -213,7 +213,11 @@ Restore refuses unless every precondition is proved:
    request has the recorded head SHA, state, and draft flag, each known issue
    has the recorded open state and factory labels, and each known status
    comment has the recorded update time. A known branch that advanced without
-   a new name, pull request, or comment is therefore a divergence.
+   a new name, pull request, or comment is therefore a divergence. The known
+   objects are branches, pull requests, issues, and status comments only.
+   The target branch head in `external_state` and `target_branch_head` is not
+   a divergence object: the target branch is not factory-owned, and a human
+   merge moves it, so a changed target head alone does not refuse.
 8. The work tracker and code host show no unknown factory-owned object: no
    `factory/*` branch or pull request that the snapshot does not know, and no
    issue with a factory state label whose run the snapshot does not know.
