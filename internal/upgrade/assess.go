@@ -127,8 +127,10 @@ func (p planner) blockers() []Blocker {
 	if coordinator := p.coordinatorBlocker(); coordinator != nil {
 		blockers = append(blockers, *coordinator)
 	}
-	if !p.laterOperationsDone() {
-		blockers = append(blockers, p.activityBlockers()...)
+	for _, activity := range p.activityBlockers() {
+		if !p.activityTolerated(activity.Code) {
+			blockers = append(blockers, activity)
+		}
 	}
 	if !o.PolicyValid {
 		blockers = append(blockers, Blocker{Code: "configuration.invalid", Detail: o.PolicyProblem,
@@ -170,6 +172,25 @@ func (p planner) storeBlockers() []Blocker {
 		return []Blocker{{Code: finding.Code, Detail: finding.Detail, Action: storeActions[finding.Code]}}
 	}
 	return nil
+}
+
+// workerEvidenceCodes are the activity findings that only the coordinator
+// of the target can resolve: a live harness helper, a session-role worker
+// that is not released, and Docker evidence that is missing. Evidence of
+// the later operations never proves them resolved (ADR 0032).
+var workerEvidenceCodes = map[string]bool{
+	"session_invocation.unreleased": true,
+	"worker.active":                 true,
+	"docker.unreachable":            true,
+	"worker.unobserved":             true,
+}
+
+// activityTolerated reports whether an activity finding is ordinary
+// operation instead of a blocker. Active work is ordinary once every later
+// operation is done. A worker finding is ordinary only while the target
+// coordinator also runs, because before that no process can own it.
+func (p planner) activityTolerated(code string) bool {
+	return p.laterOperationsDone() && (p.targetCoordinator() || !workerEvidenceCodes[code])
 }
 
 // activityBlockers lists the active work that fails the migration gate.

@@ -10,8 +10,12 @@ procedure with the target binary, unless a step names the old binary.
   holds the coordinator lock, no run is non-terminal, no effect is pending,
   no invocation, session-role invocation, or session command is in
   progress, every ended session-role invocation has released its worker, and
-  Docker proves that no harness process runs in a worker of this store. Docker
-  must be reachable; an unknown worker state never passes. Finish every active run, or cancel it deliberately, with the old
+  Docker proves that no harness process runs in a worker of this store.
+  Factory contacts Docker only when the store records worker processes. Then
+  Docker must be reachable: an unreachable daemon gives the blocker
+  `docker.unreachable`, and an unknown worker state never passes. A store
+  that records no worker process needs no Docker for this condition.
+  Finish every active run, or cancel it deliberately, with the old
   binary before you start. The upgrade never moves a claimed run to a new
   worker or policy, and never resumes an old harness session with a new
   image. The migration gate is narrower than the full quiescence that a
@@ -125,6 +129,10 @@ Create it with the installed release before `install_binary`, once the
 migration gate holds, as the Maintenance checkpoint section below describes.
 The target binary refuses a checkpoint of an older store schema. The
 checkpoint adds no operation and no blocker, so the plan never requires it.
+This step applies only when the installed release has the `checkpoint`
+command. Check with `factory --help`: its command list names `checkpoint` when
+the release has it. An installation from an earlier release, for example
+`v0.1.0-rc.4`, has no `factory checkpoint`; skip this step there.
 Plan again with `--checkpoints <directory>` to list it. To restore it before
 `migrate_store`, run `factory checkpoint restore` of the release that its
 manifest names.

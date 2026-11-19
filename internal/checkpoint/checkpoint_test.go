@@ -2,6 +2,7 @@ package checkpoint_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -35,10 +36,35 @@ func sealedCheckpoint(t *testing.T) string {
 		t.Fatal(err)
 	}
 	manifest := checkpoint.NewManifest("checkpoint-1", time.Unix(100, 0).UTC(), snapshot)
+	manifest.RegistrationIdentity = "registration-identity"
 	if err := checkpoint.WriteManifest(directory, manifest); err != nil {
 		t.Fatalf("WriteManifest() error = %v", err)
 	}
 	return directory
+}
+
+// editManifest rewrites the manifest of a checkpoint directory as a generic
+// JSON object, applies edit to it, and keeps the manifest mode private, so a
+// test can damage one manifest field at a time.
+func editManifest(t *testing.T, directory string, edit func(fields map[string]any)) {
+	t.Helper()
+	path := filepath.Join(directory, checkpoint.ManifestFile)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(content, &fields); err != nil {
+		t.Fatal(err)
+	}
+	edit(fields)
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestVerifyAcceptsASealedCheckpoint verifies that a sealed checkpoint has
@@ -98,6 +124,26 @@ func TestVerifyRefusesADamagedCheckpoint(t *testing.T) {
 		}, checkpoint.CodeCorrupt},
 		"unknown manifest schema": {func(t *testing.T, directory string) {
 			if err := os.WriteFile(filepath.Join(directory, checkpoint.ManifestFile), []byte(`{"schema_version":2}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}, checkpoint.CodeCorrupt},
+		"missing registration identity": {func(t *testing.T, directory string) {
+			editManifest(t, directory, func(fields map[string]any) {
+				delete(fields, "registration_identity")
+			})
+		}, checkpoint.CodeCorrupt},
+		"not private data": {func(t *testing.T, directory string) {
+			editManifest(t, directory, func(fields map[string]any) {
+				fields["private_data"] = map[string]any{"private": false, "reason": "none"}
+			})
+		}, checkpoint.CodeCorrupt},
+		"manifest mode 0644": {func(t *testing.T, directory string) {
+			if err := os.Chmod(filepath.Join(directory, checkpoint.ManifestFile), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, checkpoint.CodeCorrupt},
+		"store mode 0644": {func(t *testing.T, directory string) {
+			if err := os.Chmod(filepath.Join(directory, checkpoint.StoreFile), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}, checkpoint.CodeCorrupt},

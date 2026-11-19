@@ -135,8 +135,15 @@ registration never blocks. Its evidence is the harness helper state, not a
 running container: a terminal run can leave its idle worker running, for
 example after an accepted report that does not stop the worker. Docker that
 cannot be reached gives `docker.unreachable`, and a helper state that cannot
-be read gives `worker.unobserved`; neither is a pass. A store that never
-launched a worker needs no Docker. Restore precondition 5 uses the same
+be read gives `worker.unobserved`; neither is a pass. The check contacts
+Docker only when the store records worker processes. A store that records
+none has no worker name that a container can match, so the check passes
+without Docker. When the store records worker processes, a Docker daemon
+that cannot be reached is always the typed blocker `docker.unreachable`.
+The check writes nothing: it reads the helper state files and tests the
+recorded process through `docker exec`, and never runs the helper's
+`inspect` command, which records `running` or `lost`. So `upgrade plan` and
+the restore preview stay read-only. Restore precondition 5 uses the same
 check.
 
 Any other result refuses with `checkpoint.not_quiescent` and names each

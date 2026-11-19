@@ -31,6 +31,8 @@ const (
 	ManifestFile = "manifest.json"
 	// privateDataReason says why a checkpoint is private data.
 	privateDataReason = "the snapshot holds issue and specification text"
+	// privateFileMode is the only file mode of a checkpoint file (ADR 0032).
+	privateFileMode = "0600"
 )
 
 // Verification refusal codes. Restore reports them unchanged.
@@ -185,15 +187,45 @@ func Verify(ctx context.Context, directory string) (Manifest, error) {
 	return manifest, nil
 }
 
-// readManifest reads and strictly decodes manifest.json.
+// readManifest reads and strictly decodes manifest.json, then checks the
+// fields that schema 1 requires.
 func readManifest(directory string) (Manifest, error) {
-	content, err := os.ReadFile(filepath.Join(directory, ManifestFile))
+	path := filepath.Join(directory, ManifestFile)
+	content, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Manifest{}, &VerificationError{Code: CodeIncomplete, Detail: "the checkpoint has no " + ManifestFile}
 	}
 	if err != nil {
 		return Manifest{}, fmt.Errorf("read checkpoint manifest: %w", err)
 	}
+	if err := verifyManifestMode(path); err != nil {
+		return Manifest{}, err
+	}
+	manifest, err := decodeManifest(content)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err := verifyManifestFields(manifest); err != nil {
+		return Manifest{}, err
+	}
+	return manifest, nil
+}
+
+// verifyManifestMode refuses a manifest that is not a regular file with the
+// private mode of ADR 0032.
+func verifyManifestMode(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("inspect checkpoint manifest: %w", err)
+	}
+	if !info.Mode().IsRegular() || fmt.Sprintf("%04o", info.Mode().Perm()) != privateFileMode {
+		return &VerificationError{Code: CodeCorrupt, Detail: "the manifest is not a regular file with mode " + privateFileMode}
+	}
+	return nil
+}
+
+// decodeManifest strictly decodes the manifest of schema 1.
+func decodeManifest(content []byte) (Manifest, error) {
 	var version struct {
 		SchemaVersion int `json:"schema_version"`
 	}
@@ -206,13 +238,25 @@ func readManifest(directory string) (Manifest, error) {
 	if err := decoder.Decode(&manifest); err != nil {
 		return Manifest{}, &VerificationError{Code: CodeCorrupt, Detail: "the manifest does not decode: " + err.Error()}
 	}
+	return manifest, nil
+}
+
+// verifyManifestFields refuses a decoded manifest whose kind, store entry,
+// registration identity, or private-data marking does not match schema 1.
+func verifyManifestFields(manifest Manifest) error {
 	if manifest.Kind != Kind {
-		return Manifest{}, &VerificationError{Code: CodeCorrupt, Detail: "the manifest kind is not " + Kind}
+		return &VerificationError{Code: CodeCorrupt, Detail: "the manifest kind is not " + Kind}
 	}
 	if !slices.ContainsFunc(manifest.Files, func(file File) bool { return file.Path == StoreFile }) {
-		return Manifest{}, &VerificationError{Code: CodeCorrupt, Detail: "the manifest does not list " + StoreFile}
+		return &VerificationError{Code: CodeCorrupt, Detail: "the manifest does not list " + StoreFile}
 	}
-	return manifest, nil
+	if manifest.RegistrationIdentity == "" {
+		return &VerificationError{Code: CodeCorrupt, Detail: "the manifest has no registration_identity"}
+	}
+	if !manifest.PrivateData.Private {
+		return &VerificationError{Code: CodeCorrupt, Detail: "the manifest does not mark the checkpoint as private data"}
+	}
+	return nil
 }
 
 // verifyFileSet refuses a missing listed file and any file that the
@@ -244,15 +288,16 @@ func verifyFileSet(directory string, manifest Manifest) error {
 	return nil
 }
 
-// verifyFile compares one file with its manifest entry.
+// verifyFile compares one file with its manifest entry. A checkpoint file
+// must be private whatever mode the manifest lists.
 func verifyFile(directory string, file File) error {
 	path := filepath.Join(directory, file.Path)
 	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("inspect checkpoint file %s: %w", file.Path, err)
 	}
-	if !info.Mode().IsRegular() || fmt.Sprintf("%04o", info.Mode().Perm()) != file.Mode {
-		return &VerificationError{Code: CodeCorrupt, Detail: fmt.Sprintf("%s is not a regular file with mode %s", file.Path, file.Mode)}
+	if file.Mode != privateFileMode || !info.Mode().IsRegular() || fmt.Sprintf("%04o", info.Mode().Perm()) != privateFileMode {
+		return &VerificationError{Code: CodeCorrupt, Detail: fmt.Sprintf("%s is not a regular file with mode %s", file.Path, privateFileMode)}
 	}
 	size, digest, err := store.FileDigest(path)
 	if err != nil {

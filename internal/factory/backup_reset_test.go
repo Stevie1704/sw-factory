@@ -12,13 +12,18 @@ import (
 
 // TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase
 // verifies that a reset removes each backup of its own database together with
-// the provenance file, and leaves a backup of another database untouched.
+// the provenance file, and leaves a backup of another database untouched. The
+// sibling database "factory.db.bak-secondary" and its own backups share the
+// prefix "factory.db.bak-" but belong to another database, so they must survive.
 func TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase(t *testing.T) {
 	fixture := newHeadlessRemovalFixture(t, "codex")
 	backup := fixture.databasePath + ".bak-20260101T000000.000000000Z"
 	provenance := backup + ".json"
 	other := filepath.Join(filepath.Dir(fixture.databasePath), "other.db.bak-20260101T000000.000000000Z")
-	for _, path := range []string{backup, provenance, other} {
+	sibling := fixture.databasePath + ".bak-secondary"
+	siblingBackup := sibling + ".bak-20260101T000000.000000000Z"
+	siblingProvenance := siblingBackup + ".json"
+	for _, path := range []string{backup, provenance, other, sibling, siblingBackup, siblingProvenance} {
 		if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -42,8 +47,10 @@ func TestResetRemovesPreMigrationBackupsAndTheirProvenanceOfTheExactDatabase(t *
 			t.Fatalf("backup file %q error = %v, want removed", path, err)
 		}
 	}
-	if _, err := os.Stat(other); err != nil {
-		t.Fatalf("backup of another database error = %v, want kept", err)
+	for _, path := range []string{other, sibling, siblingBackup, siblingProvenance} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("file of another database %q error = %v, want kept", path, err)
+		}
 	}
 }
 
