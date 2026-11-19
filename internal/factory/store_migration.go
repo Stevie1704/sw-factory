@@ -27,7 +27,8 @@ type StoreMigrationResult struct {
 // passes the migration gate and its schema is supported. The gate includes
 // the worker-activity check through workers, so no harness process of the
 // old release still runs. Only then does it back up and migrate the store in
-// one transaction.
+// one transaction. The backup checks the store part of the gate again under
+// the write lock; work that entered after the first check becomes a refusal.
 func MigrateStore(ctx context.Context, registration config.RepositoryRegistration, workers WorkerProbe) (StoreMigrationResult, error) {
 	lock, err := acquireCoordinatorLock(coordinatorLockPath(registration), LockHolderStoreMigration)
 	if errors.Is(err, ErrCoordinatorAlreadyRunning) {
@@ -57,7 +58,14 @@ func MigrateStore(ctx context.Context, registration config.RepositoryRegistratio
 	}
 	identity := version.Current()
 	release := store.ReleaseIdentity{Version: identity.Version, Revision: identity.Revision}
-	if result.Migration, err = store.Migrate(ctx, path, release); err != nil {
+	result.Migration, err = store.Migrate(ctx, path, release)
+	var gateErr *store.MigrationGateError
+	if errors.As(err, &gateErr) {
+		// Work entered the store after the gate above passed; the backup
+		// found it under the write lock and nothing migrated.
+		return StoreMigrationResult{RolledBack: result.RolledBack, Refusals: gateErr.Findings}, nil
+	}
+	if err != nil {
 		return StoreMigrationResult{}, err
 	}
 	return result, nil

@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -73,7 +75,7 @@ func TestPreMigrationBackupWaitsForAnUncommittedWriter(t *testing.T) {
 	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.ExecContext(ctx, "INSERT INTO operational_runs (id, status) VALUES ('run-open', 'active')"); err != nil {
+	if _, err := conn.ExecContext(ctx, "INSERT INTO operational_runs (id, status) VALUES ('run-open', 'complete')"); err != nil {
 		t.Fatal(err)
 	}
 	commitErr := make(chan error, 1)
@@ -140,6 +142,25 @@ func TestPreMigrationBackupWritesProvenanceBesideTheSnapshot(t *testing.T) {
 	}
 	if provenance.SHA256 != hex.EncodeToString(digest[:]) || provenance.Size != int64(len(backupBytes)) {
 		t.Fatalf("provenance digest = %s/%d, want %x/%d", provenance.SHA256, provenance.Size, digest, len(backupBytes))
+	}
+}
+
+// TestPreMigrationBackupRechecksTheMigrationGateUnderTheWriteLock verifies
+// that work which entered the store after the migration gate passed, such as
+// a queued session command, ends the backup with the gate findings before any
+// backup file exists.
+func TestPreMigrationBackupRechecksTheMigrationGateUnderTheWriteLock(t *testing.T) {
+	t.Parallel()
+	path := storeFixture(t, store.CurrentSchemaVersion-1, "INSERT INTO ideation_commands (state) VALUES ('queued')")
+
+	_, err := store.BackupDatabaseForTest(path, migratingReleaseForTest)
+	var gateErr *store.MigrationGateError
+	if !errors.As(err, &gateErr) || len(gateErr.Findings) != 1 || gateErr.Findings[0].Code != "session_command.queued" {
+		t.Fatalf("BackupDatabaseForTest() error = %v, want a migration gate error with session_command.queued", err)
+	}
+	matches, globErr := filepath.Glob(path + ".bak-*")
+	if globErr != nil || len(matches) != 0 {
+		t.Fatalf("backup files = %v, %v; want none", matches, globErr)
 	}
 }
 

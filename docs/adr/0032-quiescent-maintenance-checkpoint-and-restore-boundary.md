@@ -113,6 +113,9 @@ journal mode.
 Copying the database file is not supported, also not after closing the
 connection, because another process can write between the close and the copy.
 The pre-migration backup uses the same online sequence (follow-up D, #321).
+Its check on connection A is the store part of the migration gate. Work that
+entered the store after the earlier gate check refuses the backup with the
+gate findings, and nothing migrates.
 
 **Full quiescence** means all of these are true on connection A:
 

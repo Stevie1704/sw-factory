@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,11 +27,44 @@ type backupProvenance struct {
 	Size                int64           `json:"size"`
 }
 
+// MigrationGateError reports that the store did not pass the migration gate
+// when the pre-migration backup checked it again under the write lock. Work
+// entered the store after the earlier gate check, so nothing was backed up or
+// migrated.
+type MigrationGateError struct {
+	// Findings are the migration gate findings under the write lock.
+	Findings []UpgradeFinding
+}
+
+// Error lists the codes of the findings.
+func (e *MigrationGateError) Error() string {
+	codes := make([]string, 0, len(e.Findings))
+	for _, finding := range e.Findings {
+		codes = append(codes, finding.Code)
+	}
+	return "the operational store no longer passes the migration gate: " + strings.Join(codes, ", ")
+}
+
+// migrationGateCheck is the SnapshotCheck of the pre-migration backup. It
+// reads the store facts of the migration gate on the connection that holds the
+// write lock, so no writer can add work between this check and the snapshot.
+func migrationGateCheck(ctx context.Context, view Querier) error {
+	var inspection UpgradeInspection
+	if err := readActiveWork(ctx, view, &inspection); err != nil {
+		return err
+	}
+	if findings := inspection.ActivityFindings(); len(findings) != 0 {
+		return &MigrationGateError{Findings: findings}
+	}
+	return nil
+}
+
 // backupDatabase takes the pre-migration backup of the store at path and
-// returns the backup path. The backup is an online snapshot with no quiescence
-// check, so it uses the same sequence as Snapshot and never copies the live
-// file. It then writes the provenance file beside it. On any failure, neither
-// file remains.
+// returns the backup path. The backup is an online snapshot that checks the
+// store facts of the migration gate again under the write lock, so it uses
+// the same sequence as Snapshot and never copies the live file. A failed
+// check returns *MigrationGateError. It then writes the provenance file
+// beside it. On any failure, neither file remains.
 func backupDatabase(ctx context.Context, path string, release ReleaseIdentity) (string, error) {
 	for attempt := 0; attempt < 100; attempt++ {
 		backupPath := path + ".bak-" + backupTimestamp(attempt)
@@ -41,7 +75,7 @@ func backupDatabase(ctx context.Context, path string, release ReleaseIdentity) (
 		if !free {
 			continue
 		}
-		inspection, err := snapshot(ctx, path, backupPath, nil, true, vacuumOnConnection)
+		inspection, err := snapshot(ctx, path, backupPath, migrationGateCheck, true, vacuumOnConnection)
 		if err != nil {
 			return "", fmt.Errorf("back up the operational store before migration: %w", err)
 		}
