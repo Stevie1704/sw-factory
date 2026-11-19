@@ -12,6 +12,7 @@ import (
 
 	"github.com/Stevie1704/sw-factory/internal/config"
 	"github.com/Stevie1704/sw-factory/internal/factory"
+	"github.com/Stevie1704/sw-factory/internal/harness"
 	"github.com/Stevie1704/sw-factory/internal/store"
 	"github.com/Stevie1704/sw-factory/internal/tracker"
 	"github.com/Stevie1704/sw-factory/internal/workflow"
@@ -60,6 +61,57 @@ func TestFailedLaunchClosesTheInvocationAfterTheWorkerStops(t *testing.T) {
 	}
 	if failed.Status != store.InvocationStatusSuperseded || !failed.LaunchVoided || fixture.worker.stops == 0 {
 		t.Fatalf("failed invocation = %s voided=%t, worker stops = %d; want a voided superseded launch with its worker stopped", failed.Status, failed.LaunchVoided, fixture.worker.stops)
+	}
+}
+
+// TestSessionDiscoveryTimeoutKeepsTheInvocationActiveWhenTheWorkerStopFails
+// verifies that a launch whose native-session discovery timed out does not
+// mark the invocation terminal before its worker stop is proven.
+func TestSessionDiscoveryTimeoutKeepsTheInvocationActiveWhenTheWorkerStopFails(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	fixture.harness.startErr = harness.NewUnexpectedExitError("codex")
+	fixture.worker.stopErr = errors.New("docker daemon unavailable")
+
+	_, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
+	})
+	if err == nil || !strings.Contains(err.Error(), "docker daemon unavailable") {
+		t.Fatalf("StartAgent() error = %v, want the named worker stop failure", err)
+	}
+	failed, err := fixture.runStore.LatestInvocation(context.Background(), run.ID)
+	if err != nil || failed == nil {
+		t.Fatalf("read failed invocation = %#v, %v", failed, err)
+	}
+	if failed.Status != store.InvocationStatusActive {
+		t.Fatalf("failed invocation status = %q, want active until the worker stop is proven", failed.Status)
+	}
+}
+
+// TestSessionDiscoveryTimeoutStopsTheIsolatedReviewWorker verifies that a
+// timed-out isolated review stops its own worker before the invocation
+// becomes superseded.
+func TestSessionDiscoveryTimeoutStopsTheIsolatedReviewWorker(t *testing.T) {
+	fixture := newReviewFixture(t)
+	run := *fixture.runStore.current
+	fixture.harness.startErr = harness.NewUnexpectedExitError("codex")
+
+	if _, err := fixture.service.StartAgent(context.Background(), factory.AgentRequest{
+		RunID: run.ID, Role: workflow.RoleSpecificationReview, Stage: store.StageReview,
+	}); err == nil {
+		t.Fatal("StartAgent() error = nil, want the launch failure")
+	}
+	failed, err := fixture.runStore.LatestInvocation(context.Background(), run.ID)
+	if err != nil || failed == nil {
+		t.Fatalf("read failed invocation = %#v, %v", failed, err)
+	}
+	isolatedWorker := run.ID + "-" + failed.ID
+	stopped := false
+	for _, workerID := range fixture.worker.stoppedIDs {
+		stopped = stopped || workerID == isolatedWorker
+	}
+	if failed.Status != store.InvocationStatusSuperseded || !stopped {
+		t.Fatalf("failed invocation = %s, stopped workers = %v; want superseded with worker %q stopped", failed.Status, fixture.worker.stoppedIDs, isolatedWorker)
 	}
 }
 
