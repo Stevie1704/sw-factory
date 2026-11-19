@@ -192,7 +192,8 @@ private to the operator (no group or other permissions), and it must not lie
 inside the registered checkout or the store directory. The command holds the
 repository lock for its whole duration, takes the snapshot while it holds the
 SQLite write lock, and reads the state of every branch, pull request, issue,
-and status comment that the store knows. The checkpoint directory has mode
+and status comment that the store knows, from its runs and from its
+publication ledger. The checkpoint directory has mode
 `0700` and holds `store.db` and `manifest.json`, each with mode `0600`. The
 manifest records the checksums, the release, the registration identity, and
 that external state. It holds no credential and no credential path, but it

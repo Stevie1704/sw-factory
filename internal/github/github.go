@@ -239,6 +239,19 @@ func (c *GhClient) FindPullRequest(ctx context.Context, repository tracker.Repos
 	return codehost.PullRequest{}, nil
 }
 
+// PullRequest reads one pull request by its number, in any state and
+// whatever its base branch is.
+func (c *GhClient) PullRequest(ctx context.Context, repository tracker.Repository, number int) (codehost.PullRequest, error) {
+	if number <= 0 {
+		return codehost.PullRequest{}, errors.New("pull request number must be positive")
+	}
+	var response pullRequestResponse
+	if err := c.callJSON(ctx, []string{"api", fmt.Sprintf("repos/%s/pulls/%d", repository.String(), number)}, nil, &response); err != nil {
+		return codehost.PullRequest{}, fmt.Errorf("read pull request #%d: %w", number, err)
+	}
+	return response.pullRequest(), nil
+}
+
 // FindPullRequestCandidates returns all matching PRs in every state.
 func (c *GhClient) FindPullRequestCandidates(ctx context.Context, repository tracker.Repository, headBranch, baseBranch string) ([]codehost.PullRequest, error) {
 	if err := validatePullRequestBranches(headBranch, baseBranch); err != nil {

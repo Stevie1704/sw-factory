@@ -307,3 +307,19 @@ func TestFindPullRequestReadsOnlyTheFirstExactMatch(t *testing.T) {
 		t.Fatalf("FindPullRequest() read %d later matches, want none", len(calls))
 	}
 }
+
+// TestPullRequestReadsOneNumberWithoutABranchSearch verifies that a
+// checkpoint reads a known pull request by its number only.
+func TestPullRequestReadsOneNumberWithoutABranchSearch(t *testing.T) {
+	t.Parallel()
+
+	az := newFakeAz(t).on("GET "+repositoryPath+"/pullrequests/17", activePullRequest)
+
+	pullRequest, err := newClient(az).PullRequest(context.Background(), repository, 17)
+	if err != nil || pullRequest.Number != 17 {
+		t.Fatalf("PullRequest() = %#v/%v, want pull request 17", pullRequest, err)
+	}
+	if calls := az.called("GET " + repositoryPath + "/pullrequests"); len(calls) != 0 {
+		t.Fatalf("PullRequest() searched the branch pair %d times, want none", len(calls))
+	}
+}

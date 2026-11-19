@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // Watermark is the extent of one kind of record in a store: how many exist
@@ -89,4 +91,85 @@ func ReadKnownRuns(ctx context.Context, view Querier) ([]KnownRun, error) {
 		return nil, fmt.Errorf("read known runs: %w", err)
 	}
 	return runs, nil
+}
+
+// KnownPublication names the external objects that one publication ledger
+// operation records: the tracker issue of a created item, or the branch and
+// the pull request of an atomic Git batch. A zero or empty field means the
+// operation does not identify that object. A publication can record them
+// before any run exists.
+type KnownPublication struct {
+	SessionID         string
+	ApprovalID        string
+	OperationID       string
+	IssueNumber       int
+	Branch            string
+	PullRequestNumber int
+}
+
+// gitBatchEvidence is the part of a Git batch ledger detail that names
+// external objects. The publication package writes the detail.
+type gitBatchEvidence struct {
+	Evidence struct {
+		Branch            string `json:"branch"`
+		PullRequestNumber int    `json:"pull_request_number"`
+	} `json:"evidence"`
+}
+
+// ReadKnownPublications lists, in ledger order, each publication ledger
+// operation that identifies an external object. A recorded identity that it
+// cannot interpret is an error, never an omission, so a checkpoint cannot
+// miss an object.
+func ReadKnownPublications(ctx context.Context, view Querier) ([]KnownPublication, error) {
+	rows, err := view.QueryContext(ctx, "SELECT session_id, approval_id, id, kind, external_id, detail FROM ideation_publication_operations WHERE kind IN (?, ?) ORDER BY session_id, approval_id, sequence",
+		PublicationOperationCreateItem, PublicationOperationGitBatch)
+	if err != nil {
+		return nil, fmt.Errorf("read known publications: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var publications []KnownPublication
+	for rows.Next() {
+		var publication KnownPublication
+		var kind PublicationOperationKind
+		var externalID, detail string
+		if err := rows.Scan(&publication.SessionID, &publication.ApprovalID, &publication.OperationID, &kind, &externalID, &detail); err != nil {
+			return nil, fmt.Errorf("read known publications: %w", err)
+		}
+		if err := publication.identify(kind, externalID, detail); err != nil {
+			return nil, err
+		}
+		if publication.IssueNumber != 0 || publication.Branch != "" || publication.PullRequestNumber != 0 {
+			publications = append(publications, publication)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read known publications: %w", err)
+	}
+	return publications, nil
+}
+
+// identify fills the external objects of one ledger operation: the issue
+// number of a created item, or the branch and pull request of a Git batch.
+func (p *KnownPublication) identify(kind PublicationOperationKind, externalID, detail string) error {
+	if kind == PublicationOperationCreateItem {
+		if externalID == "" {
+			return nil
+		}
+		number, err := strconv.Atoi(externalID)
+		if err != nil || number <= 0 {
+			return fmt.Errorf("publication operation %s records the item %q, which is not an issue number", p.OperationID, externalID)
+		}
+		p.IssueNumber = number
+		return nil
+	}
+	if detail == "" {
+		return nil
+	}
+	var evidence gitBatchEvidence
+	if err := json.Unmarshal([]byte(detail), &evidence); err != nil {
+		return fmt.Errorf("publication operation %s has unreadable Git batch evidence: %w", p.OperationID, err)
+	}
+	p.Branch = evidence.Evidence.Branch
+	p.PullRequestNumber = evidence.Evidence.PullRequestNumber
+	return nil
 }

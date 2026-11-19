@@ -3042,7 +3042,7 @@ func configure(ctx context.Context, database *sql.DB) error {
 
 // readSchemaVersion reads the schema version recorded in the database metadata.
 // It returns an UnversionedDatabaseError if the metadata cannot be read.
-func readSchemaVersion(ctx context.Context, database *sql.DB, path string) (int, error) {
+func readSchemaVersion(ctx context.Context, database Querier, path string) (int, error) {
 	var version int
 	if err := database.QueryRowContext(ctx, "SELECT version FROM schema_metadata WHERE singleton = 1").Scan(&version); err != nil {
 		return 0, &UnversionedDatabaseError{Path: path, Err: err}
