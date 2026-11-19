@@ -20,9 +20,9 @@ type idleWorkers struct{}
 // RunningWorkers reports no running worker.
 func (idleWorkers) RunningWorkers(context.Context, []string) ([]string, error) { return nil, nil }
 
-// InspectHeadless reports no helper state.
-func (idleWorkers) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
-	return worker.HeadlessInspection{Status: worker.HeadlessStatusMissing}, nil
+// ObserveHeadless reports no helper state.
+func (idleWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusMissing, nil
 }
 
 // liveWorkers is a Docker view in which every asked worker runs a live
@@ -34,9 +34,9 @@ func (w liveWorkers) RunningWorkers(_ context.Context, workerIDs []string) ([]st
 	return workerIDs, w.err
 }
 
-// InspectHeadless reports a running helper.
-func (liveWorkers) InspectHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessInspection, error) {
-	return worker.HeadlessInspection{Status: worker.HeadlessStatusRunning}, nil
+// ObserveHeadless reports a running helper.
+func (liveWorkers) ObserveHeadless(context.Context, worker.HeadlessRequest) (worker.HeadlessStatus, error) {
+	return worker.HeadlessStatusRunning, nil
 }
 
 // migrationRegistration returns a registration whose current store holds

@@ -38,17 +38,17 @@ func (p *workerProbeForTest) RunningWorkers(_ context.Context, workerIDs []strin
 	return found, nil
 }
 
-// InspectHeadless returns the helper state of one invocation.
-func (p *workerProbeForTest) InspectHeadless(_ context.Context, request worker.HeadlessRequest) (worker.HeadlessInspection, error) {
+// ObserveHeadless returns the helper status of one invocation.
+func (p *workerProbeForTest) ObserveHeadless(_ context.Context, request worker.HeadlessRequest) (worker.HeadlessStatus, error) {
 	p.inspected = append(p.inspected, request)
 	if p.inspectErr != nil {
-		return worker.HeadlessInspection{}, p.inspectErr
+		return "", p.inspectErr
 	}
 	status, found := p.helpers[request.InvocationID]
 	if !found {
 		status = worker.HeadlessStatusMissing
 	}
-	return worker.HeadlessInspection{Status: status}, nil
+	return status, nil
 }
 
 // storeProcessesForTest are the processes of one store: an implementation

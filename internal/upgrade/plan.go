@@ -446,7 +446,7 @@ func (p planner) operations() []Operation {
 	o := p.observation
 	smokeCommand, paidCalls := p.smokeCalls()
 	return []Operation{
-		{ID: OperationPassMigrationGate, State: provedState(p.gatePassed() || p.laterOperationsDone()), Effect: doctor.EffectLocalMutation,
+		{ID: OperationPassMigrationGate, State: provedState(p.migrationGateDone()), Effect: doctor.EffectLocalMutation,
 			Description:     "finish or cancel every active run with the binary that claimed it, then stop the foreground coordinator with Ctrl-C or factory stop " + p.configFlag(),
 			ExpectedEffects: []string{"no coordinator holds the repository lock", "no run, invocation, or pending effect is active"}},
 		{ID: OperationInstallBinary, State: provedState(p.proved[OperationInstallBinary]), Effect: doctor.EffectLocalMutation,
@@ -492,6 +492,24 @@ func (p planner) operations() []Operation {
 func (p planner) laterOperationsDone() bool {
 	for _, proved := range p.proved {
 		if !proved {
+			return false
+		}
+	}
+	return true
+}
+
+// migrationGateDone reports whether evidence proves the migration gate
+// operation: the gate holds now, or the later operations are done and no
+// activity that blocks remains.
+func (p planner) migrationGateDone() bool {
+	if p.gatePassed() {
+		return true
+	}
+	if !p.laterOperationsDone() {
+		return false
+	}
+	for _, activity := range p.activityBlockers() {
+		if !p.activityTolerated(activity.Code) {
 			return false
 		}
 	}
