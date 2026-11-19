@@ -27,8 +27,9 @@ type WorkerProbe interface {
 	// RunningWorkers returns the worker IDs among workerIDs whose container
 	// runs.
 	RunningWorkers(ctx context.Context, workerIDs []string) ([]string, error)
-	// InspectHeadless reads the helper state of one process.
-	InspectHeadless(ctx context.Context, request worker.HeadlessRequest) (worker.HeadlessInspection, error)
+	// ObserveHeadless reads the helper status of one process and writes
+	// nothing, so the read-only commands stay read-only.
+	ObserveHeadless(ctx context.Context, request worker.HeadlessRequest) (worker.HeadlessStatus, error)
 }
 
 // WorkerActivityFindings reports whether a harness process of this store
@@ -69,11 +70,11 @@ func WorkerActivityFindings(ctx context.Context, processes []store.WorkerProcess
 		if !runningWorker[request.WorkerID] {
 			continue
 		}
-		inspection, err := probe.InspectHeadless(ctx, request)
+		status, err := probe.ObserveHeadless(ctx, request)
 		switch {
 		case err != nil:
 			unobserved = append(unobserved, request.WorkerID+" ("+err.Error()+")")
-		case inspection.Status == worker.HeadlessStatusStarting || inspection.Status == worker.HeadlessStatusRunning:
+		case status == worker.HeadlessStatusStarting || status == worker.HeadlessStatusRunning:
 			active = append(active, request.WorkerID+" runs "+request.InvocationID)
 		}
 	}
@@ -88,13 +89,14 @@ func WorkerActivityFindings(ctx context.Context, processes []store.WorkerProcess
 }
 
 // headlessRequestForProcess selects the worker and the helper state of one
-// process, as the coordinator selected them at launch.
+// process, as the coordinator selected them at launch. The clean policy only
+// makes the request valid; an observation runs no harness command.
 func headlessRequestForProcess(process store.WorkerProcess) worker.HeadlessRequest {
 	if process.SessionID != "" {
-		return worker.HeadlessRequest{RunID: sessionWorkerOwner(process.SessionID), WorkerID: process.WorkerID, InvocationID: process.InvocationID, Role: process.Role}
+		return worker.HeadlessRequest{RunID: sessionWorkerOwner(process.SessionID), WorkerID: process.WorkerID, InvocationID: process.InvocationID, Role: process.Role, EnvironmentPolicy: worker.EnvironmentPolicyClean}
 	}
 	invocation := store.Invocation{ID: process.InvocationID, RunID: process.RunID, Role: process.Role, Stage: store.Stage(process.Stage)}
-	return worker.HeadlessRequest{RunID: process.RunID, WorkerID: workerIDForInvocation(invocation), InvocationID: process.InvocationID, Role: process.Role}
+	return worker.HeadlessRequest{RunID: process.RunID, WorkerID: workerIDForInvocation(invocation), InvocationID: process.InvocationID, Role: process.Role, EnvironmentPolicy: worker.EnvironmentPolicyClean}
 }
 
 // DockerRuntime is the production WorkerProbe.

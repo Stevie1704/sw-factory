@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -69,6 +71,19 @@ func backupTimestamp(attempt int) string {
 		suffix += "-" + strconv.Itoa(attempt)
 	}
 	return suffix
+}
+
+// backupNameSuffix matches the part of a backup name that follows the database
+// name: ".bak-", the UTC timestamp written by backupTimestamp, an optional
+// attempt counter, and an optional provenance suffix.
+var backupNameSuffix = regexp.MustCompile(`^\.bak-\d{8}T\d{6}\.\d{9}Z(-\d+)?(\.json)?$`)
+
+// IsMigrationBackupName reports whether name is the backup, or the provenance
+// file of a backup, that backupDatabase writes for the database databaseName.
+// A sibling database whose name merely starts with databaseName is not matched.
+func IsMigrationBackupName(databaseName, name string) bool {
+	rest, found := strings.CutPrefix(name, databaseName)
+	return found && backupNameSuffix.MatchString(rest)
 }
 
 // backupPathFree reports whether neither the backup nor its provenance file

@@ -636,7 +636,10 @@ no process holds the coordinator lock, no run is non-terminal, no effect is
 pending, no invocation, session-role invocation, or session command is in
 progress, every ended session-role invocation has released its worker, and
 Docker proves that no harness process runs in a worker of this store. It
-omits publications, because a migration keeps every row.
+omits publications, because a migration keeps every row. The Docker
+condition contacts Docker only when the store records worker processes; then
+an unreachable daemon is the blocker `docker.unreachable`. Full quiescence
+uses the same rule.
 _Avoid_: Quiescence (for this narrower set), idle check
 
 **Maintenance checkpoint**:

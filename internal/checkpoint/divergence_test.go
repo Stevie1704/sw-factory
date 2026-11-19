@@ -48,7 +48,7 @@ func (f fakeOwned) FactoryLabeledIssues(context.Context) ([]checkpoint.IssueStat
 // records, and an owned listing that agrees with it.
 func recordedState(t *testing.T) (checkpoint.ExternalState, fakeOwned) {
 	t.Helper()
-	state, unread := checkpoint.ReadExternalState(context.Background(), knownExternal(), "main", []store.KnownRun{knownRun})
+	state, unread := checkpoint.ReadExternalState(context.Background(), knownExternal(), "main", []store.KnownRun{knownRun}, nil)
 	if len(unread) != 0 {
 		t.Fatal(unread)
 	}

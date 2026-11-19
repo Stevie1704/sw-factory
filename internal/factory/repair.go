@@ -629,9 +629,6 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 		}
 		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if workerStarted && !(journaled && resumeStarted) {
-			_ = s.deps.Worker.Stop(rollbackContext, workerIDForInvocation(invocation))
-		}
 		if journaled && resumeStarted {
 			// A journaled resume crossed an external boundary. Leave its active
 			// worker and invocation available for the pending state/resume
@@ -656,13 +653,7 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 			// this marker after a process interruption.
 			updated = reservedRun
 		}
-		cleanupInvocation := invocation
-		if cleanupInvocation.ID == "" {
-			cleanupInvocation = persistedInvocation
-		}
-		cleanupInvocation.Status = store.InvocationStatusCannotProceed
-		cleanupInvocation.UpdatedAt = s.deps.Now().UTC()
-		_ = invocationStore.SaveInvocation(rollbackContext, cleanupInvocation)
+		returnErr = s.closeFailedCheckRepair(rollbackContext, runStore, invocationStore, invocation, persistedInvocation, workerStarted, returnErr)
 	}()
 	if err := invocationStore.SaveInvocation(ctx, invocation); err != nil {
 		return store.Invocation{}, run, fmt.Errorf("persist check-repair invocation: %w", err)
@@ -757,4 +748,26 @@ func (s *Service) startCheckRepair(ctx context.Context, registration config.Repo
 	}
 	updated = completedRun
 	return invocation, updated, nil
+}
+
+// closeFailedCheckRepair closes a failed check-repair launch through the
+// journaled launch rollback. The invocation becomes cannot_proceed only after
+// its worker stopped. If the stop fails, the invocation stays active, the
+// rollback stays journaled for reconciliation, and the returned error names
+// the stop failure.
+func (s *Service) closeFailedCheckRepair(ctx context.Context, runStore RunStore, invocationStore InvocationStore, invocation, persisted store.Invocation, workerStarted bool, original error) error {
+	terminal := invocation
+	if terminal.ID == "" {
+		terminal = persisted
+	}
+	terminal.Status = store.InvocationStatusCannotProceed
+	terminal.UpdatedAt = s.deps.Now().UTC()
+	workerID := ""
+	if workerStarted {
+		workerID = workerIDForInvocation(terminal)
+	}
+	if err := s.lifecycleModule().closeFailedLaunch(ctx, runStore, invocationStore, terminal, workerID); err != nil {
+		return fmt.Errorf("%w; invocation %q kept active until its worker stops: %w", original, terminal.ID, err)
+	}
+	return original
 }

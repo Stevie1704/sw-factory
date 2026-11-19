@@ -44,7 +44,7 @@ func (f cliExternal) Issue(_ context.Context, number int) (checkpoint.IssueState
 }
 
 // StatusComment is never needed by the fixture run.
-func (f cliExternal) StatusComment(context.Context, int, string) (checkpoint.StatusCommentState, error) {
+func (f cliExternal) StatusComment(context.Context, int, string, string) (checkpoint.StatusCommentState, error) {
 	return checkpoint.StatusCommentState{}, errors.New("no status comment")
 }
 
@@ -164,6 +164,25 @@ func TestCheckpointInspectVerifiesAValidCheckpoint(t *testing.T) {
 	manifest, err := checkpoint.Verify(context.Background(), directory)
 	if err != nil || document.Checkpoint.Manifest.CheckpointID != manifest.CheckpointID {
 		t.Fatalf("manifest = %+v, %v; want the verified manifest", document.Checkpoint, err)
+	}
+}
+
+// TestCheckpointInspectNeedsNoHostConfig verifies that inspection runs when
+// neither HOME nor FACTORY_CONFIG resolves a host configuration path.
+func TestCheckpointInspectNeedsNoHostConfig(t *testing.T) {
+	directory := createdCheckpoint(t)
+	for _, name := range []string{"HOME", "FACTORY_CONFIG"} {
+		t.Setenv(name, "")
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var document checkpointInspectDocument
+	code := runCheckpointCommand(t, &document, "inspect", "--path", directory, "--json")
+
+	if code != 0 || document.Outcome != "verified" || !document.Verified {
+		t.Fatalf("checkpoint inspect without host config = exit %d, %+v; want verified", code, document)
 	}
 }
 

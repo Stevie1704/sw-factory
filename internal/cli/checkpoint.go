@@ -92,19 +92,25 @@ var checkpointWorkersForCLI = func() factory.WorkerProbe { return worker.NewDock
 // worker container for a restore over a live store that does not open.
 var checkpointContainersForCLI = func() factory.WorkerContainerLister { return worker.NewDockerRuntime() }
 
-// runCheckpoint dispatches the checkpoint subcommands.
-func runCheckpoint(ctx context.Context, args []string, defaultConfigPath string, output, errorsOutput io.Writer) int {
-	if len(args) > 0 && args[0] == "create" {
-		return runCheckpointCreate(ctx, args[1:], defaultConfigPath, output, errorsOutput)
-	}
+// runCheckpoint dispatches the checkpoint subcommands. Inspect needs no host
+// configuration, so only create and restore resolve the default path.
+func runCheckpoint(ctx context.Context, args []string, _ string, output, errorsOutput io.Writer) int {
 	if len(args) > 0 && args[0] == "inspect" {
 		return runCheckpointInspect(ctx, args[1:], output, errorsOutput)
 	}
-	if len(args) > 0 && args[0] == "restore" {
-		return runCheckpointRestore(ctx, args[1:], defaultConfigPath, output, errorsOutput)
+	if len(args) == 0 || (args[0] != "create" && args[0] != "restore") {
+		writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create, inspect, or restore; read factory guide maintenance"))
+		return 2
 	}
-	writeError(errorsOutput, errors.New("checkpoint needs a subcommand: create, inspect, or restore; read factory guide maintenance"))
-	return 2
+	defaultConfigPath, err := config.DefaultHostConfigPath()
+	if err != nil {
+		writeError(errorsOutput, err)
+		return 1
+	}
+	if args[0] == "create" {
+		return runCheckpointCreate(ctx, args[1:], defaultConfigPath, output, errorsOutput)
+	}
+	return runCheckpointRestore(ctx, args[1:], defaultConfigPath, output, errorsOutput)
 }
 
 // runCheckpointInspect verifies one checkpoint directory and writes its

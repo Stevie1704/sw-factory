@@ -90,7 +90,7 @@ func (c *comparison) compareKnown(ctx context.Context, reader ExternalReader, re
 	}
 	for _, comment := range recorded.StatusComments {
 		object := "status comment " + comment.ID
-		if now, err := reader.StatusComment(ctx, comment.IssueNumber, comment.RunID); err != nil {
+		if now, err := reader.StatusComment(ctx, comment.IssueNumber, comment.RunID, comment.ID); err != nil {
 			c.unverified(object, err.Error())
 		} else if now.ID != comment.ID || !now.UpdatedAt.Equal(comment.UpdatedAt) {
 			c.diverged(object, fmt.Sprintf("updated at %s; the checkpoint records %s", now.UpdatedAt, comment.UpdatedAt))
