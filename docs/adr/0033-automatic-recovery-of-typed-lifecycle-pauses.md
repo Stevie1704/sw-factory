@@ -10,11 +10,12 @@ The polling supervisor now recovers such a pause without a human command, but on
 
 - the lifecycle reason is on an explicit allow-list (today: `harness authentication expired`), and the run has no open clarification question;
 - the recovery sources agree;
-- every discrepancy belongs to the process-exit family: a recoverable `worker.existence`, `worker.lifecycle`, `harness.lifecycle`, or `native session.identity`, and any classified headless failure is the same credential expiry;
+- every discrepancy belongs to the process-exit family: a recoverable `worker.existence`, `worker.lifecycle`, `harness.lifecycle`, or `native session.identity`;
+- a classified headless failure, if any, is the same credential expiry;
 - no pending effect is journaled;
 - the blocker has cleared outside the coordinator: the registered host credential source was modified after the pause.
 
-Before the attempt crosses the native boundary, the coordinator records `automatic recovery attempted after host credential change` in the pause reason and moves the run's update time to the observed credential change or later. One credential change therefore admits at most one attempt, also after a crash or with a clock that is behind the file. The attempt uses the `factory auth refresh --resume` path: it projects the host credential and resumes the exact recorded native session. It does not change the workflow retry budget, as a manual `factory resume` does not. On success, the published lifecycle reason starts with `automatic recovery:` and names the reason that admitted it. On failure, the run stays paused, and the manual commands stay available.
+Before the attempt crosses the native boundary, the coordinator records `automatic recovery attempted after host credential change` in the pause reason and moves the run's update time to the observed credential change or later. One credential change therefore admits at most one attempt, also after a crash or with a clock that is behind the file. The attempt uses the `factory auth refresh --resume` path: it projects the host credential and resumes the exact recorded native session. It does not change the workflow retry budget, as a manual `factory resume` does not. On success, the published lifecycle reason starts with `automatic recovery:` and names the reason that admitted it. On failure, the run stays paused, its workers stop, and the status comment states that the attempt failed and why. The manual commands stay available. The poll loop continues.
 
 Anything outside the conjunction keeps the human gate unchanged.
 

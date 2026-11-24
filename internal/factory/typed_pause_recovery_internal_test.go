@@ -125,6 +125,9 @@ func TestPollAttemptsAutomaticRecoveryOncePerCredentialChange(t *testing.T) {
 	if run.Status != store.StatusWaitingForHuman || !strings.HasPrefix(run.LifecycleReason, LifecycleReasonHarnessAuthenticationExpired) || !strings.Contains(run.LifecycleReason, "automatic recovery attempted") {
 		t.Fatalf("run = %s (%q), want the authentication pause with the attempt recorded", run.Status, run.LifecycleReason)
 	}
+	if !strings.Contains(fixture.github.comment.Body, "automatic recovery attempted") || !strings.Contains(fixture.github.comment.Body, "failed") {
+		t.Fatalf("status comment does not record the failed automatic attempt:\n%s", fixture.github.comment.Body)
+	}
 }
 
 // TestTypedPauseRecoveryAdmissionKeepsTheHumanGateOutsideTheConjunction

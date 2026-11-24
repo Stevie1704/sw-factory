@@ -132,11 +132,47 @@ func (s *Service) autoRecoverTypedPause(ctx context.Context, registration config
 		Registration: registration, RunStore: runStore, Run: &attempted,
 		ResumeReason: automaticRecoveryReason(admitted, active.Harness),
 	}, AuthRefreshRequest{Resume: true, ExpectedInvocationID: active.ID})
-	if resumeErr == nil && result.Resumed && result.Invocation.ID != "" {
+	if resumeErr != nil {
+		return s.publishFailedAutomaticRecovery(ctx, registration, runStore, run.ID, resumeErr)
+	}
+	if result.Resumed && result.Invocation.ID != "" {
 		s.markInvocationStarted(result.Invocation.ID)
 	}
-	// A failed attempt has already re-paused the run or left it paused with
-	// the attempt recorded; the human gate and its manual commands remain.
+	return nil
+}
+
+// publishFailedAutomaticRecovery keeps the human gate after a failed attempt
+// and makes the failure visible in the status comment. A failure that already
+// moved the run to another pause has published that pause, so only a run that
+// still carries the attempt marker is updated. The poll loop continues; the
+// manual commands remain the way forward.
+func (s *Service) publishFailedAutomaticRecovery(ctx context.Context, registration config.RepositoryRegistration, runStore RunStore, runID string, cause error) error {
+	current, err := runStore.CurrentRun(ctx)
+	if err != nil {
+		return fmt.Errorf("read run after failed automatic recovery: %w", err)
+	}
+	if current == nil || current.ID != runID || current.Status != store.StatusWaitingForHuman {
+		return nil
+	}
+	marker := strings.Index(current.LifecycleReason, automaticRecoveryAttemptMarker)
+	if marker < 0 {
+		return nil
+	}
+	if err := s.lifecycleModule().stopActiveRunWorkers(ctx, runStore, *current); err != nil {
+		return err
+	}
+	next := *current
+	attempt := current.LifecycleReason[:marker+len(automaticRecoveryAttemptMarker)]
+	next.LifecycleReason = boundedText(attempt+" failed: "+recoveryReasonValue(observedFailure(cause)), maxRecoveryReasonBytes)
+	next.Revision = current.Revision + 1
+	// The attempt time stays the lower bound, so the same credential change
+	// cannot admit a second attempt.
+	if now := s.deps.Now().UTC(); now.After(next.UpdatedAt) {
+		next.UpdatedAt = now
+	}
+	if err := s.lifecycleModule().persistLifecycleRun(ctx, registration, runStore, *current, next); err != nil {
+		return fmt.Errorf("publish failed automatic recovery: %w", err)
+	}
 	return nil
 }
 
