@@ -1493,6 +1493,10 @@ supervisor. The `--resume` path reconciles pending effects before continuing,
 and it reports a refresh success separately from a failed native-session
 precondition so adding the flag does not discard the credential refresh.
 
+A live polling supervisor does not need either command when the host source
+itself changes after the pause: it projects the changed credential and resumes
+the recorded session once, as described in ADR 0033.
+
 Each comment is processed at most once. The operational store persists a
 monotonic run revision, the processed comment ID watermark, and the revision at
 which that watermark was written. Polling therefore ignores old comments, and

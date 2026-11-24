@@ -142,6 +142,9 @@ type InvocationRecoveryRequest struct {
 	// EvaluationRecorder records content-free evaluation invocation metadata
 	// for a fresh launch created during recovery.
 	EvaluationRecorder launchEvaluationRecorder
+	// ResumeReason is the lifecycle reason published after a native session
+	// resume. Empty means an explicit operator resume.
+	ResumeReason string
 }
 
 // launchEvaluationRecorder is the narrow evaluation projection required by
@@ -354,7 +357,7 @@ func (l *invocationLifecycle) persistManualResumeState(ctx context.Context, requ
 	}
 	next := run
 	next.Status = store.StatusActive
-	next.LifecycleReason = "manual native session resumed"
+	next.LifecycleReason = defaultString(request.ResumeReason, "manual native session resumed")
 	next.UpdatedAt = l.clock().UTC()
 	if next.Revision <= run.Revision {
 		next.Revision = run.Revision + 1
