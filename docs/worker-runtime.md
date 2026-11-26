@@ -369,3 +369,11 @@ effects before continuation and still retains the credential projection when
 its native-session precondition is rejected. A manual `factory resume` restarts the exact
 persisted native session without changing the workflow retry budget. No worker
 recreation or harness-capacity wait changes that budget either.
+
+The polling supervisor recovers a credential pause automatically once the
+registered host credential source is modified after the pause, for example by
+a host login. It does so only when the recovery sources agree, every
+discrepancy restates the stopped worker or harness process, and no effect is
+pending. One credential change admits one attempt, through the same path as
+`factory auth refresh --resume`, and the published lifecycle reason names why
+it was admitted. ADR 0033 records the policy.

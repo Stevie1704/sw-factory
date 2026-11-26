@@ -156,7 +156,8 @@ func (s *Service) resumeWithStore(ctx context.Context, registration config.Repos
 }
 
 // retryWaitingForHarness opens the operational store as a coordinator entry
-// point, then delegates the recovery decision and effects to the module.
+// point, then delegates the recovery decision and effects to the module. An
+// allow-listed human pause takes the automatic typed-pause recovery instead.
 func (s *Service) retryWaitingForHarness(ctx context.Context, registration config.RepositoryRegistration) error {
 	s.commandMu.Lock()
 	defer s.commandMu.Unlock()
@@ -176,6 +177,9 @@ func (s *Service) retryWaitingForHarness(ctx context.Context, registration confi
 	}
 	if run == nil {
 		return nil
+	}
+	if allowListedPauseReason(*run) != "" {
+		return s.autoRecoverTypedPause(ctx, registration, runStore, *run)
 	}
 	launch := func(launchRun store.Run) (AgentLaunchResult, error) {
 		invocationID, err := s.newInvocationID()

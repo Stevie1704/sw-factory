@@ -592,6 +592,13 @@ inspecting its external outcome. It leaves a non-terminal run paused and a
 terminal run's outcome unchanged.
 _Avoid_: Run cancellation, automatic recovery
 
+**Automatic typed-pause recovery**:
+The coordinator's one resume, without a human command, of a human pause whose
+typed lifecycle reason is on the allow-list. Its blocker must have cleared
+outside the coordinator, the recovery sources must agree, and every
+discrepancy must restate the stopped process. ADR 0033 records the policy.
+_Avoid_: Auto-unblock, repair agent
+
 **Cleanup**:
 The explicit, seven-day retention operation that previews and removes one or
 more completed or cancelled runs' local worktrees, local branches, workers,
